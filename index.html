@@ -1,0 +1,1279 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
+  <meta name="theme-color" content="#0f2d3a">
+  <meta name="application-name" content="KPI Phúc Thịnh">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+  <!-- 🔥 CHẶN ĐỨNG MÀN ĐĂNG NHẬP TRƯỚC KHI TRÌNH DUYỆT BẮT ĐẦU VẼ GIAO DIỆN -->
+  <script>
+    if (localStorage.getItem("phuc-thinh-current-account-v1")) {
+      document.documentElement.classList.add("is-authenticated");
+    }
+  </script>
+  <style>
+    html.is-authenticated #loginScreen { display: none !important; }
+  </style>
+</head>
+<body>
+  <section id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <form id="loginForm" class="login-form">
+        <p class="eyebrow">Đăng nhập</p>
+        <h2 class="login-title">
+          <span>Quản Trị Nhân Sự</span>
+          <span>Ban QLDA Đầu Tư - Hạ Tầng xã Phúc Thịnh</span>
+        </h2>
+        <label>Tài khoản
+          <input id="loginUsername" autocomplete="username" required placeholder="Tên đăng nhập">
+        </label>
+        <label>Mật khẩu
+          <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Mật khẩu">
+        </label>
+        <p id="loginError" class="form-error" role="alert"></p>
+        <button type="submit">Đăng nhập</button>
+      </form>
+
+    </div>
+  </section>
+
+  <header class="topbar">
+    <div>
+      <p class="unit">Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</p>
+      <h1>Quản Trị Nhân Sự</h1>
+    </div>
+    <div class="top-actions">
+      <div class="user-chip">
+        <strong id="currentUserLabel">Chưa đăng nhập</strong>
+        <span id="currentUserMeta"></span>
+      </div>
+      <button id="toggleCustomizeMode" class="ghost customization-action" type="button">Tùy biến</button>
+      <button id="printReport" class="ghost summary-action" type="button">In báo cáo</button>
+      <button id="exportData" class="ghost json-data-action" type="button">Xuất JSON</button>
+      <label class="file-button json-data-action">
+        Nhập JSON
+        <input id="importData" type="file" accept="application/json">
+      </label>
+      <button id="logoutButton" class="ghost" type="button">Đăng xuất</button>
+    </div>
+  </header>
+
+  <section id="printReportHeader" class="print-report-header" aria-hidden="true">
+    <div>
+      <p>Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</p>
+      <h1>Báo cáo quản trị nhân sự</h1>
+    </div>
+    <dl>
+      <div>
+        <dt>Kỳ đánh giá</dt>
+        <dd id="printReportPeriod">-</dd>
+      </div>
+      <div>
+        <dt>Nội dung</dt>
+        <dd id="printReportSections">-</dd>
+      </div>
+      <div>
+        <dt>Người xuất</dt>
+        <dd id="printReportUser">-</dd>
+      </div>
+      <div>
+        <dt>Ngày xuất</dt>
+        <dd id="printReportDate">-</dd>
+      </div>
+    </dl>
+  </section>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="true">Thu gọn menu</button>
+      <nav aria-label="Chức năng">
+        <button class="nav-item is-active" data-view="dashboard" type="button" title="Tổng quan"><span class="nav-icon" aria-hidden="true">▦</span><span class="nav-label">Tổng quan</span></button>
+        <button class="nav-item" data-view="bulletin" type="button" title="Bảng tin"><span class="nav-icon" aria-hidden="true">▤</span><span class="nav-label">Bảng tin</span></button>
+        <button class="nav-item" data-view="archive" type="button" title="Lưu Trữ"><span class="nav-icon" aria-hidden="true">▧</span><span class="nav-label">Lưu Trữ</span></button>
+        <button class="nav-item" data-view="people" type="button" title="Nhân sự"><span class="nav-icon" aria-hidden="true">◉</span><span class="nav-label">Nhân sự</span></button>
+        <button class="nav-item" data-view="tasks" type="button" title="Công việc"><span class="nav-icon" aria-hidden="true">☑</span><span class="nav-label">Công việc</span></button>
+        <button class="nav-item" data-view="department-evaluations" type="button" title="KPI phòng"><span class="nav-icon" aria-hidden="true">▥</span><span class="nav-label">KPI phòng</span></button>
+        <button class="nav-item" data-view="evaluations" type="button" title="KPI cá nhân"><span class="nav-icon" aria-hidden="true">◇</span><span class="nav-label">KPI cá nhân</span></button>
+        <button class="nav-item" data-view="history" type="button" title="Lịch sử"><span class="nav-icon" aria-hidden="true">◷</span><span class="nav-label">Lịch sử</span></button>
+        <button class="nav-item" data-view="accounts" type="button" title="Tài khoản"><span class="nav-icon" aria-hidden="true">◫</span><span class="nav-label">Tài khoản</span></button>
+        <button class="nav-item" data-view="rules" type="button" title="Quy chế"><span class="nav-icon" aria-hidden="true">§</span><span class="nav-label">Quy chế</span></button>
+      </nav>
+      <section class="period-box">
+        <label for="activePeriod">Kỳ đánh giá</label>
+        <input id="activePeriod" type="month">
+      </section>
+    </aside>
+
+      <section class="content">
+      <section id="dashboard" class="view is-active">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Điều hành</p>
+            <h2>Tổng quan tháng <span id="dashboardPeriodLabel" class="title-period">-</span></h2>
+          </div>
+          <button id="seedDemo" class="admin-action" type="button">Nạp dữ liệu mẫu</button>
+        </div>
+
+        <div class="metrics">
+          <article class="dashboard-link" data-dashboard-action="people">
+            <span>Nhân sự</span>
+            <strong id="metricPeople">0</strong>
+          </article>
+          <article class="dashboard-link" data-dashboard-action="overdue">
+            <span>Công việc quá hạn</span>
+            <strong id="metricOverdue">0</strong>
+          </article>
+          <article class="dashboard-link" data-dashboard-action="evaluations">
+            <span>KPI bình quân</span>
+            <strong id="metricAvg">0</strong>
+          </article>
+          <article class="dashboard-link" data-dashboard-action="reward">
+            <span>Đề xuất khen thưởng</span>
+            <strong id="metricReward">0</strong>
+          </article>
+        </div>
+
+        <div class="dashboard-card-columns">
+          <div class="dashboard-card-column">
+            <section class="block chart-block dashboard-grade-block">
+              <div class="chart-heading">
+                <div>
+                  <h3>Phân loại xếp hạng nhân viên</h3>
+                  <p id="gradeChartSummary" class="muted">Chưa có dữ liệu đánh giá.</p>
+                </div>
+              </div>
+              <div id="gradeDistributionChart" class="grade-chart empty-state">Chưa có dữ liệu đánh giá.</div>
+            </section>
+
+            <section class="block dashboard-rank-block">
+              <h3>Xếp hạng cá nhân</h3>
+              <div id="rankingList" class="rank-list empty-state">Chưa có dữ liệu đánh giá.</div>
+            </section>
+          </div>
+
+          <div class="dashboard-card-column">
+            <section class="block chart-block dashboard-department-block">
+              <div class="chart-heading">
+                <div>
+                  <h3>Hiệu quả theo phòng</h3>
+                  <p id="departmentChartSummary" class="muted">Chưa có dữ liệu KPI phòng.</p>
+                </div>
+              </div>
+              <div id="departmentSummary" class="department-grid"></div>
+            </section>
+
+            <section class="block dashboard-alert-block">
+              <h3>Cảnh báo xử lý</h3>
+              <div id="alertList" class="alert-list empty-state">Chưa có cảnh báo.</div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section id="bulletin" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Thông tin nội bộ</p>
+            <h2>Bảng tin</h2>
+          </div>
+          <p id="bulletinSummary" class="section-note">Chưa có tin bài.</p>
+        </div>
+
+        <div class="bulletin-layout">
+          <section id="bulletinAdminPanel" class="block bulletin-admin-only">
+            <h3>Đăng tải tin bài</h3>
+            <form id="bulletinForm" class="form-grid bulletin-form">
+              <input type="hidden" id="bulletinId">
+              <label class="wide">Tiêu đề
+                <input id="bulletinTitle" required placeholder="Nhập tiêu đề tin bài, thông báo...">
+              </label>
+              <label>Loại tin
+                <select id="bulletinCategory" required>
+                  <option>Tin tức chung</option>
+                  <option>Thông báo nội bộ</option>
+                  <option>Hoạt động phong trào</option>
+                  <option>Chương trình bình chọn</option>
+                  <option>Khác</option>
+                </select>
+              </label>
+              <label>Ngày đăng
+                <input id="bulletinDate" type="date" required>
+              </label>
+              <label>Trạng thái
+                <select id="bulletinStatus">
+                  <option value="published">Đăng hiển thị</option>
+                  <option value="draft">Lưu nháp</option>
+                </select>
+              </label>
+              <label class="checkbox-field">
+                <input id="bulletinPinned" type="checkbox">
+                <span>Ghim đầu bảng tin</span>
+              </label>
+              <label class="wide">Nội dung
+                <textarea id="bulletinContent" rows="6" required placeholder="Nhập nội dung tin tức, thông báo, hoạt động, phong trào hoặc chương trình bình chọn..."></textarea>
+              </label>
+              <section id="bulletinVoteSettings" class="bulletin-vote-settings wide is-hidden">
+                <label>Thời gian kết thúc bình chọn
+                  <input id="bulletinVoteEndsAt" type="datetime-local">
+                </label>
+                <label class="bulletin-vote-limit-field">Số tiêu chí bình chọn
+                  <input id="bulletinVoteLimit" type="number" min="1" step="1" value="1">
+                </label>
+                <label class="wide">Tiêu chí bình chọn
+                  <textarea id="bulletinVoteOptions" rows="4" placeholder="Mỗi dòng là một tiêu chí để mọi người bình chọn..."></textarea>
+                </label>
+              </section>
+              <div class="wide compact-upload-field">
+                <span class="compact-upload-title">Tải lên hình ảnh / video clip / âm thanh / PDF</span>
+                <div class="compact-upload-row">
+                  <label class="file-button compact-file-button">Chọn media
+                    <input id="bulletinMedia" type="file" multiple accept="image/*,video/*,audio/*,application/pdf,.pdf">
+                  </label>
+                  <span class="field-note">Hỗ trợ ảnh, video clip, âm thanh và PDF. Mỗi tệp tối đa 20MB, tổng media tối đa 120MB.</span>
+                </div>
+              </div>
+              <div id="bulletinMediaList" class="attachment-list bulletin-media-draft wide">
+                <span class="muted">Chưa có media đính kèm.</span>
+              </div>
+              <div class="form-actions wide">
+                <button type="submit">Lưu tin bài</button>
+                <button id="resetBulletinForm" class="ghost" type="button">Làm mới</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="bulletin-board">
+            <div class="filter-row bulletin-filter">
+              <input id="bulletinSearch" placeholder="Tìm kiếm theo tiêu đề, loại tin, nội dung...">
+              <select id="bulletinCategoryFilter">
+                <option value="">Tất cả loại tin</option>
+                <option>Tin tức chung</option>
+                <option>Thông báo nội bộ</option>
+                <option>Hoạt động phong trào</option>
+                <option>Chương trình bình chọn</option>
+                <option>Khác</option>
+              </select>
+            </div>
+            <div id="bulletinList" class="bulletin-list empty-state">Chưa có tin bài.</div>
+          </section>
+        </div>
+        <div class="view-scroll-actions" aria-label="Điều hướng nhanh trang Bảng tin">
+          <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
+          <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
+        </div>
+      </section>
+
+      <section id="archive" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Kho dữ liệu</p>
+            <h2>Lưu Trữ</h2>
+          </div>
+          <p id="archiveSummary" class="section-note">Chưa có hồ sơ lưu trữ.</p>
+        </div>
+
+        <div class="archive-layout">
+          <section id="archiveAdminPanel" class="block archive-manager-only">
+            <h3>Cập nhật hồ sơ lưu trữ</h3>
+            <form id="archiveForm" class="form-grid archive-form">
+              <input type="hidden" id="archiveId">
+              <label class="wide">Tên hồ sơ / văn bản
+                <input id="archiveTitle" required placeholder="Nhập tên hồ sơ dự án, công văn, văn bản pháp luật...">
+              </label>
+              <label>Nhóm hồ sơ
+                <select id="archiveCategory" required>
+                  <option>Hồ sơ dự án</option>
+                  <option>Hồ sơ nhân sự</option>
+                  <option>Văn bản/Công văn</option>
+                  <option>Văn bản pháp luật</option>
+                  <option>Hồ sơ khác</option>
+                </select>
+              </label>
+              <label>Tình trạng
+                <select id="archiveStatus">
+                  <option>Đang thực hiện</option>
+                  <option>Đã hoàn thành</option>
+                  <option>Còn hiệu lực</option>
+                  <option>Hết hiệu lực</option>
+                  <option>Lưu tham khảo</option>
+                </select>
+              </label>
+              <label>Số hiệu hồ sơ / văn bản
+                <input id="archiveDocumentNo" placeholder="VD: 123/BQLDA, DA-2026-01...">
+              </label>
+              <label>Ngày ban hành / cập nhật
+                <input id="archiveDate" type="date">
+              </label>
+              <label>Phòng liên quan
+                <select id="archiveDepartment"></select>
+              </label>
+              <label>Nhân sự liên quan
+                <select id="archivePerson"></select>
+              </label>
+              <label>Công việc liên quan
+                <select id="archiveTask"></select>
+              </label>
+              <label>KPI phòng liên quan
+                <select id="archiveDepartmentEvaluation"></select>
+              </label>
+              <label class="wide">Từ khóa tra cứu
+                <input id="archiveTags" placeholder="VD: quyết toán, giải phóng mặt bằng, hợp đồng, pháp lý...">
+              </label>
+              <label class="wide">Ghi chú / mô tả
+                <textarea id="archiveDescription" rows="4" placeholder="Tóm tắt nội dung, phạm vi áp dụng, vị trí hồ sơ gốc hoặc lưu ý khi tra cứu..."></textarea>
+              </label>
+              <div class="wide compact-upload-field">
+                <span class="compact-upload-title">Tải lên hồ sơ liên quan</span>
+                <div class="compact-upload-row">
+                  <label class="file-button compact-file-button">Chọn tệp
+                    <input id="archiveFiles" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar,image/*,video/*,audio/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+                  </label>
+                  <span class="field-note">Hỗ trợ PDF, Word, Excel, ảnh, video, âm thanh và tệp nén. Mỗi tệp tối đa 30MB, một hồ sơ tối đa 300MB.</span>
+                </div>
+              </div>
+              <div id="archiveFileList" class="attachment-list archive-file-draft wide">
+                <span class="muted">Chưa có tệp đính kèm.</span>
+              </div>
+              <div class="form-actions wide">
+                <button type="submit">Lưu hồ sơ</button>
+                <button id="resetArchiveForm" class="ghost" type="button">Làm mới</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="archive-browser">
+            <div class="filter-row archive-filter">
+              <input id="archiveSearch" placeholder="Tìm theo tên hồ sơ, số hiệu, từ khóa, phòng, nhân sự...">
+              <select id="archiveCategoryFilter"></select>
+              <select id="archiveStatusFilter"></select>
+              <select id="archiveDepartmentFilter"></select>
+            </div>
+            <div id="archiveStats" class="archive-stats"></div>
+            <div id="archiveList" class="archive-list empty-state">Chưa có hồ sơ lưu trữ.</div>
+          </section>
+        </div>
+        <div class="view-scroll-actions" aria-label="Điều hướng nhanh trang Lưu trữ">
+          <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
+          <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
+        </div>
+      </section>
+
+      <section id="people" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Hồ sơ</p>
+            <h2>Nhân sự toàn Ban</h2>
+          </div>
+        </div>
+        <form id="personForm" class="form-grid">
+          <input type="hidden" id="personId">
+          <label>Họ và tên
+            <input id="personName" required placeholder="Nguyễn Văn A">
+          </label>
+          <label>Giới tính
+            <select id="personGender">
+              <option value="">Chưa cập nhật</option>
+              <option>Nam</option>
+              <option>Nữ</option>
+            </select>
+          </label>
+          <label>Phòng
+            <select id="personDepartment" required></select>
+          </label>
+          <label>Vị trí
+            <select id="personRole" required></select>
+          </label>
+          <label>Loại hợp đồng
+            <select id="personContract">
+              <option>Biên chế</option>
+              <option>Hợp đồng chuyên môn</option>
+              <option>Hợp đồng khoán/thời vụ</option>
+            </select>
+          </label>
+          <label>Trình độ chuyên môn
+            <input id="personQualification" placeholder="Đại học Xây dựng, Kỹ sư, Thạc sĩ...">
+          </label>
+          <label>Thời hạn hợp đồng
+            <input id="personContractTerm" placeholder="Không xác định thời hạn / 12 tháng / đến ngày...">
+          </label>
+          <label>Ngày ký Hợp Đồng
+            <input id="personContractSignedDate" type="date">
+          </label>
+          <label>Điện thoại
+            <input id="personPhone" placeholder="Số liên hệ">
+          </label>
+          <label>Ngày tháng năm sinh
+            <input id="personBirthDate" type="date">
+          </label>
+          <label>Hệ số lương
+            <input id="personSalaryCoefficient" type="number" min="0" step="0.01" placeholder="2.34">
+          </label>
+          <label>Bậc lương
+            <input id="personSalaryGrade" placeholder="Bậc 1/9, bậc 2...">
+          </label>
+          <label>Thời điểm xét nâng lương
+            <input id="personSalaryReviewDate" type="date">
+          </label>
+          <label class="person-address-field">Địa chỉ cư trú
+            <input id="personAddress" placeholder="Thôn/xóm, xã/phường, tỉnh/thành phố">
+          </label>
+          <label class="wide">Ghi chú
+            <textarea id="personNote" rows="2" placeholder="Nhiệm vụ chính, phân công đặc thù..."></textarea>
+          </label>
+          <div class="form-actions wide">
+            <button type="submit">Lưu nhân sự</button>
+            <button id="resetPersonForm" class="ghost" type="button">Làm mới</button>
+          </div>
+        </form>
+        <div class="filter-row">
+          <input id="personSearch" placeholder="Tìm kiếm nhân sự theo tên, phòng, vị trí, điện thoại, trình độ, địa chỉ...">
+          <button id="clearPersonSearch" class="ghost" type="button">Xóa tìm kiếm</button>
+        </div>
+        <div id="peopleFilterNote" class="filter-note is-hidden">
+          <span id="peopleFilterText"></span>
+          <button id="clearPeoplePendingFilter" class="ghost" type="button">Bỏ lọc</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Nhân sự</th>
+                <th class="people-gender">Giới tính</th>
+                <th>Phòng</th>
+                <th>Vị trí</th>
+                <th>Trình độ</th>
+                <th class="people-birth-date">Ngày sinh</th>
+                <th>Địa chỉ</th>
+                <th>Hợp đồng</th>
+                <th>Lương</th>
+                <th>KPI kỳ này</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="peopleTable"></tbody>
+          </table>
+        </div>
+        <div class="view-scroll-actions" aria-label="Điều hướng nhanh trang Nhân sự">
+          <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
+          <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
+        </div>
+      </section>
+
+      <section id="tasks" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Tiến độ</p>
+            <h2>Danh mục công việc</h2>
+          </div>
+        </div>
+        <section class="task-inbox-panel" aria-label="Hộp thư giao việc">
+          <button id="taskInboxButton" class="task-inbox-button" type="button">
+            <span class="task-inbox-icon" aria-hidden="true"></span>
+            <span>
+              <strong>Giao việc</strong>
+              <small id="taskInboxSummary">Chưa có công việc được giao.</small>
+            </span>
+            <span id="taskInboxBadge" class="task-inbox-badge">0</span>
+          </button>
+        </section>
+        <form id="taskForm" class="form-grid">
+          <input type="hidden" id="taskId">
+          <input id="taskDueTime" type="hidden" value="">
+          <label class="is-hidden">Loại công việc
+            <select id="taskKind">
+              <option value="regular">Danh mục KPI cá nhân</option>
+              <option value="assigned">Công việc được giao</option>
+            </select>
+          </label>
+          <label class="task-title-field">Tên công việc
+            <input id="taskTitle" required placeholder="Hoàn thiện hồ sơ dự án...">
+          </label>
+          <label class="task-project-field">Tên dự án
+            <input id="taskProjectName" placeholder="Nhập tên dự án liên quan...">
+          </label>
+          <label class="task-category-field">Danh mục KPI cá nhân
+            <select id="taskCategory" required>
+              <option>Chọn người được giao để lấy danh mục KPI</option>
+            </select>
+          </label>
+          <label class="task-owner-field"><span id="taskOwnerLabelText">Người được giao</span>
+            <select id="taskOwner" required></select>
+          </label>
+          <div id="taskCollaboratorField" class="regular-only task-collaborator-field">
+            <span class="task-field-label">Người phối hợp</span>
+            <div id="taskCollaboratorPicker" class="collaborator-picker">
+              <button id="taskCollaboratorToggle" class="collaborator-picker-toggle" type="button" aria-expanded="false" aria-controls="taskCollaboratorPanel">
+                <span id="taskCollaboratorSummary">Chọn người phối hợp</span>
+              </button>
+              <div id="taskCollaboratorPanel" class="collaborator-picker-panel is-hidden">
+                <input id="taskCollaboratorSearch" type="search" autocomplete="off" placeholder="Gõ tên người phối hợp..." aria-label="Tìm người phối hợp">
+                <div id="taskCollaborators" class="checkbox-list task-collaborator-list" role="group" aria-label="Người phối hợp"></div>
+                <p id="taskCollaboratorSearchEmpty" class="collaborator-search-empty is-hidden">Không tìm thấy người phối hợp phù hợp.</p>
+              </div>
+            </div>
+          </div>
+          <label class="assignment-only">Người giao việc
+            <input id="taskAssignerLabel" disabled placeholder="Tự ghi theo tài khoản đang đăng nhập">
+          </label>
+          <label class="regular-only task-work-type-field">Loại công việc
+            <select id="taskWorkType">
+              <option value="routine">Công việc thường xuyên</option>
+              <option value="arising">Công việc phát sinh</option>
+            </select>
+          </label>
+          <label class="regular-only task-recurrence-field">Định kỳ
+            <select id="taskRecurrence">
+              <option value="none">Không định kỳ</option>
+              <option value="monthly">Hàng tháng</option>
+              <option value="quarterly">Hàng quý</option>
+            </select>
+          </label>
+          <label class="task-start-field">Ngày bắt đầu
+            <input id="taskStartDate" type="date">
+          </label>
+          <label class="task-due-field">Ngày hoàn thành
+            <input id="taskDue" type="date" required>
+          </label>
+          <label class="task-status-field">Trạng thái
+            <select id="taskStatus">
+              <option>Chuẩn bị thực hiện</option>
+              <option>Đang thực hiện</option>
+              <option>Hoàn thành</option>
+              <option>Quá hạn</option>
+            </select>
+          </label>
+          <label class="task-progress-field">Tiến độ (%)
+            <input id="taskProgress" type="number" min="0" max="100" value="0">
+          </label>
+          <label class="task-quality-field">Đánh giá chất lượng (%)
+            <input id="taskQualityPercent" type="number" min="0" max="120" step="0.01" placeholder="Chỉ nhập khi hoàn thành">
+          </label>
+          <label class="assignment-only">Phản hồi nhận việc
+            <select id="taskResponseStatus">
+              <option value="">Chưa phản hồi</option>
+              <option>Đã nhận việc</option>
+              <option>Cần trao đổi</option>
+              <option>Lý do khác</option>
+            </select>
+          </label>
+          <label class="wide assignment-only">Nội dung phản hồi
+            <textarea id="taskResponseNote" rows="2" placeholder="Xác nhận nhận việc hoặc nêu lý do cần trao đổi..."></textarea>
+            <span id="taskResponseMeta" class="field-note"></span>
+          </label>
+          <div class="compact-upload-field task-upload-field">
+            <span class="compact-upload-title">Tải lên hồ sơ liên quan</span>
+            <div class="compact-upload-row">
+              <label class="file-button compact-file-button">Chọn hồ sơ
+                <input id="taskAttachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.txt">
+              </label>
+              <span class="field-note">Chọn nhiều tệp, mỗi tệp tối đa 2MB, tổng hồ sơ tối đa 5MB.</span>
+            </div>
+            <div id="taskAttachmentList" class="attachment-list">
+              <span class="muted">Chưa có hồ sơ đính kèm.</span>
+            </div>
+          </div>
+          <label class="wide task-note-field"><span id="taskNoteLabelText">Nội dung công việc / Báo cáo tiến độ</span>
+            <textarea id="taskNote" rows="3" placeholder="Nội dung công việc, tiến độ thực hiện, rủi ro, phối hợp, hồ sơ liên quan..."></textarea>
+            <span id="taskProgressMeta" class="field-note"></span>
+            <div id="taskProgressReportList" class="progress-report-list"></div>
+          </label>
+          <div class="form-actions wide">
+            <button type="submit">Lưu công việc</button>
+            <button id="resetTaskForm" class="ghost" type="button">Làm mới</button>
+          </div>
+        </form>
+        <div class="filter-row">
+          <input id="taskSearch" placeholder="Tìm công việc, người giao hoặc người được giao">
+          <select id="taskStatusFilter">
+            <option value="">Tất cả trạng thái</option>
+            <option>Chuẩn bị thực hiện</option>
+            <option>Đang thực hiện</option>
+            <option>Hoàn thành</option>
+            <option>Quá hạn</option>
+          </select>
+        </div>
+        <div id="taskBoard" class="task-board"></div>
+        <div class="task-scroll-actions" aria-label="Điều hướng nhanh trang công việc">
+          <button id="scrollTasksToTop" class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
+          <button id="scrollTasksToBottom" class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
+        </div>
+      </section>
+
+      <section id="department-evaluations" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">KPI phòng</p>
+            <h2>Dữ liệu hoạt động của phòng</h2>
+          </div>
+        </div>
+        <form id="departmentEvaluationForm" class="evaluation-form">
+          <div class="form-grid">
+            <label>Kỳ
+              <input id="deptEvalPeriod" type="month" required>
+            </label>
+            <label>Phòng
+              <select id="deptEvalDepartment" required></select>
+            </label>
+            <label>Người báo cáo
+              <select id="deptEvalReporter"></select>
+            </label>
+            <label>Người xác nhận
+              <select id="deptEvalReviewer"></select>
+            </label>
+          </div>
+
+          <section class="score-panel">
+            <div>
+              <h3>Tiêu chí KPI phòng</h3>
+              <p id="departmentCriteriaHint">Chọn phòng để nhập số kế hoạch và số thực hiện theo từng chỉ tiêu.</p>
+            </div>
+            <div id="departmentCriteriaInputs" class="criteria-grid"></div>
+          </section>
+
+          <section class="score-panel department-adjustment-panel">
+            <div>
+              <h3>Thi đua khen thưởng, kỷ luật</h3>
+              <p>Nhập nội dung thành tích hoặc vi phạm của phòng trong kỳ đánh giá.</p>
+            </div>
+            <div class="department-adjustment-grid">
+              <label class="department-adjustment-note">Nội dung
+                <textarea id="deptEvalRewardDiscipline" rows="2" data-department-score-input placeholder="Nội dung phòng đã đạt được hoặc nội dung kỷ luật cần ghi nhận..."></textarea>
+              </label>
+              <label>Phân loại
+                <select id="deptEvalAdjustmentType" data-department-score-input>
+                  <option value="reward">Khen thưởng</option>
+                  <option value="discipline">Kỷ luật</option>
+                </select>
+              </label>
+              <label>Số điểm
+                <input id="deptEvalAdjustmentPoints" type="number" min="0" step="0.01" data-department-score-input placeholder="0">
+              </label>
+            </div>
+          </section>
+
+          <div class="score-result department-score-result">
+            <div>
+              <span>KPI phòng</span>
+              <strong id="departmentScorePreview">0</strong>
+            </div>
+            <div>
+              <span>Cộng/trừ thi đua</span>
+              <strong id="departmentAdjustmentPreview">0</strong>
+            </div>
+            <div>
+              <span>Xếp loại phòng</span>
+              <strong id="departmentGradePreview">Yếu</strong>
+            </div>
+          </div>
+
+          <label class="full-label">Nhận xét
+            <textarea id="deptEvalComment" rows="3" placeholder="Nhận xét về tiến độ, chất lượng, phối hợp, rủi ro..."></textarea>
+          </label>
+          <div class="form-actions">
+            <button type="submit">Lưu KPI phòng</button>
+            <button id="resetDeptEvalForm" class="ghost" type="button">Làm mới</button>
+          </div>
+        </form>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Kỳ</th>
+                <th>Phòng</th>
+                <th>KPI phòng</th>
+                <th>Xếp loại</th>
+                <th>Người báo cáo</th>
+                <th>Người xác nhận</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="departmentEvaluationTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="evaluations" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">KPI</p>
+            <h2>KPI cá nhân</h2>
+          </div>
+        </div>
+        <form id="evaluationForm" class="evaluation-form">
+          <div class="form-grid">
+            <label>Kỳ
+              <input id="evalPeriod" type="month" required>
+            </label>
+            <label>Nhân sự
+              <select id="evalPerson" required></select>
+            </label>
+            <label>KPI phòng
+              <input id="evalDepartmentScore" type="number" min="0" max="120" readonly>
+              <span id="evalDepartmentLinkHint" class="field-note">Chọn nhân sự để liên kết KPI phòng.</span>
+            </label>
+            <label>Người xác nhận
+              <input id="evalReviewer" placeholder="Trưởng phòng/Hội đồng">
+            </label>
+            <div class="inline-form-action">
+              <button id="openDepartmentEvaluationFromPersonal" class="ghost" type="button">Mở KPI phòng</button>
+            </div>
+          </div>
+
+          <section class="score-panel">
+            <div>
+              <h3>KPI theo vị trí</h3>
+              <p id="roleHint">Chọn nhân sự để hiển thị bộ tiêu chí.</p>
+            </div>
+            <div id="criteriaInputs" class="criteria-grid"></div>
+          </section>
+
+          <section class="score-panel">
+            <div>
+              <h3>Khen thưởng, kỷ luật, tác phong</h3>
+              <p id="behaviorPermissionHint">Áp dụng điểm cộng/trừ theo quy chế toàn Ban.</p>
+            </div>
+            <div id="taskBehaviorLinks" class="task-violation-list"></div>
+            <div id="behaviorInputs" class="behavior-grid"></div>
+          </section>
+
+          <div class="score-result">
+            <div>
+              <span>KPI cá nhân</span>
+              <strong id="personalScorePreview">0</strong>
+            </div>
+            <div>
+              <span>Điểm cộng/trừ</span>
+              <strong id="behaviorScorePreview">0</strong>
+            </div>
+            <div>
+              <span>KPI tổng</span>
+              <strong id="finalScorePreview">0</strong>
+            </div>
+            <div>
+              <span>Xếp loại</span>
+              <strong id="gradePreview">Loại 7</strong>
+            </div>
+          </div>
+
+          <label class="full-label">Nhận xét
+            <textarea id="evalComment" rows="3" placeholder="Kết luận của trưởng phòng/hội đồng..."></textarea>
+          </label>
+          <div class="form-actions">
+            <button type="submit">Lưu đánh giá</button>
+            <button id="resetEvalForm" class="ghost" type="button">Làm mới</button>
+          </div>
+        </form>
+
+        <div id="evaluationFilterNote" class="filter-note is-hidden">
+          <span id="evaluationFilterText"></span>
+          <button id="clearEvaluationGradeFilter" class="ghost" type="button">Bỏ lọc</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Kỳ</th>
+                <th>Nhân sự</th>
+                <th>KPI cá nhân</th>
+                <th>KPI phòng</th>
+                <th>Cộng/trừ</th>
+                <th>KPI tổng</th>
+                <th>Xếp loại</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="evaluationTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="history" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Tra cứu</p>
+            <h2>Lịch sử hoạt động</h2>
+          </div>
+        </div>
+        <section class="block">
+          <div class="history-filter">
+            <label>Loại lịch sử
+              <select id="historyType">
+                <option value="department">Phòng ban</option>
+                <option value="person">Nhân viên</option>
+              </select>
+            </label>
+            <label>Đối tượng
+              <select id="historyTarget"></select>
+            </label>
+            <label>Từ kỳ
+              <input id="historyFrom" type="month">
+            </label>
+            <label>Đến kỳ
+              <input id="historyTo" type="month">
+            </label>
+          </div>
+        </section>
+        <div id="historySummary" class="history-summary"></div>
+        <section class="block">
+          <h3>Dòng thời gian</h3>
+          <div id="historyTimeline" class="history-timeline empty-state">Chưa có dữ liệu lịch sử.</div>
+        </section>
+      </section>
+
+      <section id="accounts" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Phân quyền</p>
+            <h2>Tài khoản sử dụng</h2>
+          </div>
+        </div>
+        <section id="moduleAccessPanel" class="block admin-module-panel is-hidden">
+          <div class="section-head module-access-head">
+            <div>
+              <p class="eyebrow">Cấu hình hệ thống</p>
+              <h3>Hiển thị mục lớn theo nhóm quyền</h3>
+            </div>
+            <p class="section-note">Admin luôn có quyền quản trị toàn bộ hệ thống.</p>
+          </div>
+          <div id="moduleAccessList" class="module-access-list"></div>
+          <section id="systemThemePanel" class="system-theme-panel is-hidden">
+            <div class="section-head system-theme-head">
+              <div>
+                <p class="eyebrow">Giao diện toàn hệ thống</p>
+                <h3>Theme ngày lễ và dịp kỷ niệm</h3>
+              </div>
+              <div id="systemThemePreview" class="system-theme-preview" aria-label="Xem trước màu theme"></div>
+            </div>
+            <form id="systemThemeForm" class="system-theme-form">
+              <label>Chủ đề
+                <select id="systemThemePreset"></select>
+              </label>
+              <label class="theme-custom-field">Tên dịp kỷ niệm
+                <input id="systemThemeCustomName" maxlength="80" placeholder="Ví dụ: Kỷ niệm thành lập Ban">
+              </label>
+              <div class="theme-color-fields theme-custom-field">
+                <label>Màu chủ đạo
+                  <input id="systemThemePrimary" type="color" value="#176b87">
+                </label>
+                <label>Màu đậm
+                  <input id="systemThemePrimaryDark" type="color" value="#0b4a61">
+                </label>
+                <label>Màu nhấn
+                  <input id="systemThemeAccent" type="color" value="#b7791f">
+                </label>
+                <label>Màu nền
+                  <input id="systemThemeBackground" type="color" value="#f4f7fb">
+                </label>
+              </div>
+              <div class="form-actions">
+                <button type="submit">Áp dụng theme</button>
+              </div>
+            </form>
+          </section>
+        </section>
+        <form id="accountForm" class="form-grid">
+          <input type="hidden" id="accountId">
+          <label>Tên hiển thị
+            <input id="accountDisplayName" required placeholder="Nguyễn Văn A">
+          </label>
+          <label>Tên đăng nhập
+            <input id="accountUsername" required autocomplete="off" placeholder="nguyenvana">
+          </label>
+          <label>Mật khẩu
+            <input id="accountPassword" type="password" required autocomplete="new-password" placeholder="Mật khẩu">
+          </label>
+          <label>Vai trò
+            <select id="accountRole">
+              <option value="admin">Admin</option>
+              <option value="employee">Nhân viên</option>
+              <option value="section_head">Trưởng bộ phận/Trưởng nhóm</option>
+              <option value="manager">Trưởng phòng</option>
+              <option value="deputy_manager">Phó phòng</option>
+              <option value="director">Ban giám đốc</option>
+            </select>
+          </label>
+          <label>Nhân sự liên kết
+            <select id="accountPerson"></select>
+          </label>
+          <label>Phòng quản lý/làm việc
+            <select id="accountDepartment"></select>
+          </label>
+          <div class="form-actions wide">
+            <button type="submit">Lưu tài khoản</button>
+            <button id="resetAccountForm" class="ghost" type="button">Làm mới</button>
+          </div>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Tài khoản</th>
+                <th>Vai trò</th>
+                <th>Nhân sự</th>
+                <th>Phòng</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="accountTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="rules" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Căn cứ</p>
+            <h2>Quy chế thi đua, khen thưởng</h2>
+          </div>
+        </div>
+        <div class="rules-grid">
+          <article class="block">
+            <h3>Nguyên tắc</h3>
+            <ul>
+              <li>Công khai, minh bạch, công bằng, đúng người đúng việc.</li>
+              <li>Dựa trên kết quả thực tế, có số liệu kiểm chứng.</li>
+              <li>Gắn với KPI, tiến độ, chất lượng công việc.</li>
+              <li>Kết hợp thi đua với kỷ luật, khen thưởng đúng thời điểm.</li>
+            </ul>
+          </article>
+          <article class="block">
+            <h3>Công thức cá nhân</h3>
+            <p>Điểm từng tiêu chí = (Thực hiện / Kế hoạch) x Trọng số, tối đa 120% trọng số. KPI Tổng = KPI Cá Nhân x 80% + KPI Phòng x 20% + điểm khen thưởng/kỷ luật/tác phong.</p>
+          </article>
+          <article class="block">
+            <h3>Xếp loại phòng</h3>
+            <p>Xuất sắc từ 90 điểm, Tốt 80-89, Khá 65-79, Trung bình 50-64, Yếu dưới 50.</p>
+          </article>
+          <article class="block">
+            <h3>Xếp loại cá nhân</h3>
+            <p>Loại 1 từ 90-100; Loại 2 từ 88-90; Loại 3 từ 85-88; Loại 4 từ 80-85; Loại 5 từ 75-80; Loại 6 từ 70-75; Loại 7 dưới 70.</p>
+          </article>
+        </div>
+        <section class="block">
+          <h3>Bộ tiêu chí KPI đang áp dụng</h3>
+          <div id="rulesCriteria" class="rules-criteria"></div>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <section id="printDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <form id="printForm" class="modal-card">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Báo cáo</p>
+          <h2>Chọn nội dung cần in</h2>
+        </div>
+      </div>
+      <div id="printOptions" class="print-options"></div>
+      <div class="form-actions">
+        <button type="submit">In các mục đã chọn</button>
+        <button id="cancelPrint" class="ghost" type="button">Hủy</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="taskInboxDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card task-inbox-modal" role="dialog" aria-modal="true" aria-labelledby="taskInboxTitle">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Giao việc</p>
+          <h2 id="taskInboxTitle">Tạo và theo dõi công việc được giao</h2>
+          <p id="taskInboxDialogSummary" class="muted">Chưa có công việc được giao.</p>
+        </div>
+        <button id="closeTaskInbox" class="ghost" type="button">Đóng</button>
+      </div>
+      <form id="assignmentTaskForm" class="form-grid assignment-form">
+        <input type="hidden" id="assignmentTaskId">
+        <label class="task-title-field">Tên công việc
+          <input id="assignmentTaskTitle" required placeholder="Nhập nội dung giao việc...">
+        </label>
+        <label class="task-project-field">Tên dự án
+          <input id="assignmentTaskProjectName" placeholder="Nhập tên dự án liên quan...">
+        </label>
+        <label>Người được giao
+          <select id="assignmentTaskOwner" required></select>
+        </label>
+        <label>Người phối hợp
+          <select id="assignmentTaskCollaborator"></select>
+        </label>
+        <label>Người giao việc
+          <input id="assignmentTaskAssignerLabel" disabled placeholder="Tự ghi theo tài khoản đang đăng nhập">
+        </label>
+        <label>Danh mục KPI cá nhân
+          <select id="assignmentTaskCategory" required></select>
+        </label>
+        <label>Ngày bắt đầu
+          <input id="assignmentTaskStartDate" type="date">
+        </label>
+        <label>Ngày hoàn thành
+          <input id="assignmentTaskDue" type="date" required>
+        </label>
+        <label>Giờ hoàn thành
+          <input id="assignmentTaskDueTime" type="time">
+        </label>
+        <label>Trạng thái
+          <select id="assignmentTaskStatus">
+            <option>Chuẩn bị thực hiện</option>
+            <option>Đang thực hiện</option>
+            <option>Hoàn thành</option>
+            <option>Quá hạn</option>
+            <option disabled>Đã kết thúc</option>
+          </select>
+        </label>
+        <label>Tiến độ (%)
+          <input id="assignmentTaskProgress" type="number" min="0" max="100" value="0">
+        </label>
+        <label>Đánh giá chất lượng (%)
+          <input id="assignmentTaskQualityPercent" type="number" min="0" max="120" step="0.01" placeholder="Chỉ nhập khi hoàn thành">
+        </label>
+        <label class="wide">Nội dung giao việc
+          <textarea id="assignmentTaskNote" rows="3" placeholder="Nội dung yêu cầu, rủi ro, phối hợp, hồ sơ liên quan..."></textarea>
+        </label>
+        <label>Phản hồi nhận việc
+          <select id="assignmentTaskResponseStatus">
+            <option value="">Chưa phản hồi</option>
+            <option>Đã nhận việc</option>
+            <option>Cần trao đổi</option>
+            <option>Lý do khác</option>
+          </select>
+        </label>
+        <label class="wide"><span id="assignmentTaskResponseNoteLabel">Nội dung phản hồi / Báo cáo tiến độ</span>
+          <textarea id="assignmentTaskResponseNote" rows="3" placeholder="Xác nhận nhận việc, lý do cần trao đổi hoặc báo cáo tiến độ thực hiện..."></textarea>
+          <span id="assignmentTaskResponseMeta" class="field-note"></span>
+          <span id="assignmentTaskProgressMeta" class="field-note"></span>
+          <div id="assignmentTaskProgressReportList" class="progress-report-list"></div>
+        </label>
+        <div class="wide compact-upload-field">
+          <span class="compact-upload-title">Tải lên hồ sơ liên quan</span>
+          <div class="compact-upload-row">
+            <label class="file-button compact-file-button">Chọn hồ sơ
+              <input id="assignmentTaskAttachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.txt">
+            </label>
+            <span class="field-note">Chọn nhiều tệp, mỗi tệp tối đa 2MB, tổng hồ sơ tối đa 5MB.</span>
+          </div>
+        </div>
+        <div id="assignmentTaskAttachmentList" class="attachment-list wide">
+          <span class="muted">Chưa có hồ sơ đính kèm.</span>
+        </div>
+        <div class="form-actions wide">
+          <button type="submit">Lưu giao việc</button>
+          <button id="endAssignmentTask" class="ghost is-hidden" type="button">Kết thúc</button>
+          <button id="resetAssignmentTaskForm" class="ghost" type="button">Làm mới</button>
+        </div>
+      </form>
+      <div id="taskInboxList" class="task-inbox-list"></div>
+    </div>
+  </section>
+
+  <section id="taskStatusDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card kpi-task-detail-modal task-status-detail-modal" role="dialog" aria-modal="true" aria-labelledby="taskStatusDetailTitle">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Danh sách công việc</p>
+          <h2 id="taskStatusDetailTitle">Công việc theo trạng thái</h2>
+          <p id="taskStatusDetailSubtitle" class="muted">Chưa chọn trạng thái.</p>
+        </div>
+        <button id="closeTaskStatusDetail" class="ghost" type="button">Đóng</button>
+      </div>
+      <div id="taskStatusDetailContext" class="kpi-task-detail-context"></div>
+      <div id="taskStatusDetailList" class="kpi-task-detail-list"></div>
+    </div>
+  </section>
+
+  <section id="taskDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="taskDetailTitle">
+      <div class="section-head">
+        <div>
+          <p id="taskDetailSubtitle" class="eyebrow">Chi tiết công việc</p>
+          <h2 id="taskDetailTitle">Công việc</h2>
+        </div>
+        <button id="closeTaskDetail" class="ghost" type="button">Đóng</button>
+      </div>
+      <div id="taskDetailMeta" class="task-detail-meta"></div>
+      <div id="taskDetailContent" class="task-detail-content"></div>
+    </div>
+  </section>
+
+  <section id="bulletinDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card bulletin-detail-modal" role="dialog" aria-modal="true" aria-labelledby="bulletinDetailTitle">
+      <div class="section-head">
+        <div>
+          <p id="bulletinDetailMeta" class="eyebrow">Bảng tin</p>
+          <h2 id="bulletinDetailTitle">Tin bài</h2>
+        </div>
+        <button id="closeBulletinDetail" class="ghost" type="button">Đóng</button>
+      </div>
+      <div id="bulletinDetailContent" class="bulletin-detail-content"></div>
+      <div id="bulletinDetailMedia" class="bulletin-detail-media"></div>
+      <div id="bulletinDetailVoting" class="bulletin-detail-voting"></div>
+    </div>
+  </section>
+
+  <section id="archiveDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card archive-detail-modal" role="dialog" aria-modal="true" aria-labelledby="archiveDetailTitle">
+      <div class="section-head">
+        <div>
+          <p id="archiveDetailMeta" class="eyebrow">Lưu Trữ</p>
+          <h2 id="archiveDetailTitle">Hồ sơ lưu trữ</h2>
+        </div>
+        <button id="closeArchiveDetail" class="ghost" type="button">Đóng</button>
+      </div>
+      <div id="archiveDetailContent" class="archive-detail-content"></div>
+      <div id="archiveDetailLinks" class="archive-detail-links"></div>
+      <div id="archiveDetailFiles" class="archive-detail-files"></div>
+    </div>
+  </section>
+
+  <section id="kpiTaskDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card kpi-task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="kpiTaskDetailTitle">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Chi tiết KPI</p>
+          <h2 id="kpiTaskDetailTitle">Công việc liên quan</h2>
+          <p id="kpiTaskDetailSubtitle" class="muted">Chưa chọn tiêu chí.</p>
+        </div>
+        <button id="closeKpiTaskDetail" class="ghost" type="button">Đóng</button>
+      </div>
+      <div id="kpiTaskDetailContext" class="kpi-task-detail-context"></div>
+      <div id="kpiTaskDetailList" class="kpi-task-detail-list"></div>
+    </div>
+  </section>
+
+  <section id="fieldCustomizeDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card customization-modal" role="dialog" aria-modal="true" aria-labelledby="fieldCustomizeTitle">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Tùy biến ô thông tin</p>
+          <h2 id="fieldCustomizeTitle">Chỉnh trường</h2>
+        </div>
+        <button id="closeFieldCustomize" class="ghost" type="button">Đóng</button>
+      </div>
+      <form id="fieldCustomizeForm" class="form-grid customization-form-grid">
+        <input id="fieldCustomizeKey" type="hidden">
+        <input id="fieldCustomizeLegacyKey" type="hidden">
+        <label class="wide">Tên hiển thị
+          <input id="fieldCustomizeLabel" required>
+        </label>
+        <label>Độ rộng
+          <select id="fieldCustomizeWidth">
+            <option value="">Mặc định</option>
+            <option value="1">Gọn</option>
+            <option value="2">Vừa</option>
+            <option value="3">Rộng</option>
+            <option value="4">Hết dòng</option>
+          </select>
+        </label>
+        <label>Chiều cao
+          <input id="fieldCustomizeHeight" type="number" min="28" max="220" step="1">
+        </label>
+        <label>Rộng kéo thả (px)
+          <input id="fieldCustomizePixelWidth" type="number" min="40" max="2400" step="1" placeholder="Tự động">
+        </label>
+        <label>Cao kéo thả (px)
+          <input id="fieldCustomizePixelHeight" type="number" min="24" max="1800" step="1" placeholder="Tự động">
+        </label>
+        <label>Thứ tự hiển thị
+          <input id="fieldCustomizeOrder" type="number" min="-99" max="99" step="1" placeholder="Mặc định">
+        </label>
+        <label class="checkbox-field">
+          <input id="fieldCustomizeHidden" type="checkbox">
+          <span>Ẩn trường này</span>
+        </label>
+        <label class="checkbox-field">
+          <input id="fieldCustomizeDeleted" type="checkbox">
+          <span>Xóa nội dung này khỏi giao diện</span>
+        </label>
+        <div class="form-actions wide">
+          <button type="submit">Lưu tùy biến</button>
+          <button id="deleteFieldCustomize" class="ghost danger-action" type="button">Xóa nội dung</button>
+          <button id="resetFieldCustomize" class="ghost" type="button">Khôi phục</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section id="customFieldDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card customization-modal" role="dialog" aria-modal="true" aria-labelledby="customFieldDialogTitle">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Thêm ô thông tin</p>
+          <h2 id="customFieldDialogTitle">Trường mới</h2>
+        </div>
+        <button id="closeCustomFieldDialog" class="ghost" type="button">Đóng</button>
+      </div>
+      <form id="customFieldInlineForm" class="form-grid customization-form-grid">
+        <input id="customFieldInlineId" type="hidden">
+        <input id="customFieldInlineScope" type="hidden">
+        <label class="wide">Tên trường
+          <input id="customFieldInlineLabel" required placeholder="Nhập tên ô thông tin mới">
+        </label>
+        <label>Kiểu dữ liệu
+          <select id="customFieldInlineType"></select>
+        </label>
+        <label>Độ rộng
+          <select id="customFieldInlineWidth">
+            <option value="1">Gọn</option>
+            <option value="2">Vừa</option>
+            <option value="3">Rộng</option>
+            <option value="4">Hết dòng</option>
+          </select>
+        </label>
+        <label>Thứ tự hiển thị
+          <input id="customFieldInlineOrder" type="number" min="-99" max="99" step="1" placeholder="Mặc định">
+        </label>
+        <label class="checkbox-field">
+          <input id="customFieldInlineEnabled" type="checkbox" checked>
+          <span>Đang sử dụng</span>
+        </label>
+        <div class="form-actions wide">
+          <button type="submit">Lưu trường</button>
+          <button id="deleteCustomFieldInline" class="ghost" type="button">Xóa trường</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section id="popupCustomizeDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card customization-modal" role="dialog" aria-modal="true" aria-labelledby="popupCustomizeTitle">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Tùy biến popup</p>
+          <h2 id="popupCustomizeTitle">Kích thước cửa sổ</h2>
+        </div>
+        <button id="closePopupCustomize" class="ghost" type="button">Đóng</button>
+      </div>
+      <form id="popupCustomizeForm" class="form-grid customization-form-grid">
+        <input id="popupCustomizeKey" type="hidden">
+        <label>Chiều rộng
+          <input id="popupCustomizeWidth" type="number" min="420" max="1800" step="10">
+        </label>
+        <div class="form-actions">
+          <button type="submit">Lưu kích thước</button>
+          <button id="resetPopupCustomize" class="ghost" type="button">Khôi phục</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <template id="emptyRowTemplate">
+    <tr><td colspan="8" class="empty-cell">Chưa có dữ liệu.</td></tr>
+  </template>
+  <!-- ... Các đoạn code mẫu template phía trên giữ nguyên ... -->
+  <!-- 🌟 TÚI CHỨA CHUÔNG THÔNG BÁO (Sếp gài thêm dòng này ở đây để ăn khớp với CSS nhé) -->
+  <div id="phucThinhToastContainer"></div>
+  <!-- 1. Cổng tải thư viện Supabase gốc (Xếp đầu tiên) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- 2. Các file logic hệ thống của sếp -->
+  <script src="people-data.js"></script>
+  <script src="supabase-config.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
