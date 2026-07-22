@@ -5742,3 +5742,28 @@ td:last-child {
   color: var(--muted, #64748b);
   line-height: 1.4;
 }
+/* Styling cho nút Tải file mục Lưu trữ */
+.btn-download-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background-color: #0284c7; /* Màu xanh nước biển đẹp mắt */
+  color: #ffffff !important;
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: 6px;
+  text-decoration: none;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease-in-out;
+}
+
+.btn-download-file:hover {
+  background-color: #0369a1;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+}
+
+.btn-download-file:active {
+  transform: translateY(0);
+}
