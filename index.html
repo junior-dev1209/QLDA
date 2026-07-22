@@ -38,13 +38,15 @@
         <p id="loginError" class="form-error" role="alert"></p>
         <button type="submit">Đăng nhập</button>
       </form>
-
     </div>
   </section>
 
   <header class="topbar">
     <div>
-      <p class="unit">Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</p>
+      <p class="unit">
+        <span>BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG</span>
+        <span>XÃ PHÚC THỊNH</span>
+      </p>
       <h1>Quản Trị Nhân Sự</h1>
     </div>
     <div class="top-actions">
@@ -109,7 +111,7 @@
       </section>
     </aside>
 
-      <section class="content">
+    <section class="content">
       <section id="dashboard" class="view is-active">
         <div class="section-head">
           <div>
@@ -175,6 +177,7 @@
         </div>
       </section>
 
+      <!-- 🌟 TAB BẢNG TIN ĐÃ SỬA CẤU TRÚC HTML FORM NẰM NGANG VÀ DANH SÁCH 4 Ô DƯỚI -->
       <section id="bulletin" class="view">
         <div class="section-head">
           <div>
@@ -184,84 +187,96 @@
           <p id="bulletinSummary" class="section-note">Chưa có tin bài.</p>
         </div>
 
-        <div class="bulletin-layout">
+        <div class="bulletin-layout-stacked">
+          <!-- 1. FORM ĐĂNG BÀI NẰM NGANG FULL CHIỀU RỘNG Ở TRÊN -->
           <section id="bulletinAdminPanel" class="block bulletin-admin-only">
             <h3>Đăng tải tin bài</h3>
-            <form id="bulletinForm" class="form-grid bulletin-form">
+            <form id="bulletinForm" class="bulletin-form-grid">
               <input type="hidden" id="bulletinId">
-              <label class="wide">Tiêu đề
-                <input id="bulletinTitle" required placeholder="Nhập tiêu đề tin bài, thông báo...">
+              
+              <label class="col-span-4" data-custom-field-key="title">Tiêu đề
+                <input type="text" id="bulletinTitle" required placeholder="Nhập tiêu đề tin bài, thông báo...">
               </label>
-              <label>Loại tin
+
+              <label class="col-span-1">Loại tin
                 <select id="bulletinCategory" required>
-                  <option>Tin tức chung</option>
-                  <option>Thông báo nội bộ</option>
-                  <option>Hoạt động phong trào</option>
-                  <option>Chương trình bình chọn</option>
-                  <option>Khác</option>
+                  <option value="Tin tức chung">Tin tức chung</option>
+                  <option value="Thông báo nội bộ">Thông báo nội bộ</option>
+                  <option value="Hoạt động phong trào">Hoạt động phong trào</option>
+                  <option value="Chương trình bình chọn">Chương trình bình chọn</option>
+                  <option value="Khác">Khác</option>
                 </select>
               </label>
-              <label>Ngày đăng
-                <input id="bulletinDate" type="date" required>
+
+              <label class="col-span-1">Ngày đăng
+                <input type="date" id="bulletinDate" required>
               </label>
-              <label>Trạng thái
+
+              <label class="col-span-1">Trạng thái
                 <select id="bulletinStatus">
                   <option value="published">Đăng hiển thị</option>
                   <option value="draft">Lưu nháp</option>
                 </select>
               </label>
-              <label class="checkbox-field">
-                <input id="bulletinPinned" type="checkbox">
+
+              <label class="checkbox-field col-span-1" style="margin-top: 22px;">
+                <input type="checkbox" id="bulletinPinned">
                 <span>Ghim đầu bảng tin</span>
               </label>
-              <label class="wide">Nội dung
-                <textarea id="bulletinContent" rows="6" required placeholder="Nhập nội dung tin tức, thông báo, hoạt động, phong trào hoặc chương trình bình chọn..."></textarea>
+
+              <label class="col-span-4">Nội dung
+                <textarea id="bulletinContent" rows="3" required placeholder="Nhập nội dung tin tức, thông báo, hoạt động, phong trào hoặc chương trình bình chọn..."></textarea>
               </label>
-              <section id="bulletinVoteSettings" class="bulletin-vote-settings wide is-hidden">
-                <label>Thời gian kết thúc bình chọn
-                  <input id="bulletinVoteEndsAt" type="datetime-local">
+
+              <section id="bulletinVoteSettings" class="bulletin-vote-settings col-span-4 is-hidden" style="display:grid; grid-template-columns: 1fr 1fr 2fr; gap:12px; background:#f8fafc; padding:10px; border-radius:8px;">
+                <label>Kết thúc bình chọn
+                  <input type="datetime-local" id="bulletinVoteEndsAt">
                 </label>
-                <label class="bulletin-vote-limit-field">Số tiêu chí bình chọn
-                  <input id="bulletinVoteLimit" type="number" min="1" step="1" value="1">
+                <label class="bulletin-vote-limit-field">Số tiêu chí chọn tối đa
+                  <input type="number" id="bulletinVoteLimit" min="1" step="1" value="1">
                 </label>
-                <label class="wide">Tiêu chí bình chọn
-                  <textarea id="bulletinVoteOptions" rows="4" placeholder="Mỗi dòng là một tiêu chí để mọi người bình chọn..."></textarea>
+                <label class="col-span-2">Tiêu chí bình chọn (mỗi dòng 1 tiêu chí)
+                  <textarea id="bulletinVoteOptions" rows="3" placeholder="Ví dụ:&#10;Tập thể xuất sắc&#10;Cá nhân tiêu biểu"></textarea>
                 </label>
               </section>
-              <div class="wide compact-upload-field">
+
+              <div class="col-span-2 compact-upload-field">
                 <span class="compact-upload-title">Tải lên hình ảnh / video clip / âm thanh / PDF</span>
                 <div class="compact-upload-row">
                   <label class="file-button compact-file-button">Chọn media
-                    <input id="bulletinMedia" type="file" multiple accept="image/*,video/*,audio/*,application/pdf,.pdf">
+                    <input type="file" id="bulletinMedia" multiple accept="image/*,video/*,audio/*,application/pdf" class="is-hidden" style="display: none;">
                   </label>
-                  <span class="field-note">Hỗ trợ ảnh, video clip, âm thanh và PDF. Mỗi tệp tối đa 20MB, tổng media tối đa 120MB.</span>
+                  <span class="field-note" style="display:block; margin-top:6px;">Tối đa 20MB/tệp, tổng media 120MB.</span>
                 </div>
               </div>
-              <div id="bulletinMediaList" class="attachment-list bulletin-media-draft wide">
-                <span class="muted">Chưa có media đính kèm.</span>
-              </div>
-              <div class="form-actions wide">
-                <button type="submit">Lưu tin bài</button>
-                <button id="resetBulletinForm" class="ghost" type="button">Làm mới</button>
+
+              <div class="col-span-2 form-actions-right">
+                <div id="bulletinMediaList" class="attachment-list bulletin-media-draft" style="width: 100%;">
+                  <span class="muted">Chưa có media đính kèm.</span>
+                </div>
+                <button type="submit" class="primary">Lưu tin bài</button>
+                <button type="button" class="ghost" id="resetBulletinForm">Làm mới</button>
               </div>
             </form>
           </section>
 
+          <!-- 2. DANH SÁCH BẢNG TIN NẰM BÊN DƯỚI (LƯỚI Ô VUÔNG) -->
           <section class="bulletin-board">
             <div class="filter-row bulletin-filter">
-              <input id="bulletinSearch" placeholder="Tìm kiếm theo tiêu đề, loại tin, nội dung...">
+              <input type="text" id="bulletinSearch" placeholder="Tìm kiếm theo tiêu đề, nội dung...">
               <select id="bulletinCategoryFilter">
                 <option value="">Tất cả loại tin</option>
-                <option>Tin tức chung</option>
-                <option>Thông báo nội bộ</option>
-                <option>Hoạt động phong trào</option>
-                <option>Chương trình bình chọn</option>
-                <option>Khác</option>
+                <option value="Tin tức chung">Tin tức chung</option>
+                <option value="Thông báo nội bộ">Thông báo nội bộ</option>
+                <option value="Hoạt động phong trào">Hoạt động phong trào</option>
+                <option value="Chương trình bình chọn">Chương trình bình chọn</option>
+                <option value="Khác">Khác</option>
               </select>
             </div>
-            <div id="bulletinList" class="bulletin-list empty-state">Chưa có tin bài.</div>
+            <div id="bulletinList" class="bulletin-list empty-state">Đang tải bảng tin...</div>
           </section>
         </div>
+        
         <div class="view-scroll-actions" aria-label="Điều hướng nhanh trang Bảng tin">
           <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
           <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
@@ -426,7 +441,8 @@
             <textarea id="personNote" rows="2" placeholder="Nhiệm vụ chính, phân công đặc thù..."></textarea>
           </label>
           <div class="form-actions wide">
-            <button type="submit">Lưu nhân sự</button>
+            <button type="submit">Lưu tài khoản</button>
+            <button id="toggleDisableAccountBtn" class="ghost warn-action is-hidden" type="button" style="color: #d97706; border-color: #fde68a; background: #fffbeb;">Vô hiệu hóa tài khoản</button>
             <button id="resetPersonForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
@@ -906,6 +922,8 @@
           </label>
           <div class="form-actions wide">
             <button type="submit">Lưu tài khoản</button>
+            <!-- 🌟 ĐÃ BỔ SUNG NÚT XÓA TÀI KHOẢN ẨN SẴN Ở ĐÂY -->
+            <button id="deleteAccountBtn" class="ghost danger-action is-hidden" type="button" style="color: #e53e3e; border-color: #fed7d7; background: #fff5f5;">Xóa tài khoản</button>
             <button id="resetAccountForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
@@ -1261,19 +1279,161 @@
       </form>
     </div>
   </section>
-
   <template id="emptyRowTemplate">
     <tr><td colspan="8" class="empty-cell">Chưa có dữ liệu.</td></tr>
   </template>
-  <!-- ... Các đoạn code mẫu template phía trên giữ nguyên ... -->
-  <!-- 🌟 TÚI CHỨA CHUÔNG THÔNG BÁO (Sếp gài thêm dòng này ở đây để ăn khớp với CSS nhé) -->
-  <div id="phucThinhToastContainer"></div>
-  <!-- 1. Cổng tải thư viện Supabase gốc (Xếp đầu tiên) -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-  <!-- 2. Các file logic hệ thống của sếp -->
+  <!-- 🌟 TÚI CHỨA CHUÔNG THÔNG BÁO -->
+  <div id="phucThinhToastContainer"></div>
+
+  <!-- 📱 THANH ĐIỀU HƯỚNG ĐÁY MÀN HÌNH (MOBILE ONLY) -->
+  <nav class="mobile-bottom-nav mobile-only">
+    <button type="button" class="bottom-nav-item is-active" data-view="dashboard">
+      <span class="nav-icon">▦</span>
+      <span>Tổng quan</span>
+    </button>
+    <button type="button" class="bottom-nav-item" data-view="bulletin">
+      <span class="nav-icon">▤</span>
+      <span>Bảng tin</span>
+    </button>
+    <button type="button" class="bottom-nav-item" data-view="tasks">
+      <span class="nav-icon">☑</span>
+      <span>Công việc</span>
+    </button>
+    <button type="button" class="bottom-nav-item" data-view="people">
+      <span class="nav-icon">◉</span>
+      <span>Nhân sự</span>
+    </button>
+    <button type="button" class="bottom-nav-item" id="openMobileMenuBtn">
+      <span class="nav-icon">☰</span>
+      <span>Menu</span>
+    </button>
+  </nav>
+
+  <!-- 📱 POPUP MENU MOBILE CHUẨN GIAO DIỆN FACEBOOK -->
+  <div id="mobileMenuPopup" class="mobile-menu-popup mobile-only">
+    <!-- 1. CÁ NHÂN -->
+    <div class="mobile-profile-card">
+      <div class="mobile-profile-avatar">👤</div>
+      <div class="mobile-profile-info">
+        <strong id="mobileUserLabel">Tài khoản</strong>
+        <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
+      </div>
+      <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
+    </div>
+
+    <!-- 2. LÍST MENU -->
+    <div class="mobile-menu-list">
+      <button type="button" class="mobile-menu-item" data-view="archive">
+        <div class="mobile-icon-box">▧</div>
+        <span class="mobile-menu-text">Lưu Trữ</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="department-evaluations">
+        <div class="mobile-icon-box">▥</div>
+        <span class="mobile-menu-text">KPI phòng</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="evaluations">
+        <div class="mobile-icon-box">◇</div>
+        <span class="mobile-menu-text">KPI cá nhân</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="history">
+        <div class="mobile-icon-box">◷</div>
+        <span class="mobile-menu-text">Lịch sử</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="accounts">
+        <div class="mobile-icon-box">◫</div>
+        <span class="mobile-menu-text">Tài khoản</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="rules">
+        <div class="mobile-icon-box">§</div>
+        <span class="mobile-menu-text">Quy chế</span>
+      </button>
+    </div>
+
+    <!-- 3. ĐĂNG XUẤT -->
+    <div class="mobile-menu-footer">
+      <button type="button" id="mobileLogoutBtn" class="mobile-logout-button">
+        <span>🚪</span> Đăng xuất
+      </button>
+    </div>
+  </div>
+
+  <!-- 📱 POPUP CHI TIẾT HỒ SƠ NHÂN SỰ -->
+  <section id="personDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card person-detail-modal" role="dialog" aria-modal="true">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Hồ sơ chi tiết</p>
+          <h2 id="personDetailName" style="margin:0; font-size:18px; color:#0f2d3a;">Nguyễn Văn A</h2>
+        </div>
+        <button id="closePersonDetail" class="ghost" type="button" style="font-size:18px; font-weight:bold;">✕</button>
+      </div>
+      <div id="personDetailContent" class="person-detail-grid" style="margin-top:12px;"></div>
+    </div>
+  </section>
+
+  <!-- 🌟 CÁC FILE SCRIPT HỆ THỐNG -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="people-data.js"></script>
   <script src="supabase-config.js"></script>
   <script src="script.js"></script>
+  <!-- 📱 POPUP MENU MOBILE CHUẨN GIAO DIỆN FACEBOOK -->
+  <div id="mobileMenuPopup" class="mobile-menu-popup mobile-only">
+    
+    <!-- 1. KHỐI THÔNG TIN CÁ NHÂN TRÊN ĐẦU -->
+    <div class="mobile-profile-card">
+      <div class="mobile-profile-avatar">👤</div>
+      <div class="mobile-profile-info">
+        <strong id="mobileUserLabel">Tài khoản</strong>
+        <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
+      </div>
+      <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
+    </div>
+
+    <!-- 2. DANH SÁCH MENU THEO HÀNG (MÔ PHỎNG 100% ẢNH 2) -->
+    <div class="mobile-menu-list">
+      <button type="button" class="mobile-menu-item" data-view="archive">
+        <div class="mobile-icon-box">▧</div>
+        <span class="mobile-menu-text">Lưu Trữ</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="department-evaluations">
+        <div class="mobile-icon-box">▥</div>
+        <span class="mobile-menu-text">KPI phòng</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="evaluations">
+        <div class="mobile-icon-box">◇</div>
+        <span class="mobile-menu-text">KPI cá nhân</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="history">
+        <div class="mobile-icon-box">◷</div>
+        <span class="mobile-menu-text">Lịch sử</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="accounts">
+        <div class="mobile-icon-box">◫</div>
+        <span class="mobile-menu-text">Tài khoản</span>
+      </button>
+
+      <button type="button" class="mobile-menu-item" data-view="rules">
+        <div class="mobile-icon-box">§</div>
+        <span class="mobile-menu-text">Quy chế</span>
+      </button>
+    </div>
+
+    <!-- 3. NÚT ĐĂNG XUẤT NẰM Ở DƯỚI CÙNG -->
+    <div class="mobile-menu-footer">
+      <button type="button" id="mobileLogoutBtn" class="mobile-logout-button">
+        <span>🚪</span> Đăng xuất
+      </button>
+    </div>
+  </div>
 </body>
 </html>
