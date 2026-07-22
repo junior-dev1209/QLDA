@@ -5877,10 +5877,11 @@ function archiveFileLinkHtml(file) {
   const source = escapeHtml(file.dataUrl || "");
   const name = escapeHtml(file.name || "Tệp đính kèm");
   return `
-    <a class="archive-file-link" href="${source || "#"}" data-archive-file-key="${key}" download="${name}" target="_blank" rel="noopener">
+    <a class="archive-file-link" href="${source || "#"}" data-archive-file-key="${key}" target="_blank" rel="noopener" title="Bấm để mở xem trong tab mới">
       <span class="badge">${escapeHtml(archiveFileKindLabel(file))}</span>
       <span>${name}</span>
       <small>${escapeHtml(formatFileSize(file.size))}</small>
+      <span style="font-size: 12px; color: #0284c7; margin-left: 6px; font-weight: 500;">👁️ Mở tab mới</span>
     </a>
   `;
 }
@@ -5990,7 +5991,7 @@ function renderArchiveDetailFile(file) {
           </span>
         </div>
 
-        <!-- 🌟 NÚT TẢI FILE XUỐNG DÀNH RIÊNG CHO SẾP -->
+        <!-- 🌟 NÚT TẢI FILE XUẤNG (Dành riêng cho nhu cầu tải về) -->
         <a class="archive-file-link btn-download-file" 
            href="${source || "#"}" 
            data-archive-file-key="${key}" 
