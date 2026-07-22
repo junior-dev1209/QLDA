@@ -5874,15 +5874,16 @@ function renderArchiveStats(allRecords, filteredRecords) {
 
 function archiveFileLinkHtml(file) {
   const key = escapeHtml(storedFileKey(file));
-  const source = escapeHtml(file.dataUrl || "");
   const name = escapeHtml(file.name || "Tệp đính kèm");
   return `
-    <a class="archive-file-link" href="${source || "#"}" data-archive-file-key="${key}" target="_blank" rel="noopener" title="Bấm để mở xem trong tab mới">
-      <span class="badge">${escapeHtml(archiveFileKindLabel(file))}</span>
-      <span>${name}</span>
-      <small>${escapeHtml(formatFileSize(file.size))}</small>
-      <span style="font-size: 12px; color: #0284c7; margin-left: 6px; font-weight: 500;">👁️ Mở tab mới</span>
-    </a>
+    <button type="button" class="archive-file-link btn-preview-tab" data-open-pdf-tab="${key}" style="background: none; border: none; padding: 0; font: inherit; cursor: pointer; text-align: left; width: 100%; display: flex; align-items: center; justify-content: space-between; text-decoration: none; color: inherit;" title="Bấm để mở xem trong tab mới">
+      <span style="display: flex; align-items: center; gap: 8px;">
+        <span class="badge">${escapeHtml(archiveFileKindLabel(file))}</span>
+        <span>${name}</span>
+        <small class="muted">${escapeHtml(formatFileSize(file.size))}</small>
+      </span>
+      <span style="font-size: 13px; color: #0284c7; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">👁️ Mở tab mới</span>
+    </button>
   `;
 }
 
@@ -5960,6 +5961,43 @@ function renderArchive() {
     hydrateArchiveFileLinks(byId("archiveList"));
   }, 100);
   applyFieldCustomizations();
+}
+
+// 🌟 Mở PDF ở tab mới trong khung HTML chống bị Foxit/IDM bắt tải file
+async function openFileInNewTab(key) {
+  const file = archiveFileByKey(key) || bulletinMediaByKey(key);
+  if (!file) return;
+
+  const dataUrl = await readStoredFileDataUrl(file);
+  if (!dataUrl) {
+    alert("Không thể nạp nội dung tệp.");
+    return;
+  }
+
+  const displayUrl = storedFileDisplayUrl(file, dataUrl);
+  const name = escapeHtml(file.name || "Tài liệu PDF");
+
+  // Tạo một tab mới chứa khung HTML hiển thị PDF
+  const win = window.open("", "_blank");
+  if (win) {
+    win.document.write(`
+      <!DOCTYPE html>
+      <html lang="vi">
+        <head>
+          <meta charset="UTF-8">
+          <title>${name}</title>
+          <style>
+            html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #525659; }
+            iframe { width: 100%; height: 100%; border: none; }
+          </style>
+        </head>
+        <body>
+          <iframe src="${displayUrl}"></iframe>
+        </body>
+      </html>
+    `);
+    win.document.close();
+  }
 }
 
 function renderArchiveDetailFile(file) {
@@ -8819,6 +8857,15 @@ byId("archiveList").addEventListener("keydown", (event) => {
 
 byId("closeArchiveDetail").addEventListener("click", closeArchiveDetailDialog);
 byId("archiveDetailDialog").addEventListener("click", (event) => {
+  // 🌟 Bổ sung đoạn này: Bắt sự kiện mở Tab mới xem PDF trực tiếp
+  const pdfTabBtn = event.target.closest("[data-open-pdf-tab]");
+  if (pdfTabBtn) {
+    event.preventDefault();
+    event.stopPropagation();
+    openFileInNewTab(pdfTabBtn.dataset.openPdfTab);
+    return;
+  }
+
   if (event.target === byId("archiveDetailDialog")) {
     closeArchiveDetailDialog();
     return;
