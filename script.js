@@ -5981,12 +5981,25 @@ function renderArchiveDetailFile(file) {
               : `<div class="archive-empty-help">Tệp này cần mở bằng ứng dụng phù hợp trên thiết bị.</div>`;
   return `
     <article class="archive-preview-card">
-      <div class="archive-preview-head">
-        <strong>${name}</strong>
-        <span class="archive-meta">
-          <span class="badge">${escapeHtml(archiveFileKindLabel(file))}</span>
-          <span>${escapeHtml(formatFileSize(file.size))}</span>
-        </span>
+      <div class="archive-preview-head" style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+        <div>
+          <strong>${name}</strong>
+          <span class="archive-meta">
+            <span class="badge">${escapeHtml(archiveFileKindLabel(file))}</span>
+            <span>${escapeHtml(formatFileSize(file.size))}</span>
+          </span>
+        </div>
+
+        <!-- 🌟 NÚT TẢI FILE XUỐNG DÀNH RIÊNG CHO SẾP -->
+        <a class="archive-file-link btn-download-file" 
+           href="${source || "#"}" 
+           data-archive-file-key="${key}" 
+           download="${name}" 
+           target="_blank" 
+           rel="noopener" 
+           style="padding: 6px 14px; background: #0284c7; color: #ffffff !important; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          📥 Tải file xuống
+        </a>
       </div>
       ${preview}
       <div class="archive-files">${openLink}</div>
