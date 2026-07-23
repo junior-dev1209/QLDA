@@ -1953,26 +1953,56 @@ function personImportKey(person) {
   return `${String(person.name || "").trim().toLowerCase()}|${person.birthDate || ""}`;
 }
 
+/* =========================================================================
+   🔧 FIX LỖI ĐỒNG BỘ PHÓ PHÒNG HÀNG LOẠT VÀ TỰ ĐỘNG CHUẨN HÓA VỊ TRÍ GPMB
+   ========================================================================= */
+
+function fixGpmbDuplicateRoles() {
+  if (!Array.isArray(state.people)) return;
+  let changed = false;
+
+  state.people.forEach((person) => {
+    // Nếu thuộc phòng GPMB và bị dính role "pho-phong-gpmb" hoặc "pho-phong"
+    if (person.departmentId === "gpmb" && (person.roleId === "pho-phong-gpmb" || person.roleId === "pho-phong")) {
+      const normName = normalizeSearchText(person.name);
+      // Giữ lại Phó phòng chuẩn (chị Vũ Thị Hằng Nga), các cán bộ khác trả về "can-bo-gpmb"
+      if (!normName.includes("vu thi hang nga")) { 
+        person.roleId = "can-bo-gpmb";
+        person.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+    }
+  });
+
+  if (changed) {
+    syncPersonnelAccounts();
+    persistState();
+  }
+}
+
 function mergeImportedPeopleIntoState() {
-  if (!importedPeopleFromExcel.length || state.importedPeopleVersion === IMPORTED_PEOPLE_VERSION) return;
+  if (!importedPeopleFromExcel.length || state.importedPeopleVersion === IMPORTED_PEOPLE_VERSION) {
+    fixGpmbDuplicateRoles(); // Tự động dọn dẹp lỗi dữ liệu cũ đang lưu trong máy
+    return;
+  }
   
   let changed = false;
-  // Thiết lập bản đồ tra cứu nhanh danh sách nhân sự hiện tại theo ID gốc
   const localPeopleMap = new Map((state.people || []).map(p => [p.id, p]));
 
   importedPeopleFromExcel.forEach((excelPerson) => {
     if (!excelPerson || !excelPerson.id || !excelPerson.name) return;
     
-    // Chuẩn hóa phòng ban và vị trí theo đặc thù dự án Phúc Thịnh (ví dụ chuyển đổi phòng du-an sang du-an-1)
     const normalizedExcelPerson = normalizeProjectPerson(excelPerson);
     
+    // 🛑 Chặn không cho nạp role "pho-phong-gpmb" bị gán nhầm từ file Excel
+    if (normalizedExcelPerson.departmentId === "gpmb" && normalizedExcelPerson.roleId === "pho-phong-gpmb") {
+      normalizedExcelPerson.roleId = "can-bo-gpmb";
+    }
+
     if (localPeopleMap.has(normalizedExcelPerson.id)) {
-      // 🔄 ĐỐI CHIẾU NHÂN SỰ CŨ
       const currentLocalPerson = localPeopleMap.get(normalizedExcelPerson.id);
       
-      // 🔥 GIẢI PHÁP ĐỘC QUYỀN: Chỉ so sánh giá trị chuỗi thuần túy của các trường lấy từ file Excel
       const isDataChanged = Object.keys(normalizedExcelPerson).some(key => {
-        // Bỏ qua các trường kiểm toán tự sinh và cấu hình tùy biến động
         if (["createdAt", "createdBy", "updatedAt", "updatedBy", "customFields"].includes(key)) return false;
         
         const localVal = currentLocalPerson[key] !== undefined && currentLocalPerson[key] !== null ? String(currentLocalPerson[key]).trim() : "";
@@ -1982,15 +2012,13 @@ function mergeImportedPeopleIntoState() {
       });
       
       if (isDataChanged) {
-        // Chỉ ghi đè dữ liệu thô từ Excel, giữ nguyên mảng customFields và ngày tạo gốc
         Object.assign(currentLocalPerson, normalizedExcelPerson, {
           updatedAt: new Date().toISOString(),
-          updatedBy: "Hệ thống (Excel)"
+          updatedBy: "Hệ thống (Fix Role)"
         });
         changed = true;
       }
     } else {
-      // ➕ TIẾN HÀNH THÊM NHÂN SỰ MỚI TỪ FILE EXCEL
       state.people.push({
         ...normalizedExcelPerson,
         customFields: {},
@@ -2001,13 +2029,14 @@ function mergeImportedPeopleIntoState() {
     }
   });
 
-  // Khóa mạch xử lý nạp chồng bằng cách lưu lại nhãn phiên bản hiện tại
   state.importedPeopleVersion = IMPORTED_PEOPLE_VERSION;
   
-  // Kích hoạt hàm saveState() để đẩy gói tin sạch lên kho lưu trữ Supabase cho các máy trạm khác đồng bộ theo
   if (changed) {
     saveState();
   }
+
+  // Quét dọn sửa sạch lỗi Phó phòng
+  fixGpmbDuplicateRoles();
 }
 
 function migrateCanBoGpmbKpiCatalog() {
