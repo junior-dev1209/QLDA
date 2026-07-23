@@ -7306,3 +7306,32 @@ body {
     width: auto !important;
   }
 }
+/* =========================================================================
+   🔒 FIX LỖI LÒI HEADER MÀN HÌNH ĐĂNG NHẬP (PHỦ KÍN 100% FULL-SCREEN)
+   ========================================================================= */
+
+/* 1. Khi chưa đăng nhập: ẨN SẠCH Header, Layout chính và thanh Bottom Nav */
+body:not(.is-authenticated) .topbar,
+body:not(.is-authenticated) .layout,
+body:not(.is-authenticated) .mobile-bottom-nav {
+  display: none !important;
+}
+
+/* 2. Khung đăng nhập phủ kín toàn bộ màn hình, đè tuyệt đối lên mọi thứ */
+.login-screen {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 99999999 !important;
+  background: linear-gradient(135deg, #0f2d3a 0%, #176b87 100%) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  padding: 16px !important;
+  box-sizing: border-box !important;
+}
