@@ -7343,3 +7343,99 @@ html.is-authenticated #loginScreen,
   visibility: hidden !important;
   pointer-events: none !important;
 }
+/* =========================================================================
+   📰 TỐI ƯU BẢNG TIN GỌN GÀNG, CHỐNG TRÀN VÀ QUÁ KHỔ (COMPACT BULLETIN CARDS)
+   ========================================================================= */
+
+/* 1. Tối ưu khung thẻ bài viết (Bulletin Card) */
+.bulletin-card {
+  padding: 12px 14px !important;
+  border-radius: 12px !important;
+  gap: 8px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  background: #ffffff !important;
+}
+
+/* 2. Tiêu đề và Tóm tắt gọn gàng */
+.bulletin-card h3 {
+  font-size: 14.5px !important;
+  line-height: 1.35 !important;
+  margin-top: 4px !important;
+  margin-bottom: 2px !important;
+  font-weight: 700 !important;
+  color: #0f2d3a !important;
+}
+
+.bulletin-excerpt {
+  font-size: 12.5px !important;
+  color: #475569 !important;
+  line-height: 1.4 !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 2 !important; /* Khóa tóm tắt tối đa 2 dòng */
+  -webkit-box-orient: vertical !important;
+  overflow: hidden !important;
+  margin: 2px 0 6px 0 !important;
+}
+
+/* 3. Tối ưu phần Media đính kèm (Ảnh / Video / Audio / PDF) */
+.bulletin-media-grid {
+  gap: 6px !important;
+  margin-top: 4px !important;
+}
+
+/* Ép ảnh & video gọn lại vừa mắt, không chiếm dung lượng dọc */
+.bulletin-media-item img,
+.bulletin-media-item video {
+  max-height: 130px !important;
+  width: 100% !important;
+  object-fit: cover !important;
+  border-radius: 8px !important;
+}
+
+/* Ép khung xem trước PDF thu nhỏ gọn đét */
+.bulletin-media-item.is-pdf {
+  max-height: 140px !important;
+  overflow: hidden !important;
+  border-radius: 8px !important;
+  border: 1px solid #cbd5e1 !important;
+  position: relative !important;
+  background: #f8fafc !important;
+}
+
+.bulletin-pdf-viewer {
+  height: 130px !important;
+  width: 100% !important;
+  pointer-events: none !important; /* Khóa cuộn ngầm trong ô nhỏ */
+}
+
+/* Thu gọn trình phát Audio */
+.bulletin-media-item.is-audio audio {
+  height: 36px !important;
+  width: 100% !important;
+}
+
+/* 4. Nhãn Tag (Badges) & Nút bấm chân thẻ gọn gàng */
+.bulletin-meta {
+  gap: 4px !important;
+  flex-wrap: wrap !important;
+}
+
+.bulletin-meta .badge {
+  font-size: 10.5px !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+}
+
+.bulletin-footer {
+  padding-top: 8px !important;
+  margin-top: 4px !important;
+  border-top: 1px solid #f1f5f9 !important;
+}
+
+.bulletin-footer .row-actions button {
+  padding: 3px 10px !important;
+  font-size: 11.5px !important;
+  border-radius: 4px !important;
+}
