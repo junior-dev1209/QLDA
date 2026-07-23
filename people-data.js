@@ -1,5 +1,61 @@
 window.PHUC_THINH_IMPORTED_PEOPLE = [
     {
+    "id": "person-director-huan",
+    "name": "Đào Ngọc Huân",
+    "gender": "Nam",
+    "departmentId": "ban-giam-doc",
+    "roleId": "giam-doc",
+    "contract": "Biên chế",
+    "qualification": "Đại học / Thạc sĩ",
+    "phone": "",
+    "address": "TP Hà Nội",
+    "customFields": {},
+    "createdAt": "2026-07-23T00:00:00.000Z",
+    "createdBy": "Hệ thống"
+},
+{
+    "id": "person-deputy-hien",
+    "name": "Nguyễn Văn Hiện",
+    "gender": "Nam",
+    "departmentId": "ban-giam-doc",
+    "roleId": "pho-giam-doc",
+    "contract": "Biên chế",
+    "qualification": "Đại học / Thạc sĩ",
+    "phone": "",
+    "address": "TP Hà Nội",
+    "customFields": {},
+    "createdAt": "2026-07-23T00:00:00.000Z",
+    "createdBy": "Hệ thống"
+},
+{
+    "id": "person-deputy-hanh",
+    "name": "Nguyễn Thị Hồng Hạnh",
+    "gender": "Nữ",
+    "departmentId": "ban-giam-doc",
+    "roleId": "pho-giam-doc",
+    "contract": "Biên chế",
+    "qualification": "Đại học / Thạc sĩ",
+    "phone": "",
+    "address": "TP Hà Nội",
+    "customFields": {},
+    "createdAt": "2026-07-23T00:00:00.000Z",
+    "createdBy": "Hệ thống"
+},
+{
+    "id": "person-deputy-dung",
+    "name": "Tô Việt Dũng",
+    "gender": "Nam",
+    "departmentId": "ban-giam-doc",
+    "roleId": "pho-giam-doc",
+    "contract": "Biên chế",
+    "qualification": "Đại học / Thạc sĩ",
+    "phone": "",
+    "address": "TP Hà Nội",
+    "customFields": {},
+    "createdAt": "2026-07-23T00:00:00.000Z",
+    "createdBy": "Hệ thống"
+}
+    {
         "id":  "excel-s1-r11",
         "name":  "Nguyễn Thị Huyền Trang",
         "gender":  "Nữ",
