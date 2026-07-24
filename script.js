@@ -1,3 +1,4 @@
+const DANG_BAO_TRI = false;
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
