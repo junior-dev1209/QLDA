@@ -7782,8 +7782,6 @@ body {
     width: auto !important;
   }
 }
-  🔓 FIX LỖI KẸT MÀN HÌNH ĐĂNG NHẬP KHI BẤM ĐĂNG NHẬP
-   ========================================================================= */
 
 /* 1. CHƯA ĐĂNG NHẬP: Hiện màn hình Login full-screen, ẩn ứng dụng bên dưới */
 body:not(.is-authenticated) .login-screen {
@@ -7938,4 +7936,27 @@ html.is-authenticated #loginScreen,
     display: table-cell !important;
     width: auto !important;
   }
+}
+/* =========================================================================
+   🎨 BỔ SUNG STYLE CHO TÀI KHOẢN BỊ KHÓA & MENU MOBILE
+   ========================================================================= */
+
+/* 1. Làm mờ dòng tài khoản bị khóa trong bảng Quản trị tài khoản */
+tr.is-disabled-account {
+  opacity: 0.6;
+  background-color: #f8fafc;
+}
+
+/* 2. Ẩn toàn bộ giao diện Mobile khi xem trên máy tính (Màn hình > 768px) */
+@media (min-width: 769px) {
+  .mobile-only,
+  .mobile-bottom-nav,
+  #mobileMenuPopup {
+    display: none !important;
+  }
+}
+
+/* 3. Bật hiển thị Menu Popup khi bấm nút Menu trên điện thoại */
+#mobileMenuPopup.is-active {
+  display: block !important;
 }
