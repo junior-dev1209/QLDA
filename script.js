@@ -1,4 +1,3 @@
-const DANG_BAO_TRI = false;
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
@@ -1068,6 +1067,8 @@ let archiveFileDraft = [];
 let bulletinResizeRefreshQueued = false;
 let taskAttachmentDraft = [];
 let assignmentAttachmentDraft = [];
+let taskDetailInlineEditor = null;
+let personDetailInlineEditor = null;
 let dashboardRefreshQueued = false;
 let dashboardChartAnimationFrame = 0;
 let binaryStorageOpenPromise = null;
@@ -1231,11 +1232,16 @@ function taskQualityPercentValue(task) {
 }
 
 function taskKpiActualScore(task) {
-  if (normalizeTaskStatus(task?.status) !== TASK_STATUS_COMPLETED) return 0;
+  if (normalizeTaskStatus(task?.status) !== TASK_STATUS_COMPLETED || !taskCompletionIsApproved(task)) return 0;
   return taskQualityPercentValue(task) / 100;
 }
 
 function taskQualityLabel(task) {
+  if (!taskCompletionIsApproved(task)) {
+    if (taskCompletionNeedsReview(task)) return "Chờ đánh giá Đạt";
+    if (taskCompletionReviewStatus(task) === "failed") return "Chưa đạt";
+    return "Chưa đủ điều kiện";
+  }
   return taskHasQualityPercent(task) ? `${formatScore(taskQualityPercentValue(task))}%` : "Chưa đánh giá";
 }
 
@@ -2380,6 +2386,48 @@ function canAssessTaskQuality(task, statusOverride = "") {
   if (!task) return false;
   return canAssessTaskQualityForPerson(task.ownerId, statusOverride || task.status);
 }
+// =========================================================================
+// 🚀 NÂNG CẤP 2.3: HÀM KIỂM TRA QUYỀN DUYỆT CÔNG VIỆC
+// =========================================================================
+function taskCompletionReviewStatus(task) {
+  const status = String(task?.completionReviewStatus || "").trim();
+  if (["pending", "passed", "failed"].includes(status)) return status;
+  if (taskHasQualityPercent(task)) return "passed";
+  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED ? "pending" : "";
+}
+
+function taskCompletionIsApproved(task) {
+  return taskCompletionReviewStatus(task) === "passed";
+}
+
+function taskCompletionNeedsReview(task) {
+  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED && !taskCompletionIsApproved(task);
+}
+
+function taskCompletionReviewLabel(task) {
+  const status = taskCompletionReviewStatus(task);
+  if (status === "passed") return "Đạt";
+  if (status === "failed") return "Không đạt";
+  if (status === "pending") return "Chờ đánh giá";
+  return "Chưa yêu cầu";
+}
+
+function taskIsLateCompletion(task) {
+  if (task?.lateCompletion) return true;
+  if (!taskCompletionIsApproved(task)) return false;
+  const completedAt = task?.completionReviewedAt || task?.completedAt || "";
+  return !!completedAt && !isTimestampBeforeDeadline(completedAt, task);
+}
+
+function canReviewTaskCompletionForPerson(personId) {
+  if (isAdmin() || isDirector()) return true;
+  const person = personById(personId);
+  return (isManager() || isDeputyManager()) && person?.departmentId === currentDepartmentId();
+}
+
+function canReviewTaskCompletion(task) {
+  return !!task && taskCompletionNeedsReview(task) && canReviewTaskCompletionForPerson(task.ownerId);
+}
 
 function canCollaborateTask(task) {
   const person = currentPerson();
@@ -2781,6 +2829,104 @@ function getDueStatus(task) {
   if (!task.due) return status;
   const due = taskDeadlineDate(task);
   return due && due < new Date() ? "Quá hạn" : status;
+}
+// =========================================================================
+// 🚀 NÂNG CẤP 2.3: XỬ LÝ DUYỆT HOÀN THÀNH CÔNG VIỆC (ĐẠT / KHÔNG ĐẠT)
+// =========================================================================
+function openTaskCompletionReviewDialog(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task || !canReviewTaskCompletion(task)) return;
+  const owner = personById(task.ownerId);
+  const currentStatus = getDueStatus(task);
+  if (byId("taskCompletionReviewTaskId")) byId("taskCompletionReviewTaskId").value = task.id;
+  if (byId("taskCompletionReviewStatus")) byId("taskCompletionReviewStatus").value = "";
+  if (byId("taskCompletionReviewNote")) byId("taskCompletionReviewNote").value = "";
+  if (byId("taskCompletionReviewTitle")) byId("taskCompletionReviewTitle").textContent = `Duyệt hoàn thành: ${task.title}`;
+  if (byId("taskCompletionReviewSummary")) byId("taskCompletionReviewSummary").textContent = `${owner?.name || "Chưa rõ người thực hiện"} · Trạng thái: ${currentStatus} · Hạn: ${formatTaskDeadline(task) || "Chưa cập nhật"}`;
+  
+  const dlg = byId("taskCompletionReviewDialog");
+  if (dlg) {
+    dlg.classList.remove("is-hidden");
+    dlg.setAttribute("aria-hidden", "false");
+    byId("taskCompletionReviewStatus")?.focus();
+  }
+}
+
+function closeTaskCompletionReviewDialog() {
+  const dlg = byId("taskCompletionReviewDialog");
+  if (dlg) {
+    dlg.classList.add("is-hidden");
+    dlg.setAttribute("aria-hidden", "true");
+    byId("taskCompletionReviewForm")?.reset();
+  }
+}
+
+function reviewTaskCompletion(taskId, decision, note = "") {
+  const taskIndex = state.tasks.findIndex((item) => item.id === taskId);
+  const task = taskIndex >= 0 ? state.tasks[taskIndex] : null;
+  if (!task || !canReviewTaskCompletion(task) || !["passed", "failed"].includes(decision)) return;
+
+  const timestamp = new Date().toISOString();
+  const actor = currentActorInfo();
+  const previousStatus = getDueStatus(task);
+  const approved = decision === "passed";
+  const nextTask = {
+    ...task,
+    status: approved ? TASK_STATUS_COMPLETED : "Đang thực hiện",
+    completionReviewStatus: decision,
+    completionReviewedAt: timestamp,
+    completionReviewedById: actor.id,
+    completionReviewedByName: actor.name,
+    completionReviewNote: String(note || "").trim(),
+    lateCompletion: approved && (previousStatus === "Quá hạn" || taskIsPastDeadline(task)),
+    qualityPercent: "",
+    qualityAssessedAt: "",
+    qualityAssessedById: "",
+    qualityAssessedByName: "",
+  };
+  if (approved) {
+    nextTask.completedAt = task.completedAt || timestamp;
+    nextTask.completedById = task.completedById || task.ownerId || "";
+    nextTask.completedByName = task.completedByName || personById(task.ownerId)?.name || "";
+  } else {
+    nextTask.completedAt = "";
+    nextTask.completedById = "";
+    nextTask.completedByName = "";
+  }
+  const nextStatus = getDueStatus(nextTask);
+  nextTask.progressReports = [
+    ...(task.progressReports || []),
+    {
+      id: uid("task-report"),
+      type: "completion-review",
+      decision,
+      action: approved ? "Đánh giá hoàn thành: Đạt" : "Đánh giá hoàn thành: Không đạt",
+      previousStatus,
+      status: nextStatus,
+      progress: Number(nextTask.progress || 0),
+      note: String(note || "").trim(),
+      createdAt: timestamp,
+      createdById: actor.id,
+      createdBy: actor.name,
+    },
+  ];
+  const auditedTask = applyRecordAudit(nextTask, task);
+  state.tasks[taskIndex] = auditedTask;
+  syncPersonalEvaluationTaskScoresForTask(auditedTask, task);
+  
+  logActivity({
+    action: approved ? "Đánh giá công việc Đạt" : "Đánh giá công việc Không đạt",
+    module: "Công việc",
+    targetType: "task",
+    targetId: auditedTask.id,
+    personId: auditedTask.ownerId,
+    departmentId: personById(auditedTask.ownerId)?.departmentId || "",
+    period: taskPeriod(auditedTask),
+    details: `${auditedTask.title} · ${previousStatus} -> ${nextStatus}${note ? ` · ${String(note).trim()}` : ""}`,
+  });
+
+  saveState(); // 🔥 Tự động kích hoạt lưu Local + Đồng bộ lên Supabase!
+  renderAll();
 }
 
 function taskPeriod(task) {
@@ -3585,6 +3731,69 @@ function visibleTaskRecords(search = "", status = "") {
     .filter((task) => !status || task.computedStatus === status)
     .filter((task) => !keyword || taskBoardSearchText(task).includes(keyword));
 }
+// =========================================================================
+// 🚀 NÂNG CẤP 2.3: BỘ LỌC CÔNG VIỆC NÂNG CAO (DỰ ÁN & THỜI GIAN)
+// =========================================================================
+function currentTaskTimeFilter() {
+  return {
+    from: byId("taskDateFrom")?.value || "",
+    to: byId("taskDateTo")?.value || "",
+  };
+}
+
+function currentTaskProjectFilter() {
+  return byId("taskProjectFilter")?.value.trim() || "";
+}
+
+function renderTaskProjectFilterOptions() {
+  const select = byId("taskProjectFilter");
+  if (!select) return;
+  const selected = select.value;
+  const projects = [...new Set(
+    state.tasks
+      .filter((task) => canViewTaskRecord(task))
+      .map((task) => String(task.projectName || "").trim())
+      .filter(Boolean),
+  )].sort((left, right) => left.localeCompare(right, "vi"));
+  select.innerHTML = [
+    '<option value="">Tất cả dự án</option>',
+    ...projects.map((project) => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`),
+  ].join("");
+  select.value = projects.includes(selected) ? selected : "";
+}
+
+function taskFilterDate(task) {
+  return String(task.due || "");
+}
+
+function taskMatchesTimeFilter(task, timeFilter = currentTaskTimeFilter()) {
+  const date = taskFilterDate(task);
+  if (!date) return !timeFilter.from && !timeFilter.to;
+  if (timeFilter.from && date < timeFilter.from) return false;
+  if (timeFilter.to && date > timeFilter.to) return false;
+  return true;
+}
+
+function taskMatchesProjectFilter(task, projectFilter = currentTaskProjectFilter()) {
+  if (!projectFilter) return true;
+  return normalizeSearchText(task.projectName) === normalizeSearchText(projectFilter);
+}
+
+function clearTaskTimeFilter() {
+  if (byId("taskDateFrom")) byId("taskDateFrom").value = "";
+  if (byId("taskDateTo")) byId("taskDateTo").value = "";
+}
+
+function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter(), projectFilter = currentTaskProjectFilter()) {
+  const keyword = (search || "").trim().toLowerCase();
+  return state.tasks
+    .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
+    .filter((task) => canViewTaskRecord(task))
+    .filter((task) => !status || task.computedStatus === status)
+    .filter((task) => taskMatchesTimeFilter(task, timeFilter))
+    .filter((task) => taskMatchesProjectFilter(task, projectFilter))
+    .filter((task) => !keyword || taskBoardSearchText(task).includes(keyword));
+}
 
 function visibleRegularTaskRecords(search = "", status = "") {
   return visibleTaskRecords(search, status).filter((task) => normalizeTaskKind(task) === TASK_KIND_REGULAR);
@@ -3598,6 +3807,7 @@ function compareTaskRecords(a, b) {
 }
 
 function renderTaskBoard() {
+  renderTaskProjectFilterOptions(); // 👈 THÊM DÒNG NÀY VÀO ĐẦU HÀM
   const search = byId("taskSearch").value.trim().toLowerCase();
   const filter = byId("taskStatusFilter").value;
   const tasks = visibleTaskRecords(search, filter);
@@ -3825,6 +4035,62 @@ function openTaskDetailDialog(taskId) {
 function closeTaskDetailDialog() {
   byId("taskDetailDialog").classList.add("is-hidden");
   byId("taskDetailDialog").setAttribute("aria-hidden", "true");
+}
+// =========================================================================
+// 🚀 NÂNG CẤP 2.3: SỬA TRỰC TIẾP NGAY TRONG POPUP CHI TIẾT
+// =========================================================================
+function restoreTaskDetailInlineEditor({ reset = false } = {}) {
+  if (!taskDetailInlineEditor) return;
+  const { form, anchor, kind } = taskDetailInlineEditor;
+  if (anchor?.parentNode) {
+    anchor.parentNode.insertBefore(form, anchor.nextSibling);
+    anchor.remove();
+  }
+  form.classList.remove("task-detail-inline-form");
+  taskDetailInlineEditor = null;
+  if (reset) {
+    if (kind === TASK_KIND_ASSIGNED) resetAssignmentTaskForm();
+    else resetTaskForm();
+  }
+}
+
+function openTaskDetailInlineEditor(taskId, focusId = "") {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) return;
+  const assigned = isAssignedTask(task);
+  const form = byId(assigned ? "assignmentTaskForm" : "taskForm");
+  if (!form) return;
+  restoreTaskDetailInlineEditor({ reset: true });
+  const anchor = document.createElement("span");
+  anchor.className = "task-detail-form-anchor";
+  form.parentNode.insertBefore(anchor, form);
+  taskDetailInlineEditor = {
+    taskId: task.id,
+    kind: assigned ? TASK_KIND_ASSIGNED : TASK_KIND_REGULAR,
+    form,
+    anchor,
+  };
+
+  byId("taskDetailSubtitle").textContent = "Chỉnh sửa trực tiếp";
+  byId("taskDetailTitle").textContent = task.title || "Công việc";
+  byId("taskDetailMeta").classList.add("is-hidden");
+  byId("taskDetailActions").innerHTML = '<button class="ghost" type="button" data-task-detail-action="cancel-edit">Hủy chỉnh sửa</button>';
+  byId("taskDetailContent").innerHTML = `
+    <section class="task-detail-editor">
+      <h3>${assigned ? "Cập nhật công việc được giao" : "Cập nhật công việc"}</h3>
+      <div id="taskDetailEditorSlot"></div>
+    </section>
+  `;
+  byId("taskDetailEditorSlot").append(form);
+  form.classList.add("task-detail-inline-form");
+  if (assigned) populateAssignmentTaskForm(task);
+  else populateTaskForm(task);
+
+  const target = byId(focusId) || byId(assigned ? "assignmentTaskTitle" : "taskTitle");
+  if (target && !target.disabled) {
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.focus({ preventScroll: true });
+  }
 }
 
 function formatFileSize(bytes) {
@@ -10303,57 +10569,6 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 /* =========================================================================
-   📱 LOGIC DỮ LIỆU & ĐĂNG XUẤT CHO POPUP MENU MOBILE
-   ========================================================================= */
-
-document.addEventListener('DOMContentLoaded', function() {
-  const openBtn = document.getElementById('openMobileMenuBtn');
-  const closeBtn = document.getElementById('closeMobileMenuBtn');
-  const popup = document.getElementById('mobileMenuPopup');
-  const logoutBtn = document.getElementById('mobileLogoutBtn');
-
-  // 1. Đồng bộ thông tin Tên + Chức vụ vào Popup mỗi khi mở Menu
-  function syncUserProfile() {
-    const mainUserLabel = document.getElementById('currentUserLabel');
-    const mainUserMeta = document.getElementById('currentUserMeta');
-    const mobileUserLabel = document.getElementById('mobileUserLabel');
-    const mobileUserMeta = document.getElementById('mobileUserMeta');
-
-    if (mainUserLabel && mobileUserLabel) {
-      mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
-    }
-    if (mainUserMeta && mobileUserMeta) {
-      mobileUserMeta.textContent = mainUserMeta.textContent || "";
-    }
-  }
-
-  // 2. Mở / Đóng Popup Menu
-  if (openBtn && popup) {
-    openBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      syncUserProfile();
-      popup.classList.toggle('is-active');
-    });
-  }
-
-  if (closeBtn && popup) {
-    closeBtn.addEventListener('click', () => popup.classList.remove('is-active'));
-  }
-
-  // 3. Xử lý bấm Đăng xuất từ Popup Mobile
-  if (logoutBtn) {
-    logoutBtn.addEventListener('click', function() {
-      const mainLogoutBtn = document.getElementById('logoutButton');
-      if (mainLogoutBtn) {
-        mainLogoutBtn.click(); // Gọi hàm Đăng xuất gốc của hệ thống
-      } else {
-        localStorage.clear();
-        location.reload();
-      }
-    });
-  }
-});
-/* =========================================================================
    📱 BẤM VÀO TÊN NHÂN SỰ ĐỂ MỞ POPUP XEM TOÀN BỘ THÔNG TIN CHI TIẾT
    ========================================================================= */
 
@@ -10524,3 +10739,33 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 });
 
+// =========================================================================
+// 🚀 NÂNG CẤP 2.3: LẮNG NGHE SỰ KIỆN CHO CÁC TÍNH NĂNG MỚI
+// =========================================================================
+if (byId("taskProjectFilter")) byId("taskProjectFilter").addEventListener("change", renderTaskBoard);
+if (byId("taskDateFrom")) byId("taskDateFrom").addEventListener("change", renderTaskBoard);
+if (byId("taskDateTo")) byId("taskDateTo").addEventListener("change", renderTaskBoard);
+if (byId("clearTaskTimeFilter")) {
+  byId("clearTaskTimeFilter").addEventListener("click", () => {
+    clearTaskTimeFilter();
+    renderTaskBoard();
+  });
+}
+
+// Bắt sự kiện nộp Form duyệt Đạt / Không đạt
+if (byId("taskCompletionReviewForm")) {
+  byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const taskId = byId("taskCompletionReviewTaskId")?.value;
+    const decision = byId("taskCompletionReviewStatus")?.value;
+    if (!decision) {
+      alert("Chọn kết quả Đạt hoặc Không đạt trước khi lưu.");
+      return;
+    }
+    reviewTaskCompletion(taskId, decision, byId("taskCompletionReviewNote")?.value);
+    closeTaskCompletionReviewDialog();
+  });
+}
+
+if (byId("closeTaskCompletionReview")) byId("closeTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
+if (byId("cancelTaskCompletionReview")) byId("cancelTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
