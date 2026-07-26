@@ -47,7 +47,8 @@ const legacyCanBoGpmbTaskCategories = {
   "Xử lý đơn thư": "Chi trả tiền đền bù / Bàn giao mặt bằng / Xử lý đơn thư",
 };
 const importedPeopleFromExcel = Array.isArray(window.PHUC_THINH_IMPORTED_PEOPLE) ? window.PHUC_THINH_IMPORTED_PEOPLE : [];
-
+// 🌟 THÊM DÒNG NÀY ĐỂ ĐỌC DANH SÁCH TÀI KHOẢN KÈM MẬT KHẨU TỪ PEOPLE-DATA.JS
+const importedAccountsFromExcel = Array.isArray(window.PHUC_THINH_IMPORTED_ACCOUNTS) ? window.PHUC_THINH_IMPORTED_ACCOUNTS : [];
 const departments = [
   {
     id: "ke-hoach",
@@ -711,6 +712,15 @@ function defaultAccounts() {
       password: "123456",
       displayName: "Kỹ Thuật Viên",
       role: "admin",
+      personId: "",
+      departmentId: "",
+    },
+    {
+      id: "account-admin-1",
+      username: "adminn",
+      password: "123456",
+      displayName: "Test",
+      role: "director",
       personId: "",
       departmentId: "",
     },
@@ -2734,6 +2744,38 @@ function mergeImportedPeopleIntoState() {
   return Boolean(state.people.length);
 }
 
+// ==========================================
+// 🌟 COPY TOÀN BỘ ĐOẠN NÀY DÁN VÀO SCRIPT.JS
+// ==========================================
+function mergeImportedAccountsIntoState() {
+  const importedAccountsFromExcel = Array.isArray(window.PHUC_THINH_IMPORTED_ACCOUNTS) ? window.PHUC_THINH_IMPORTED_ACCOUNTS : [];
+  if (!importedAccountsFromExcel.length) return false;
+  if (!Array.isArray(state.accounts)) state.accounts = [];
+  let changed = false;
+
+  importedAccountsFromExcel.forEach((impAcc) => {
+    if (!impAcc || !impAcc.username) return;
+    const normUser = String(impAcc.username).trim().toLowerCase();
+
+    const index = state.accounts.findIndex(
+      (acc) => acc.id === impAcc.id || String(acc.username || "").trim().toLowerCase() === normUser
+    );
+
+    if (index >= 0) {
+      if (state.accounts[index].password !== impAcc.password || state.accounts[index].role !== impAcc.role) {
+        state.accounts[index] = { ...state.accounts[index], ...impAcc };
+        changed = true;
+      }
+    } else {
+      state.accounts.push(impAcc);
+      changed = true;
+    }
+  });
+
+  if (changed) persistState();
+  return changed;
+}
+// ==========================================
 function migrateCanBoGpmbKpiCatalog() {
   if (state.canBoGpmbKpiCatalogVersion === CAN_BO_GPMB_KPI_CATALOG_VERSION) return false;
 
@@ -2776,6 +2818,7 @@ function migrateCanBoGpmbKpiCatalog() {
 migrateDepartmentTermLabels();
 migrateLegacyProjectDepartments();
 mergeImportedPeopleIntoState();
+mergeImportedAccountsIntoState(); // 🌟 THÊM DÒNG NÀY Ở ĐÂY
 migrateCanBoGpmbKpiCatalog();
 if (syncPersonnelAccounts()) saveState();
 
