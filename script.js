@@ -1,41 +1,31 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
+const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
 const CUSTOMIZATION_LAYOUT_RESTORE_KEY = "phuc-thinh-custom-layout-restore-v159";
 const BINARY_STORAGE_DB = "phuc-thinh-kpi-binary-v1";
+const BINARY_STORAGE_VERSION = 2;
 const BINARY_STORAGE_STORE = "files";
-
-// =========================================================================
-// 🌐 CẤU HÌNH ĐỒNG BỘ ĐÁM MÂY SUPABASE STORAGE (KHỚP VỚI BUCKET BACKUP_DATA)
-// =========================================================================
-function getSyncFlags() {
-    if (!window.supabaseSyncFlags) {
-        window.supabaseSyncFlags = { isSyncing: false, lastCloudData: "" };
-    }
-    return window.supabaseSyncFlags;
-}
-
-function getSupabaseConfig() {
-    const rawConfig = window.PHUC_THINH_SUPABASE || {};
-    return {
-        url: String(rawConfig.projectUrl || "").trim().replace(/\/$/, ""),
-        key: String(rawConfig.publishableKey || rawConfig.anonKey || "").trim()
-    };
-}
-
-function getSupabaseClient() {
-    if (!window.supabase) {
-        console.error("❌ Không tìm thấy thư viện Supabase! Hãy kiểm tra lại file index.html.");
-        return null;
-    }
-    if (!window.supabaseClientInstance) {
-        const config = getSupabaseConfig();
-        window.supabaseClientInstance = window.supabase.createClient(config.url, config.key);
-    }
-    return window.supabaseClientInstance;
-}
-// 🌟 Hàm hoãn thực thi (Debounce) giúp gõ phím siêu mượt, không bị đơ giao diện
+const BINARY_STORAGE_META_STORE = "sync-meta";
+const DURABLE_APP_STATE_ID = "app-state";
+const SHARED_SYNC_CHECKPOINT_ID = "shared-sync-checkpoint";
+const SHARED_SYNC_ENDPOINT = "api/sync.php";
+const SHARED_SYNC_CONFLICT_KEY = "phuc-thinh-shared-sync-conflict-v1";
+const SHARED_SYNC_REQUIRED_KEY = "phuc-thinh-shared-sync-required-v1";
+const SHARED_SYNC_SESSION_TOKEN_KEY = "phuc-thinh-shared-sync-session-v1";
+const SHARED_SYNC_DIRTY_KEY = "phuc-thinh-shared-sync-dirty-v1";
+const STATE_SAVED_AT_KEY = "phuc-thinh-state-saved-at-v1";
+const SHARED_SYNC_REFRESH_MS = 10000;
+const ACCOUNT_PRESENCE_HEARTBEAT_MS = 45000;
+const SHARED_SYNC_COLLECTIONS = ["people", "tasks", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "activityLog"];
+const SHARED_SYNC_SCALAR_FIELDS = [
+  "moduleSettings",
+  "systemCustomization",
+  "importedPeopleVersion",
+  "canBoGpmbKpiCatalogVersion",
+  "deletedIds",
+];
 function debounce(fn, delay = 200) {
   let timer;
   return function (...args) {
@@ -449,7 +439,7 @@ const roles = [
   {
     id: "can-bo-gpmb",
     departmentId: "gpmb",
-    name: "Cán bộ GPMB",
+    name: "Nhân viên",
     criteria: [
       ["Điều tra, kiểm đếm đất đai / Trích đo, quy chủ", 20],
       ["Xác minh nguồn gốc / Thông báo thu hồi đất", 30],
@@ -719,43 +709,43 @@ function defaultAccounts() {
       id: "account-admin",
       username: "admin",
       password: "123456",
-      displayName: "Kỹ Thuật Viên",
+      displayName: "Admin tổng hợp",
       role: "admin",
       personId: "",
       departmentId: "",
     },
     {
       id: "account-director",
-      username: "daongochuan",
+      username: "giamdoc",
       password: "123456",
-      displayName: "Đào Ngọc Huân",
+      displayName: "Giám đốc",
       role: "director",
       personId: "",
       departmentId: "",
     },
     {
       id: "account-deputy-1",
-      username: "Nguyenvanhien",
+      username: "phogiamdoc1",
       password: "123456",
-      displayName: "Nguyễn Văn Hiện",
+      displayName: "Phó giám đốc 1",
       role: "director",
       personId: "",
       departmentId: "",
     },
     {
       id: "account-deputy-2",
-      username: "nguyenthihonghanh",
+      username: "phogiamdoc2",
       password: "123456",
-      displayName: "Nguyễn Thị Hồng Hạnh",
+      displayName: "Phó giám đốc 2",
       role: "director",
       personId: "",
       departmentId: "",
     },
     {
       id: "account-deputy-3",
-      username: "tovietdung",
+      username: "phogiamdoc3",
       password: "123456",
-      displayName: "Tô Việt Dũng",
+      displayName: "Phó giám đốc 3",
       role: "director",
       personId: "",
       departmentId: "",
@@ -763,14 +753,11 @@ function defaultAccounts() {
   ];
 }
 
-function ensureDefaultAccounts(accounts) {
+function ensureDefaultAccounts(accounts, { bootstrap = false } = {}) {
   const merged = Array.isArray(accounts) ? [...accounts] : [];
-  defaultAccounts().forEach((account) => {
-    if (!merged.some((item) => item.username === account.username)) {
-      merged.push(account);
-    }
-  });
-  return merged;
+  // Default accounts are only for a brand-new local state. Never recreate
+  // accounts that an administrator has edited or removed from shared data.
+  return bootstrap && !merged.length ? defaultAccounts() : merged;
 }
 
 function accountRoleForPerson(person) {
@@ -833,20 +820,29 @@ function syncPersonnelAccounts() {
     if (!person?.id || !person.name) return;
     const expectedUsername = usernameBaseForPerson(person).toLowerCase();
     const personNameNorm = normalizeSearchText(person.name);
+    const expectedRole = accountRoleForPerson(person);
 
     // 1. Tìm tài khoản hiện có khớp Tên đăng nhập hoặc Tên hiển thị
-    let matchingAccount = state.accounts.find((acc) => {
-      const accUser = String(acc.username || "").toLowerCase();
-      const accName = normalizeSearchText(acc.displayName);
-      return (accUser === expectedUsername || accName === personNameNorm) && (!acc.personId || acc.personId === person.id);
-    });
+    let matchingAccount = state.accounts.find((account) => account.personId === person.id);
+    if (!matchingAccount) {
+      matchingAccount = state.accounts.find((account) => {
+        const accountUsername = String(account.username || "").toLowerCase();
+        const accountName = normalizeSearchText(account.displayName);
+        return (accountUsername === expectedUsername || accountName === personNameNorm) && !account.personId;
+      });
+    }
 
     if (matchingAccount) {
       // Nếu đã có tài khoản -> Cập nhật nối personId và departmentId
-      if (matchingAccount.personId !== person.id || matchingAccount.departmentId !== (person.departmentId || "")) {
+      const shouldSyncRole = isPersonnelAccountRole(matchingAccount.role) || matchingAccount.autoCreated || !matchingAccount.role;
+      const needsUpdate =
+        matchingAccount.personId !== person.id ||
+        matchingAccount.departmentId !== (person.departmentId || "") ||
+        (shouldSyncRole && matchingAccount.role !== expectedRole);
+      if (needsUpdate) {
         matchingAccount.personId = person.id;
         matchingAccount.departmentId = person.departmentId || "";
-        matchingAccount.role = accountRoleForPerson(person);
+        if (shouldSyncRole) matchingAccount.role = expectedRole;
         matchingAccount.updatedAt = new Date().toISOString();
         changed = true;
       }
@@ -1073,13 +1069,16 @@ let dashboardRefreshQueued = false;
 let dashboardChartAnimationFrame = 0;
 let binaryStorageOpenPromise = null;
 let durableStorageRequestPromise = null;
+let durableStateWritePromise = Promise.resolve();
+let durableStateRestorePromise = null;
+let durableStateRestoreComplete = false;
 const storedFileDataCache = new Map();
 const storedFileObjectUrlCache = new Map();
 const DASHBOARD_CHART_ANIMATION_MS = 720;
 const sharedSync = {
   available: null,
   session: false,
-  sessionToken: "", // Đổi thành chuỗi rỗng để chặn đứng lỗi sập luồng sếp nhé
+  sessionToken: localStorage.getItem(SHARED_SYNC_SESSION_TOKEN_KEY) || "",
   revision: null,
   timer: 0,
   pending: false,
@@ -1087,7 +1086,58 @@ const sharedSync = {
   retryTimer: 0,
   conflict: false,
   conflictNotified: false,
+  baseState: null,
+  localChangeVersion: 0,
+  dirty: localStorage.getItem(SHARED_SYNC_DIRTY_KEY) === "1",
+  checkpointRestorePromise: null,
+  checkpointWritePromise: Promise.resolve(),
+  fileWarnings: [],
 };
+const accountPresence = {
+  heartbeatTimer: 0,
+  inFlight: false,
+  payload: null,
+  error: "",
+};
+// =========================================================================
+// 🌟 SUPABASE DIRECT SYNC HELPER (BẢN 2.3)
+// =========================================================================
+async function syncCollectionToSupabase(tableName, items) {
+  const supabase = window.supabaseClient || window.supabase;
+  if (!supabase || !Array.isArray(items) || !items.length) return;
+
+  try {
+    // Làm sạch dữ liệu trước khi đẩy lên (Bỏ các thuộc tính tạm/DOM)
+    const cleanItems = items.map(item => {
+      const copy = { ...item };
+      delete copy.dataUrl; // File nhị phân nặng đã cất ở IndexedDB
+      return copy;
+    });
+
+    const { error } = await supabase
+      .from(tableName)
+      .upsert(cleanItems, { onConflict: 'id' });
+
+    if (error) console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error.message);
+  } catch (err) {
+    console.error(`❌ Lỗi kết nối Supabase bảng [${tableName}]:`, err);
+  }
+}
+
+// Hàm đẩy toàn bộ các mảng dữ liệu trong state lên Supabase
+async function pushAllStateToSupabase() {
+  if (!usingSupabaseSync() && !window.supabaseClient) return;
+  
+  await Promise.all([
+    syncCollectionToSupabase("people", state.people),
+    syncCollectionToSupabase("tasks", state.tasks),
+    syncCollectionToSupabase("bulletins", state.bulletins),
+    syncCollectionToSupabase("archive_records", state.archiveRecords),
+    syncCollectionToSupabase("evaluations", state.evaluations),
+    syncCollectionToSupabase("department_evaluations", state.departmentEvaluations),
+    syncCollectionToSupabase("accounts", state.accounts)
+  ]);
+}
 
 const TASK_STATUS_PREPARING = "Chuẩn bị thực hiện";
 const TASK_STATUS_OLD_PREPARING = "Chưa bắt đầu";
@@ -1097,7 +1147,7 @@ const taskStatuses = [TASK_STATUS_PREPARING, "Đang thực hiện", "Hoàn thàn
 const TASK_KIND_ASSIGNED = "assigned";
 const TASK_KIND_REGULAR = "regular";
 const taskKindLabels = {
-  [TASK_KIND_ASSIGNED]: "Công việc được giao",
+  [TASK_KIND_ASSIGNED]: "Việc được giao",
   [TASK_KIND_REGULAR]: "Danh mục KPI cá nhân",
 };
 const TASK_WORK_TYPE_ROUTINE = "routine";
@@ -1222,6 +1272,36 @@ function normalizeTaskQualityInput(value) {
   return clamp(normalizeNumberInput(text), 0, 120);
 }
 
+function taskCompletionReviewStatus(task) {
+  const status = String(task?.completionReviewStatus || "").trim();
+  if (["pending", "passed", "failed"].includes(status)) return status;
+  if (taskHasQualityPercent(task)) return "passed";
+  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED ? "pending" : "";
+}
+
+function taskCompletionIsApproved(task) {
+  return taskCompletionReviewStatus(task) === "passed";
+}
+
+function taskCompletionNeedsReview(task) {
+  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED && !taskCompletionIsApproved(task);
+}
+
+function taskCompletionReviewLabel(task) {
+  const status = taskCompletionReviewStatus(task);
+  if (status === "passed") return "Đạt";
+  if (status === "failed") return "Không đạt";
+  if (status === "pending") return "Chờ đánh giá";
+  return "Chưa yêu cầu";
+}
+
+function taskIsLateCompletion(task) {
+  if (task?.lateCompletion) return true;
+  if (!taskCompletionIsApproved(task)) return false;
+  const completedAt = task?.completionReviewedAt || task?.completedAt || "";
+  return !!completedAt && !isTimestampBeforeDeadline(completedAt, task);
+}
+
 function taskHasQualityPercent(task) {
   return normalizeTaskQualityInput(task?.qualityPercent) !== "";
 }
@@ -1258,11 +1338,14 @@ function openBinaryStorage() {
   if (!("indexedDB" in window)) return Promise.reject(new Error("Trình duyệt không hỗ trợ IndexedDB."));
   if (binaryStorageOpenPromise) return binaryStorageOpenPromise;
   binaryStorageOpenPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(BINARY_STORAGE_DB, 1);
+    const request = indexedDB.open(BINARY_STORAGE_DB, BINARY_STORAGE_VERSION);
     request.addEventListener("upgradeneeded", () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(BINARY_STORAGE_STORE)) {
         db.createObjectStore(BINARY_STORAGE_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(BINARY_STORAGE_META_STORE)) {
+        db.createObjectStore(BINARY_STORAGE_META_STORE, { keyPath: "id" });
       }
     });
     request.addEventListener("success", () => resolve(request.result));
@@ -1270,6 +1353,32 @@ function openBinaryStorage() {
     request.addEventListener("blocked", () => reject(new Error("Không thể mở kho dữ liệu media vì trình duyệt đang khóa phiên cũ.")));
   });
   return binaryStorageOpenPromise;
+}
+
+async function writeBinaryMetadata(id, value) {
+  await requestDurableBrowserStorage();
+  const db = await openBinaryStorage();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(BINARY_STORAGE_META_STORE, "readwrite");
+    transaction.objectStore(BINARY_STORAGE_META_STORE).put({
+      id,
+      value,
+      updatedAt: new Date().toISOString(),
+    });
+    transaction.addEventListener("complete", resolve);
+    transaction.addEventListener("error", () => reject(transaction.error));
+    transaction.addEventListener("abort", () => reject(transaction.error));
+  });
+}
+
+async function readBinaryMetadata(id) {
+  const db = await openBinaryStorage();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(BINARY_STORAGE_META_STORE, "readonly");
+    const request = transaction.objectStore(BINARY_STORAGE_META_STORE).get(id);
+    request.addEventListener("success", () => resolve(request.result || null));
+    request.addEventListener("error", () => reject(request.error));
+  });
 }
 
 function storedFileKey(file) {
@@ -1319,15 +1428,12 @@ async function writeStoredFile(file, dataUrl) {
 
 async function readSharedBinaryFile(file) {
   const remoteKey = file?.remoteKey || "";
-  const config = getSupabaseConfig();
-  if (!remoteKey || !config.url || !config.key) return "";
+  if (!remoteKey || !sharedSync.session || !sharedSync.available) return "";
   try {
-    // Luồng kết nối REST API kéo file trực tiếp từ kho chứa backup_data công khai của bạn
-    const downloadUrl = `${config.url}/storage/v1/object/public/backup_data/${remoteKey}`;
-    const response = await fetch(downloadUrl, {
-      method: 'GET',
-      headers: { 'apikey': config.key },
+    const response = await fetch(sharedEndpoint("file", { key: remoteKey, type: file?.type || "application/octet-stream" }), {
+      credentials: usingSupabaseSync() ? "omit" : "same-origin",
       cache: "no-store",
+      headers: sharedRequestHeaders(),
     });
     if (!response.ok) return "";
     const blob = await response.blob();
@@ -1590,7 +1696,7 @@ function defaultStatePayload() {
     archiveRecords: [],
     evaluations: [],
     departmentEvaluations: [],
-    accounts: ensureDefaultAccounts(defaultAccounts()),
+    accounts: defaultAccounts(),
     moduleSettings: defaultModuleSettings(),
     systemCustomization: defaultSystemCustomization(),
     activityLog: [],
@@ -1620,12 +1726,13 @@ function normalizeStatePayload(parsed) {
     archiveRecords: Array.isArray(parsed.archiveRecords) ? parsed.archiveRecords : [],
     evaluations: Array.isArray(parsed.evaluations) ? parsed.evaluations : [],
     departmentEvaluations: Array.isArray(parsed.departmentEvaluations) ? parsed.departmentEvaluations : [],
-    accounts: ensureDefaultAccounts(parsed.accounts),
+    accounts: Array.isArray(parsed.accounts) ? parsed.accounts : fallback.accounts,
     moduleSettings: normalizeModuleSettings(parsed.moduleSettings),
     systemCustomization: normalizeSystemCustomization(parsed.systemCustomization),
     activityLog: Array.isArray(parsed.activityLog) ? parsed.activityLog : [],
     importedPeopleVersion: parsed.importedPeopleVersion || "",
     canBoGpmbKpiCatalogVersion: parsed.canBoGpmbKpiCatalogVersion || "",
+    deletedIds: Array.isArray(parsed.deletedIds) ? parsed.deletedIds : [],
   };
 }
 
@@ -1641,178 +1748,779 @@ function loadState() {
 }
 
 function persistState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const serialized = JSON.stringify(state);
+  try {
+    localStorage.setItem(STORAGE_KEY, serialized);
+    if (durableStateRestoreComplete) localStorage.setItem(STATE_SAVED_AT_KEY, String(Date.now()));
+  } catch (error) {
+    console.warn("Local state cache is full; using durable browser storage:", error);
+  }
+  if (durableStateRestoreComplete) {
+    durableStateWritePromise = durableStateWritePromise
+      .catch(() => {})
+      .then(() => writeBinaryMetadata(DURABLE_APP_STATE_ID, { serialized }))
+      .catch((error) => {
+        console.warn("Durable state save failed:", error);
+      });
+  }
+  return durableStateWritePromise;
 }
 
-
-// =========================================================================
-// 🧠 HỆ THỐNG ĐỒNG BỘ ĐÁM MÂY SUPABASE STORAGE DIRECT REAL-TIME (V3.5 LÕI THÉP)
-// =========================================================================
-
-// Thuật toán gộp thông minh: Trộn việc của hai máy dựa theo quy tắc cộng dồn, xếp theo thời gian
-// 🌟 Thuật toán gộp dữ liệu siêu tốc (Cache sẵn Timestamp chống đơ)
-// 🌟 Thuật toán gộp dữ liệu siêu tốc & Chống hồi sinh dữ liệu đã xóa
-function mergeStates(local, cloud) {
-    if (!cloud) return local;
-    const result = { ...local };
-
-    // 🔥 Gộp tất cả ID đã xóa từ cả máy local và trên mây
-    const mergedDeletedIds = new Set([
-        ...(Array.isArray(local.deletedIds) ? local.deletedIds : []),
-        ...(Array.isArray(cloud.deletedIds) ? cloud.deletedIds : [])
-    ]);
-    result.deletedIds = Array.from(mergedDeletedIds);
-
-    const combineAndSort = (localArr, cloudArr) => {
-        const map = new Map();
-        
-        // 🚨 Loại bỏ ngay các item có ID đã bị xóa
-        (localArr || []).forEach(item => { 
-            if (item && item.id && !mergedDeletedIds.has(item.id)) {
-                map.set(item.id, item); 
-            }
-        });
-        
-        (cloudArr || []).forEach(item => { 
-            if (item && item.id && !mergedDeletedIds.has(item.id)) {
-                const existing = map.get(item.id);
-                if (existing && existing.updatedAt && item.updatedAt) {
-                    if (new Date(item.updatedAt) > new Date(existing.updatedAt)) {
-                        map.set(item.id, item);
-                    }
-                } else {
-                    map.set(item.id, item);
-                }
-            } 
-        });
-        
-        const list = Array.from(map.values());
-        const timeCache = new Map();
-        list.forEach(item => {
-            timeCache.set(item.id, new Date(item.createdAt || item.assignedAt || item.recordDate || 0).getTime() || 0);
-        });
-
-        return list.sort((a, b) => timeCache.get(a.id) - timeCache.get(b.id));
-    };
-
-    result.activePeriod = cloud.activePeriod || local.activePeriod;
-    result.people = combineAndSort(local.people, cloud.people);
-    result.tasks = combineAndSort(local.tasks, cloud.tasks);
-    result.evaluations = combineAndSort(local.evaluations, cloud.evaluations);
-    result.accounts = combineAndSort(local.accounts, cloud.accounts);
-    
-    result.bulletins = combineAndSort(local.bulletins, cloud.bulletins);
-    result.archiveRecords = combineAndSort(local.archiveRecords, cloud.archiveRecords);
-    result.departmentEvaluations = combineAndSort(local.departmentEvaluations, cloud.departmentEvaluations);
-
-    if (cloud.moduleSettings) result.moduleSettings = cloud.moduleSettings;
-    if (cloud.systemCustomization) result.systemCustomization = cloud.systemCustomization;
-
-    return result;
-}
-
-// 🔥 ĐỒNG BỘ SIÊU TỐC: Đẩy file Master JSON siêu nhẹ (<1MB) lên mây trong 0.2s
-async function backupDataToSupabase() {
-    const flags = getSyncFlags();
-    const client = getSupabaseClient();
-    if (!client) return;
-
-    try {
-        // 🌟 Sao chép state và lọc bỏ chuỗi dataUrl Base64 nặng để file JSON không bị phình to
-        const cleanState = JSON.parse(JSON.stringify(state));
-        
-        const stripHeavyDataUrl = (arr) => {
-            if (!Array.isArray(arr)) return;
-            arr.forEach(item => {
-                if (Array.isArray(item?.media)) item.media.forEach(f => delete f.dataUrl);
-                if (Array.isArray(item?.files)) item.files.forEach(f => delete f.dataUrl);
-                if (Array.isArray(item?.attachments)) item.attachments.forEach(f => delete f.dataUrl);
-            });
-        };
-
-        stripHeavyDataUrl(cleanState.bulletins);
-        stripHeavyDataUrl(cleanState.archiveRecords);
-        stripHeavyDataUrl(cleanState.tasks);
-
-        const jsonData = JSON.stringify(cleanState);
-        const fileName = `backup_phuc_thinh_master.json`;
-        flags.lastCloudData = jsonData; 
-
-        await client.storage.from('backup_data').upload(fileName, jsonData, {
-            cacheControl: '0', 
-            upsert: true,
-            contentType: 'application/json'
-        });
-        console.log("🚀 [Đám mây] Tự động đồng bộ Master JSON siêu nhẹ lên Supabase thành công!");
-    } catch (err) {
-        console.error("❌ [Đám mây] Lỗi luồng gửi dữ liệu backupDataToSupabase:", err);
-    }
-}
-
-// Hàm quét dữ liệu mây qua Rest Public API và nạp đè tức thì
-// 🔥 ĐỒNG BỘ SIÊU TỐC: Nạp ngay dữ liệu chữ (0.5s) rồi mới lưu ảnh ngầm dưới máy
-async function syncDataFromSupabase() {
-    const flags = getSyncFlags();
-    if (flags.isSyncing) return;
-    const config = getSupabaseConfig();
-    if (!config.url || !config.key) return;
-    
-    flags.isSyncing = true;
-    try {
-        const fileName = `backup_phuc_thinh_master.json`;
-        const downloadUrl = `${config.url}/storage/v1/object/public/backup_data/${fileName}?t=${Date.now()}`;
-        
-        const response = await fetch(downloadUrl, {
-            method: 'GET',
-            headers: { 'apikey': config.key },
-            cache: 'no-store'
-        });
-
-        if (!response.ok) return;
-
-        const text = await response.text();
-        if (!text || text.trim() === "" || text.length < 50) return;
-        if (text === flags.lastCloudData) return;
-        
-        flags.lastCloudData = text;
-        const cloudState = JSON.parse(text);
-        
-        if (cloudState && typeof cloudState === 'object' && (cloudState.people || cloudState.accounts)) {
-            const merged = mergeStates(state, cloudState);
-            Object.assign(state, merged);
-            
-            syncPersonnelAccounts(); 
-            persistState();
-
-            // 🌟 HIỂN THỊ TỨC THÌ GIAO DIỆN CHỮ (0.5 giây)
-            renderAll(); 
-            console.log("🔄 [Đám mây] Đã nạp biến động dữ liệu chữ siêu tốc!");
-
-            // 🌟 NẠP ĐỆM FILE/ẢNH VÀO INDEXEDDB NGẦM TRONG LUỒNG PHỤ (Không làm đơ Web)
-            setTimeout(async () => {
-                await migrateBulletinMediaToIndexedDb();
-                await migrateArchiveFilesToIndexedDb();
-                await migrateTaskAttachmentsToIndexedDb();
-                // Nạp lại media sau khi cất vào IndexedDB thành công
-                if (document.querySelector(".view.is-active")?.id === "bulletin") {
-                    hydrateBulletinMediaElements(byId("bulletinList"));
-                }
-            }, 100);
-        }
-    } catch (err) {
-        console.error("❌ [Đám mây] Lỗi luồng kéo dữ liệu syncDataFromSupabase:", err);
-    } finally {
-        flags.isSyncing = false;
-    }
-}
-
-// Thiết lập đè hàm saveState() mới có mốc kiểm toán thời gian ghi
+// ⚡ BẢN CẤP NHẬT: saveState tự động đẩy dữ liệu lên Supabase Cloud mỗi khi có thay đổi
 function saveState() {
-    persistState();
-    scheduleDashboardRefresh();
-    backupDataToSupabase(); // Kích hoạt bắn file JSON lên mây ngay khi bấm nút Lưu
+  persistState();
+  if (sharedSync.session) {
+    sharedSync.localChangeVersion += 1;
+    markSharedStateDirty();
+  }
+  scheduleDashboardRefresh();
+  queueSharedStateSync();
+
+  // 🌟 ĐỒNG BỘ THẲNG LÊN SUPABASE CLOUD (Kèm chống nghẽn mạng Debounce)
+  if (window.__supabaseSyncTimer) clearTimeout(window.__supabaseSyncTimer);
+  window.__supabaseSyncTimer = setTimeout(() => {
+    pushAllStateToSupabase();
+  }, 1000); // Trì hoãn 1 giây để gom nhiều thao tác liên tiếp
 }
 
+async function restoreDurableState() {
+  try {
+    const record = await readBinaryMetadata(DURABLE_APP_STATE_ID);
+    const serialized = String(record?.value?.serialized || "");
+    if (!serialized) return false;
+    const durableSavedAt = new Date(record.updatedAt || 0).getTime() || 0;
+    const localSavedAt = Number(localStorage.getItem(STATE_SAVED_AT_KEY) || 0);
+    if (localSavedAt > durableSavedAt) return false;
+    Object.assign(state, normalizeStatePayload(JSON.parse(serialized)));
+    try {
+      localStorage.setItem(STORAGE_KEY, serialized);
+    } catch {
+      // IndexedDB is the durable fallback when localStorage is full or unavailable.
+    }
+    return true;
+  } catch (error) {
+    console.warn("Durable state restore failed:", error);
+    return false;
+  }
+}
+
+function ensureDurableStateRestored() {
+  if (durableStateRestorePromise) return durableStateRestorePromise;
+  durableStateRestorePromise = restoreDurableState()
+    .catch(() => false)
+    .then((restored) => {
+      durableStateRestoreComplete = true;
+      persistState();
+      return restored;
+    });
+  return durableStateRestorePromise;
+}
+
+function sharedSyncCheckpointPayload() {
+  return {
+    dirty: Boolean(sharedSync.dirty),
+    revision: sharedSync.revision,
+    baseState: sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : null,
+  };
+}
+
+function persistSharedSyncCheckpoint() {
+  sharedSync.checkpointWritePromise = sharedSync.checkpointWritePromise
+    .catch(() => {})
+    .then(() => writeBinaryMetadata(SHARED_SYNC_CHECKPOINT_ID, sharedSyncCheckpointPayload()))
+    .catch((error) => {
+      console.warn("Shared sync checkpoint save failed:", error);
+    });
+  return sharedSync.checkpointWritePromise;
+}
+
+async function restoreSharedSyncCheckpoint() {
+  if (sharedSync.checkpointRestorePromise) return sharedSync.checkpointRestorePromise;
+  sharedSync.checkpointRestorePromise = readBinaryMetadata(SHARED_SYNC_CHECKPOINT_ID)
+    .then((record) => {
+      const checkpoint = record?.value;
+      if (!checkpoint || typeof checkpoint !== "object") return false;
+      sharedSync.dirty = Boolean(checkpoint.dirty) || localStorage.getItem(SHARED_SYNC_DIRTY_KEY) === "1";
+      sharedSync.revision = Number.isFinite(Number(checkpoint.revision)) ? Number(checkpoint.revision) : sharedSync.revision;
+      sharedSync.baseState = checkpoint.baseState ? cloneStatePayload(normalizeStatePayload(checkpoint.baseState)) : sharedSync.baseState;
+      return true;
+    })
+    .catch((error) => {
+      console.warn("Shared sync checkpoint restore failed:", error);
+      return false;
+    });
+  return sharedSync.checkpointRestorePromise;
+}
+
+function markSharedStateDirty() {
+  sharedSync.dirty = true;
+  try {
+    localStorage.setItem(SHARED_SYNC_DIRTY_KEY, "1");
+  } catch {
+    // The IndexedDB checkpoint below remains available when localStorage is full.
+  }
+  return persistSharedSyncCheckpoint();
+}
+
+function clearSharedStateDirty() {
+  sharedSync.dirty = false;
+  try {
+    localStorage.removeItem(SHARED_SYNC_DIRTY_KEY);
+  } catch {
+    // Ignore a disabled localStorage implementation.
+  }
+  return persistSharedSyncCheckpoint();
+}
+
+function cloneStatePayload(payload) {
+  return JSON.parse(JSON.stringify(payload));
+}
+
+function sharedSyncSupported() {
+  return Boolean(supabaseSyncConfig()) || window.location.protocol === "https:" || window.location.protocol === "http:";
+}
+
+function supabaseSyncConfig() {
+  const rawConfig = window.PHUC_THINH_SUPABASE || {};
+  const projectUrl = String(rawConfig.projectUrl || "").trim().replace(/\/$/, "");
+  const publishableKey = String(rawConfig.publishableKey || rawConfig.anonKey || "").trim();
+  if (!projectUrl || !publishableKey) return null;
+  try {
+    const parsed = new URL(projectUrl);
+    if (!/^https?:$/.test(parsed.protocol)) return null;
+    return { projectUrl, publishableKey };
+  } catch {
+    return null;
+  }
+}
+
+function usingSupabaseSync() {
+  return Boolean(supabaseSyncConfig());
+}
+
+function sharedEndpoint(action, query = {}) {
+  const params = new URLSearchParams({ action, ...query });
+  const supabaseConfig = supabaseSyncConfig();
+  if (supabaseConfig) return `${supabaseConfig.projectUrl}/functions/v1/kpi-sync?${params.toString()}`;
+  return `${SHARED_SYNC_ENDPOINT}?${params.toString()}`;
+}
+
+function sharedRequestHeaders(headers = {}, sessionToken = sharedSync.sessionToken) {
+  const output = { ...headers };
+  const supabaseConfig = supabaseSyncConfig();
+  if (supabaseConfig) {
+    output.apikey = supabaseConfig.publishableKey;
+  }
+  if (sessionToken) output["x-kpi-session"] = sessionToken;
+  return output;
+}
+
+async function sharedJsonRequest(action, options = {}) {
+  const requestOptions = { ...options };
+  requestOptions.credentials = usingSupabaseSync() ? "omit" : "same-origin";
+  requestOptions.cache = "no-store";
+  requestOptions.headers = sharedRequestHeaders(options.headers || {});
+  const response = await fetch(sharedEndpoint(action), {
+    ...requestOptions,
+  });
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch {
+    // A static host can return HTML for a missing API route.
+  }
+  return { response, payload };
+}
+
+function accountPresenceAvailable() {
+  return usingSupabaseSync() && sharedSync.session && sharedSync.available === true;
+}
+
+function accountPresenceRelativeTime(timestamp) {
+  const value = new Date(timestamp || "");
+  if (Number.isNaN(value.getTime())) return "Chưa xác định";
+  const seconds = Math.max(0, Math.round((Date.now() - value.getTime()) / 1000));
+  if (seconds < 20) return "Vừa hoạt động";
+  if (seconds < 60) return `${seconds} giây trước`;
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} phút trước`;
+}
+
+function renderAccountPresence() {
+  const panel = byId("accountPresencePanel");
+  if (!panel) return;
+  const canMonitor = isAdmin();
+  panel.classList.toggle("is-hidden", !canMonitor);
+  if (!canMonitor) return;
+
+  const status = byId("accountPresenceStatus");
+  const onlineCount = byId("accountPresenceOnlineCount");
+  const todayCount = byId("accountPresenceTodayCount");
+  const monthCount = byId("accountPresenceMonthCount");
+  const list = byId("accountPresenceList");
+  if (!status || !onlineCount || !todayCount || !monthCount || !list) return;
+
+  if (!accountPresenceAvailable()) {
+    onlineCount.textContent = "-";
+    todayCount.textContent = "-";
+    monthCount.textContent = "-";
+    status.textContent = usingSupabaseSync()
+      ? "Đang kết nối máy chủ để cập nhật trạng thái trực tuyến."
+      : "Giám sát trực tuyến yêu cầu cấu hình Supabase Cloud.";
+    list.innerHTML = '<p class="muted">Chưa có dữ liệu giám sát trực tuyến.</p>';
+    return;
+  }
+
+  const payload = accountPresence.payload;
+  if (!payload) {
+    onlineCount.textContent = "...";
+    todayCount.textContent = "...";
+    monthCount.textContent = "...";
+    status.textContent = accountPresence.error || "Đang cập nhật trạng thái trực tuyến...";
+    list.innerHTML = '<p class="muted">Đang tải danh sách tài khoản trực tuyến...</p>';
+    return;
+  }
+
+  onlineCount.textContent = String(payload.onlineCount || 0);
+  todayCount.textContent = String(payload.todayUniqueAccounts || 0);
+  monthCount.textContent = String(payload.monthUniqueAccounts || 0);
+  status.textContent = `Cập nhật lúc ${formatDateTime(payload.generatedAt)} · Hoạt động trong ${Math.round(Number(payload.onlineWindowSeconds || 120) / 60)} phút gần nhất.`;
+  const onlineAccounts = Array.isArray(payload.onlineAccounts) ? payload.onlineAccounts : [];
+  list.innerHTML = onlineAccounts.length
+    ? onlineAccounts
+        .map((account) => {
+          const department = departmentById(account.departmentId)?.name || "Không phân phòng";
+          return `
+            <article class="account-presence-row">
+              <span class="account-presence-dot" aria-hidden="true"></span>
+              <div class="account-presence-person">
+                <strong>${escapeHtml(account.displayName || account.username || "Tài khoản")}</strong>
+                <span>${escapeHtml(accountRoleLabels[account.role] || account.role || "Tài khoản")} · ${escapeHtml(department)}</span>
+              </div>
+              <time datetime="${escapeHtml(account.lastSeenAt || "")}">${escapeHtml(accountPresenceRelativeTime(account.lastSeenAt))}</time>
+            </article>
+          `;
+        })
+        .join("")
+    : '<p class="muted">Không có tài khoản nào đang hoạt động trong thời gian giám sát.</p>';
+}
+
+async function requestAccountPresence() {
+  if (!accountPresenceAvailable() || document.visibilityState === "hidden" || accountPresence.inFlight) return;
+  accountPresence.inFlight = true;
+  try {
+    const { response, payload } = await sharedJsonRequest("presence");
+    if (response.status === 401) {
+      sharedSync.session = false;
+      sharedSync.sessionToken = "";
+      localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+      localStorage.removeItem(SESSION_KEY);
+      stopAccountPresenceMonitoring();
+      renderAll();
+      return;
+    }
+    if (!response.ok) throw new Error(payload?.error || "Presence request failed.");
+    if (isAdmin()) {
+      accountPresence.payload = payload;
+      accountPresence.error = "";
+      renderAccountPresence();
+    }
+  } catch {
+    if (isAdmin()) {
+      accountPresence.error = "Không thể cập nhật trạng thái trực tuyến. Hệ thống sẽ tự thử lại.";
+      renderAccountPresence();
+    }
+  } finally {
+    accountPresence.inFlight = false;
+  }
+}
+
+function startAccountPresenceMonitoring() {
+  if (!accountPresenceAvailable()) return;
+  if (!accountPresence.heartbeatTimer) {
+    accountPresence.heartbeatTimer = window.setInterval(() => {
+      requestAccountPresence();
+    }, ACCOUNT_PRESENCE_HEARTBEAT_MS);
+  }
+  requestAccountPresence();
+}
+
+function stopAccountPresenceMonitoring() {
+  if (accountPresence.heartbeatTimer) window.clearInterval(accountPresence.heartbeatTimer);
+  accountPresence.heartbeatTimer = 0;
+  accountPresence.inFlight = false;
+  accountPresence.payload = null;
+  accountPresence.error = "";
+}
+
+async function probeSharedSync({ force = false } = {}) {
+  if (!sharedSyncSupported()) return false;
+  if (!force && sharedSync.available === true) return true;
+  try {
+    const { response, payload } = await sharedJsonRequest("status");
+    sharedSync.available = response.ok && payload?.available === true;
+  } catch {
+    // Do not cache a transient connection failure. The next online/focus/poll
+    // event must be able to reconnect without forcing the user to reload.
+    sharedSync.available = null;
+  }
+  return sharedSync.available === true;
+}
+
+async function adoptSharedState(payload, { render = true } = {}) {
+  const localActivePeriod = state.activePeriod;
+  const normalized = normalizeStatePayload(payload);
+  normalized.activePeriod = localActivePeriod || normalized.activePeriod;
+  Object.assign(state, normalized);
+  sharedSync.baseState = cloneStatePayload(normalized);
+  persistState();
+  await migrateBulletinMediaToIndexedDb();
+  await migrateArchiveFilesToIndexedDb();
+  await migrateTaskAttachmentsToIndexedDb();
+  await clearSharedStateDirty();
+  if (render) renderAll();
+}
+
+async function retainUnsyncedLocalChanges(remotePayload, { render = true } = {}) {
+  const remote = normalizeStatePayload(remotePayload);
+  const local = cloneStatePayload(state);
+  const base = sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : cloneStatePayload(remote);
+  const merged = mergeRemoteStateWithUnsyncedChanges(base, local, remote);
+  Object.assign(state, merged);
+  sharedSync.baseState = cloneStatePayload(remote);
+  sharedSync.pending = true;
+  persistState();
+  await markSharedStateDirty();
+  if (render) renderAll();
+  queueSharedStateSync();
+}
+
+async function loginSharedSession(username, password) {
+  await ensureDurableStateRestored();
+  await restoreSharedSyncCheckpoint();
+  if (!(await probeSharedSync())) {
+    return usingSupabaseSync() || localStorage.getItem(SHARED_SYNC_REQUIRED_KEY) === "1"
+      ? { mode: "remote", error: "May chu du lieu dang khong san sang. Vui long thu lai khi ket noi duoc khoi phuc." }
+      : { mode: "local" };
+  }
+  let result;
+  try {
+    result = await sharedJsonRequest("login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    return { mode: "remote", error: "Khong the ket noi may chu du lieu." };
+  }
+  if (!result.response.ok || !result.payload?.state) {
+    return { mode: "remote", error: result.payload?.error || "Khong the dang nhap may chu du lieu." };
+  }
+  sharedSync.session = true;
+  sharedSync.sessionToken = result.payload.sessionToken || "";
+  if (usingSupabaseSync() && !sharedSync.sessionToken) {
+    return { mode: "remote", error: "May chu Supabase khong tra ve phien dang nhap hop le." };
+  }
+  if (sharedSync.sessionToken) localStorage.setItem(SHARED_SYNC_SESSION_TOKEN_KEY, sharedSync.sessionToken);
+  else localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+  sharedSync.revision = Number(result.payload.revision) || 0;
+  sharedSync.conflict = false;
+  sharedSync.conflictNotified = false;
+  localStorage.setItem(SHARED_SYNC_REQUIRED_KEY, "1");
+  if (sharedSync.dirty) {
+    await retainUnsyncedLocalChanges(result.payload.state, { render: false });
+  } else {
+    await adoptSharedState(result.payload.state, { render: false });
+  }
+  return { mode: "remote" };
+}
+
+function persistSharedConflictBackup(snapshot) {
+  const backup = { createdAt: new Date().toISOString(), revision: sharedSync.revision, state: snapshot };
+  try {
+    localStorage.setItem(SHARED_SYNC_CONFLICT_KEY, JSON.stringify(backup));
+  } catch {
+    // The current in-memory state remains available if the local backup cannot be stored.
+  }
+  try {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
+    link.download = `du-lieu-xung-dot-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  } catch {
+    // Local storage still retains the conflict snapshot when a download is blocked.
+  }
+}
+
+async function uploadSharedBinaryFile(file) {
+  const key = storedFileKey(file);
+  if (!key || file?.remoteKey) return file?.remoteKey || "";
+  const dataUrl = file?.dataUrl || (await readStoredFileDataUrl(file));
+  if (!dataUrl) throw new Error(`Khong tim thay du lieu tep ${file?.name || key}.`);
+  const formData = new FormData();
+  formData.append("key", key);
+  formData.append("file", dataUrlToBlob(dataUrl, file?.type || "application/octet-stream"), file?.name || key);
+  const response = await fetch(sharedEndpoint("file"), {
+    method: "POST",
+    body: formData,
+    credentials: usingSupabaseSync() ? "omit" : "same-origin",
+    cache: "no-store",
+    headers: sharedRequestHeaders(),
+  });
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch {
+    // The status check below supplies a useful fallback error.
+  }
+  if (!response.ok || !payload?.key) {
+    const error = new Error(payload?.error || "Khong the tai tep len may chu.");
+    error.status = response.status;
+    throw error;
+  }
+  return payload.key;
+}
+
+async function processWithConcurrency(items, worker, limit = 3) {
+  const queue = Array.isArray(items) ? items : [];
+  let nextIndex = 0;
+  const runner = async () => {
+    while (nextIndex < queue.length) {
+      const item = queue[nextIndex];
+      nextIndex += 1;
+      await worker(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(limit, 1), queue.length) }, runner));
+}
+
+async function attachSharedFileKeys(sourceRecords, snapshotRecords, fieldName) {
+  const sourceById = new Map((sourceRecords || []).map((record) => [record.id, record]));
+  const uploads = [];
+  for (const snapshotRecord of snapshotRecords || []) {
+    const sourceRecord = sourceById.get(snapshotRecord.id);
+    if (!sourceRecord || !Array.isArray(snapshotRecord[fieldName])) continue;
+    for (const snapshotFile of snapshotRecord[fieldName]) {
+      const key = storedFileKey(snapshotFile);
+      if (!key || snapshotFile.remoteKey) continue;
+      const sourceFile = (sourceRecord[fieldName] || []).find((file) => storedFileKey(file) === key);
+      if (!sourceFile) continue;
+      uploads.push({ sourceFile, snapshotFile });
+    }
+  }
+  await processWithConcurrency(uploads, async ({ sourceFile, snapshotFile }) => {
+    try {
+      const remoteKey = await uploadSharedBinaryFile(sourceFile);
+      if (!remoteKey) return;
+      sourceFile.remoteKey = remoteKey;
+      snapshotFile.remoteKey = remoteKey;
+      delete sourceFile.remoteUploadError;
+      delete snapshotFile.remoteUploadError;
+    } catch (error) {
+      if (Number(error?.status) !== 413) throw error;
+      const message = String(error?.message || "Tep vuot qua gioi han may chu.");
+      sourceFile.remoteUploadError = message;
+      snapshotFile.remoteUploadError = message;
+      sharedSync.fileWarnings.push(`${sourceFile.name || storedFileKey(sourceFile)}: ${message}`);
+    }
+  }, 3);
+}
+
+async function createSharedStateSnapshot() {
+  const snapshot = cloneStatePayload(state);
+  sharedSync.fileWarnings = [];
+  await attachSharedFileKeys(state.bulletins, snapshot.bulletins, "media");
+  await attachSharedFileKeys(state.archiveRecords, snapshot.archiveRecords, "files");
+  return snapshot;
+}
+
+function queueSharedStateSync() {
+  if (!sharedSync.session || !sharedSync.available) return;
+  sharedSync.pending = true;
+  if (sharedSync.timer) return;
+  sharedSync.timer = window.setTimeout(() => {
+    sharedSync.timer = 0;
+    flushSharedStateSync();
+  }, 500);
+}
+
+function stableSharedValue(value) {
+  if (Array.isArray(value)) return value.map((item) => stableSharedValue(item));
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((output, key) => {
+        output[key] = stableSharedValue(value[key]);
+        return output;
+      }, {});
+  }
+  return value;
+}
+
+function sharedValuesEqual(left, right) {
+  return JSON.stringify(stableSharedValue(left)) === JSON.stringify(stableSharedValue(right));
+}
+
+function sharedRecordId(record) {
+  return record && typeof record === "object" ? String(record.id || "").trim() : "";
+}
+
+function sharedRecordMap(records) {
+  const map = new Map();
+  (records || []).forEach((record) => {
+    const id = sharedRecordId(record);
+    if (id) map.set(id, record);
+  });
+  return map;
+}
+
+function sharedPatchOperationCount(patch) {
+  const collectionCount = Object.values(patch?.collections || {}).reduce(
+    (total, change) => total + (change?.upserts?.length || 0) + (change?.deletes?.length || 0),
+    0,
+  );
+  return collectionCount + (patch?.fields?.length || 0);
+}
+
+function buildSharedStatePatch(basePayload, nextPayload) {
+  const base = normalizeStatePayload(basePayload);
+  const next = normalizeStatePayload(nextPayload);
+  const collections = {};
+
+  SHARED_SYNC_COLLECTIONS.forEach((collection) => {
+    const baseRecords = sharedRecordMap(base[collection]);
+    const nextRecords = sharedRecordMap(next[collection]);
+    const upserts = [];
+    const deletes = [];
+    const recordIds = new Set([...baseRecords.keys(), ...nextRecords.keys()]);
+    recordIds.forEach((id) => {
+      const before = baseRecords.get(id);
+      const after = nextRecords.get(id);
+      if (after && !sharedValuesEqual(before, after)) {
+        upserts.push({ id, value: after, baseValue: before || null });
+      } else if (before && !after) {
+        deletes.push({ id, baseValue: before });
+      }
+    });
+    if (upserts.length || deletes.length) collections[collection] = { upserts, deletes };
+  });
+
+  const fields = SHARED_SYNC_SCALAR_FIELDS
+    .filter((key) => !sharedValuesEqual(base[key], next[key]))
+    .map((key) => ({ key, value: next[key], baseValue: base[key] }));
+  return { collections, fields };
+}
+
+function mergeRemoteStateWithUnsyncedChanges(sentPayload, currentPayload, remotePayload) {
+  const sent = normalizeStatePayload(sentPayload);
+  const current = normalizeStatePayload(currentPayload);
+  const merged = cloneStatePayload(normalizeStatePayload(remotePayload));
+
+  SHARED_SYNC_COLLECTIONS.forEach((collection) => {
+    const sentRecords = sharedRecordMap(sent[collection]);
+    const currentRecords = sharedRecordMap(current[collection]);
+    const remoteRecords = sharedRecordMap(merged[collection]);
+    const orderedIds = (merged[collection] || []).map(sharedRecordId).filter(Boolean);
+    const localOnlyIds = [];
+    const recordIds = new Set([...sentRecords.keys(), ...currentRecords.keys()]);
+    recordIds.forEach((id) => {
+      const before = sentRecords.get(id);
+      const after = currentRecords.get(id);
+      if (sharedValuesEqual(before, after)) return;
+      if (after) {
+        remoteRecords.set(id, after);
+        if (!orderedIds.includes(id)) localOnlyIds.push(id);
+      } else {
+        remoteRecords.delete(id);
+      }
+    });
+    merged[collection] = [...orderedIds, ...localOnlyIds]
+      .filter((id) => remoteRecords.has(id))
+      .map((id) => remoteRecords.get(id));
+  });
+
+  SHARED_SYNC_SCALAR_FIELDS.forEach((key) => {
+    if (!sharedValuesEqual(sent[key], current[key])) merged[key] = current[key];
+  });
+  merged.activePeriod = current.activePeriod || merged.activePeriod;
+  return normalizeStatePayload(merged);
+}
+
+async function flushSharedStateSync() {
+  if (!sharedSync.session || sharedSync.available !== true) {
+    return { ok: false, pending: sharedSync.dirty, reason: "offline" };
+  }
+  if (!sharedSync.pending) return { ok: !sharedSync.dirty, pending: sharedSync.dirty };
+  if (sharedSync.inFlight) return { ok: false, pending: true, reason: "in-flight" };
+  sharedSync.pending = false;
+  sharedSync.inFlight = true;
+  try {
+    const snapshot = await createSharedStateSnapshot();
+    const baseSnapshot = sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : cloneStatePayload(snapshot);
+    const patch = buildSharedStatePatch(baseSnapshot, snapshot);
+    const requestedChangeVersion = sharedSync.localChangeVersion;
+    if (!sharedPatchOperationCount(patch)) {
+      persistState();
+      await clearSharedStateDirty();
+      return { ok: true, synced: false };
+    }
+    const useRecordMutations = usingSupabaseSync();
+    const { response, payload } = await sharedJsonRequest(useRecordMutations ? "mutate" : "state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: useRecordMutations
+        ? JSON.stringify({ baseRevision: sharedSync.revision, patch })
+        : JSON.stringify({ revision: sharedSync.revision, state: snapshot }),
+    });
+    if (response.status === 409) {
+      persistSharedConflictBackup(snapshot);
+      if (!sharedSync.conflictNotified) {
+        sharedSync.conflictNotified = true;
+        alert("Du lieu tren may chu da thay doi trong luc dong bo. Ban sao dang sua da duoc luu du phong; he thong se tai lai du lieu moi nhat.");
+      }
+      const latest = await sharedJsonRequest("state");
+      if (latest.response.ok && latest.payload?.state) {
+        await adoptSharedState(latest.payload.state);
+        sharedSync.revision = Number(latest.payload.revision) || sharedSync.revision;
+      }
+      return { ok: false, conflict: true, reason: "conflict" };
+    }
+    if (!response.ok) throw new Error(payload?.error || "Khong the dong bo du lieu.");
+    sharedSync.revision = Number(payload.revision) || sharedSync.revision;
+    if (payload?.state) {
+      const merged = mergeRemoteStateWithUnsyncedChanges(snapshot, state, payload.state);
+      Object.assign(state, merged);
+      sharedSync.baseState = cloneStatePayload(normalizeStatePayload(payload.state));
+    } else {
+      sharedSync.baseState = cloneStatePayload(snapshot);
+    }
+    const hasNewerLocalChange = sharedSync.localChangeVersion !== requestedChangeVersion;
+    if (Array.isArray(payload?.denied) && payload.denied.length) {
+      persistSharedConflictBackup(snapshot);
+      alert("Mot so thay doi khong duoc may chu chap nhan theo phan quyen hien tai. Du lieu da duoc dong bo lai theo ket qua hop le.");
+    }
+    persistState();
+    if (hasNewerLocalChange) {
+      sharedSync.pending = true;
+      await markSharedStateDirty();
+    } else {
+      await clearSharedStateDirty();
+    }
+    return {
+      ok: !Array.isArray(payload?.denied) || payload.denied.length === 0,
+      synced: true,
+      denied: Array.isArray(payload?.denied) ? payload.denied : [],
+      fileWarnings: [...sharedSync.fileWarnings],
+    };
+  } catch (error) {
+    sharedSync.pending = true;
+    console.warn("Shared state sync failed:", error);
+    sharedSync.available = null;
+    await markSharedStateDirty();
+    if (!sharedSync.retryTimer) {
+      sharedSync.retryTimer = window.setTimeout(async () => {
+        sharedSync.retryTimer = 0;
+        if (await probeSharedSync({ force: true })) flushSharedStateSync();
+      }, 5000);
+    }
+    return { ok: false, pending: true, error: error instanceof Error ? error.message : "sync-failed" };
+  } finally {
+    sharedSync.inFlight = false;
+    if (sharedSync.pending && !sharedSync.retryTimer) queueSharedStateSync();
+  }
+}
+
+async function refreshSharedState() {
+  if (!sharedSync.session || sharedSync.inFlight || sharedSync.pending || sharedSync.dirty) return;
+  if (sharedSync.available !== true && !(await probeSharedSync({ force: true }))) return;
+  if (document.activeElement?.matches("input, textarea, select") || document.querySelector(".modal-backdrop:not(.is-hidden)")) return;
+  try {
+    const { response, payload } = await sharedJsonRequest("state");
+    if (response.status === 401) {
+      sharedSync.session = false;
+      sharedSync.sessionToken = "";
+      localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+      localStorage.removeItem(SESSION_KEY);
+      stopAccountPresenceMonitoring();
+      renderAll();
+      return;
+    }
+    if (!response.ok || !payload?.state || Number(payload.revision) === sharedSync.revision) return;
+    sharedSync.revision = Number(payload.revision) || 0;
+    await adoptSharedState(payload.state);
+  } catch {
+    // Keep the last successful local view while the network is temporarily unavailable.
+  }
+}
+
+function logoutSharedSession() {
+  stopAccountPresenceMonitoring();
+  if (!sharedSync.session) return;
+  const headers = sharedRequestHeaders();
+  const canNotifyServer = sharedSync.available === true;
+  sharedSync.session = false;
+  sharedSync.sessionToken = "";
+  sharedSync.revision = null;
+  localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+  if (!canNotifyServer) return;
+  fetch(sharedEndpoint("logout"), {
+    method: "POST",
+    credentials: usingSupabaseSync() ? "omit" : "same-origin",
+    cache: "no-store",
+    headers,
+  }).catch(() => {});
+}
+
+async function restoreSharedSession() {
+  const restoredDurableState = await ensureDurableStateRestored();
+  await restoreSharedSyncCheckpoint();
+  if (restoredDurableState) {
+    await Promise.all([
+      migrateBulletinMediaToIndexedDb({ persist: false, render: false }),
+      migrateArchiveFilesToIndexedDb({ persist: false, render: false }),
+      migrateTaskAttachmentsToIndexedDb({ persist: false }),
+    ]);
+    await persistState();
+    renderAll();
+  }
+  if (!localStorage.getItem(SESSION_KEY) || !sharedSyncSupported()) return;
+  if (usingSupabaseSync() && !sharedSync.sessionToken) {
+    localStorage.removeItem(SESSION_KEY);
+    renderAll();
+    return;
+  }
+  sharedSync.session = true;
+  if (!(await probeSharedSync())) {
+    // Preserve the authenticated local session and durable snapshot while the
+    // connection is unavailable. A transient outage must not look like data loss.
+    return;
+  }
+  try {
+    const { response, payload } = await sharedJsonRequest("state");
+    if (response.status === 401) throw new Error("Session expired.");
+    if (!response.ok || !payload?.state) throw new Error("Shared state is unavailable.");
+    sharedSync.revision = Number(payload.revision) || 0;
+    if (sharedSync.dirty) {
+      await retainUnsyncedLocalChanges(payload.state);
+    } else {
+      await adoptSharedState(payload.state);
+    }
+    startAccountPresenceMonitoring();
+  } catch (error) {
+    if (String(error?.message || "") !== "Session expired.") {
+      // Keep the last locally persisted state when a request fails midway.
+      sharedSync.available = null;
+      return;
+    }
+    sharedSync.session = false;
+    sharedSync.sessionToken = "";
+    localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+    localStorage.removeItem(SESSION_KEY);
+    stopAccountPresenceMonitoring();
+    renderAll();
+  }
+}
 
 function restoreCustomizationLayoutDefaults(stateObject) {
   if (localStorage.getItem(CUSTOMIZATION_LAYOUT_RESTORE_KEY) === "1") return;
@@ -1988,62 +2696,42 @@ function fixGpmbDuplicateRoles() {
 }
 
 function mergeImportedPeopleIntoState() {
-  if (!importedPeopleFromExcel.length || state.importedPeopleVersion === IMPORTED_PEOPLE_VERSION) {
-    fixGpmbDuplicateRoles(); // Tự động dọn dẹp lỗi dữ liệu cũ đang lưu trong máy
-    return;
+  const localPeople = Array.isArray(state.people) ? state.people : [];
+
+  // The Excel source is bootstrap data only. Shared deployments always use
+  // the server state and must never overwrite personnel edited by users.
+  if (!importedPeopleFromExcel.length || usingSupabaseSync()) return false;
+
+  // A populated local state, including one where every source person was
+  // later removed, has already completed its initial seed.
+  if (state.importedPeopleVersion || localPeople.length) {
+    if (!state.importedPeopleVersion && localPeople.length) {
+      state.importedPeopleVersion = IMPORTED_PEOPLE_VERSION;
+      persistState();
+    }
+    return false;
   }
-  
-  let changed = false;
-  const localPeopleMap = new Map((state.people || []).map(p => [p.id, p]));
 
-  importedPeopleFromExcel.forEach((excelPerson) => {
-    if (!excelPerson || !excelPerson.id || !excelPerson.name) return;
-    
-    const normalizedExcelPerson = normalizeProjectPerson(excelPerson);
-    
-    // 🛑 Chặn không cho nạp role "pho-phong-gpmb" bị gán nhầm từ file Excel
-    if (normalizedExcelPerson.departmentId === "gpmb" && normalizedExcelPerson.roleId === "pho-phong-gpmb") {
-      normalizedExcelPerson.roleId = "can-bo-gpmb";
-    }
-
-    if (localPeopleMap.has(normalizedExcelPerson.id)) {
-      const currentLocalPerson = localPeopleMap.get(normalizedExcelPerson.id);
-      
-      const isDataChanged = Object.keys(normalizedExcelPerson).some(key => {
-        if (["createdAt", "createdBy", "updatedAt", "updatedBy", "customFields"].includes(key)) return false;
-        
-        const localVal = currentLocalPerson[key] !== undefined && currentLocalPerson[key] !== null ? String(currentLocalPerson[key]).trim() : "";
-        const excelVal = normalizedExcelPerson[key] !== undefined && normalizedExcelPerson[key] !== null ? String(normalizedExcelPerson[key]).trim() : "";
-        
-        return localVal !== excelVal;
-      });
-      
-      if (isDataChanged) {
-        Object.assign(currentLocalPerson, normalizedExcelPerson, {
-          updatedAt: new Date().toISOString(),
-          updatedBy: "Hệ thống (Fix Role)"
-        });
-        changed = true;
-      }
-    } else {
-      state.people.push({
-        ...normalizedExcelPerson,
-        customFields: {},
-        createdAt: new Date().toISOString(),
-        createdBy: "Hệ thống (Excel)"
-      });
-      changed = true;
-    }
-  });
-
+  const timestamp = new Date().toISOString();
+  state.people = importedPeopleFromExcel
+    .filter((person) => person?.id && person?.name)
+    .map((excelPerson) => {
+      const normalized = normalizeProjectPerson(excelPerson);
+      const roleId = normalized.departmentId === "gpmb" && normalized.roleId === "pho-phong-gpmb" ? "can-bo-gpmb" : normalized.roleId;
+      return {
+        ...normalized,
+        roleId,
+        customFields: normalized.customFields || {},
+        createdAt: normalized.createdAt || timestamp,
+        createdBy: normalized.createdBy || "Hệ thống (Excel)",
+        updatedAt: normalized.updatedAt || timestamp,
+        updatedBy: normalized.updatedBy || "Hệ thống (Excel)",
+      };
+    });
   state.importedPeopleVersion = IMPORTED_PEOPLE_VERSION;
-  
-  if (changed) {
-    saveState();
-  }
-
-  // Quét dọn sửa sạch lỗi Phó phòng
-  fixGpmbDuplicateRoles();
+  syncPersonnelAccounts();
+  persistState();
+  return Boolean(state.people.length);
 }
 
 function migrateCanBoGpmbKpiCatalog() {
@@ -2375,50 +3063,6 @@ function canReportTask(task) {
   return !!task && !!person && task.ownerId === person.id;
 }
 
-function canAssessTaskQualityForPerson(personId, status) {
-  if (normalizeTaskStatus(status) !== TASK_STATUS_COMPLETED) return false;
-  if (isDirector() || isAdmin()) return true;
-  const person = personById(personId);
-  return hasDepartmentManagementAccess() && person?.departmentId === currentDepartmentId();
-}
-
-function canAssessTaskQuality(task, statusOverride = "") {
-  if (!task) return false;
-  return canAssessTaskQualityForPerson(task.ownerId, statusOverride || task.status);
-}
-// =========================================================================
-// 🚀 NÂNG CẤP 2.3: HÀM KIỂM TRA QUYỀN DUYỆT CÔNG VIỆC
-// =========================================================================
-function taskCompletionReviewStatus(task) {
-  const status = String(task?.completionReviewStatus || "").trim();
-  if (["pending", "passed", "failed"].includes(status)) return status;
-  if (taskHasQualityPercent(task)) return "passed";
-  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED ? "pending" : "";
-}
-
-function taskCompletionIsApproved(task) {
-  return taskCompletionReviewStatus(task) === "passed";
-}
-
-function taskCompletionNeedsReview(task) {
-  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED && !taskCompletionIsApproved(task);
-}
-
-function taskCompletionReviewLabel(task) {
-  const status = taskCompletionReviewStatus(task);
-  if (status === "passed") return "Đạt";
-  if (status === "failed") return "Không đạt";
-  if (status === "pending") return "Chờ đánh giá";
-  return "Chưa yêu cầu";
-}
-
-function taskIsLateCompletion(task) {
-  if (task?.lateCompletion) return true;
-  if (!taskCompletionIsApproved(task)) return false;
-  const completedAt = task?.completionReviewedAt || task?.completedAt || "";
-  return !!completedAt && !isTimestampBeforeDeadline(completedAt, task);
-}
-
 function canReviewTaskCompletionForPerson(personId) {
   if (isAdmin() || isDirector()) return true;
   const person = personById(personId);
@@ -2427,6 +3071,19 @@ function canReviewTaskCompletionForPerson(personId) {
 
 function canReviewTaskCompletion(task) {
   return !!task && taskCompletionNeedsReview(task) && canReviewTaskCompletionForPerson(task.ownerId);
+}
+
+function canAssessTaskQualityForPerson(personId, status, task = null) {
+  if (normalizeTaskStatus(status) !== TASK_STATUS_COMPLETED) return false;
+  if (task && !taskCompletionIsApproved(task)) return false;
+  if (isDirector() || isAdmin()) return true;
+  const person = personById(personId);
+  return (isManager() || isDeputyManager()) && person?.departmentId === currentDepartmentId();
+}
+
+function canAssessTaskQuality(task, statusOverride = "") {
+  if (!task) return false;
+  return canAssessTaskQualityForPerson(task.ownerId, statusOverride || task.status, task);
 }
 
 function canCollaborateTask(task) {
@@ -2455,11 +3112,11 @@ function canViewAssignedTask(task) {
 }
 
 function canEndTaskAssignment(task) {
-  return !!task && isAssignedTask(task) && isTaskAssigner(task) && !isTaskFinishedStatus(getDueStatus(task));
+  return !!task && isAssignedTask(task) && (isAdmin() || isTaskAssigner(task)) && !isTaskFinishedStatus(getDueStatus(task));
 }
 
 function canOpenTask(task) {
-  return canEditTaskDetails(task) || canDeleteTask(task) || canReportTask(task) || canCollaborateTask(task) || canAssessTaskQuality(task);
+  return canEditTaskDetails(task) || canDeleteTask(task) || canReportTask(task) || canCollaborateTask(task) || canReviewTaskCompletion(task) || canAssessTaskQuality(task);
 }
 
 function canViewTaskRecord(task) {
@@ -2825,108 +3482,11 @@ function samePersonIdList(first = [], second = []) {
 
 function getDueStatus(task) {
   const status = normalizeTaskStatus(task.status);
-  if (isTaskFinishedStatus(status)) return status;
+  if (status === TASK_STATUS_CLOSED) return status;
+  if (status === TASK_STATUS_COMPLETED && taskCompletionIsApproved(task)) return status;
   if (!task.due) return status;
   const due = taskDeadlineDate(task);
   return due && due < new Date() ? "Quá hạn" : status;
-}
-// =========================================================================
-// 🚀 NÂNG CẤP 2.3: XỬ LÝ DUYỆT HOÀN THÀNH CÔNG VIỆC (ĐẠT / KHÔNG ĐẠT)
-// =========================================================================
-function openTaskCompletionReviewDialog(taskId) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task || !canReviewTaskCompletion(task)) return;
-  const owner = personById(task.ownerId);
-  const currentStatus = getDueStatus(task);
-  if (byId("taskCompletionReviewTaskId")) byId("taskCompletionReviewTaskId").value = task.id;
-  if (byId("taskCompletionReviewStatus")) byId("taskCompletionReviewStatus").value = "";
-  if (byId("taskCompletionReviewNote")) byId("taskCompletionReviewNote").value = "";
-  if (byId("taskCompletionReviewTitle")) byId("taskCompletionReviewTitle").textContent = `Duyệt hoàn thành: ${task.title}`;
-  if (byId("taskCompletionReviewSummary")) byId("taskCompletionReviewSummary").textContent = `${owner?.name || "Chưa rõ người thực hiện"} · Trạng thái: ${currentStatus} · Hạn: ${formatTaskDeadline(task) || "Chưa cập nhật"}`;
-  
-  const dlg = byId("taskCompletionReviewDialog");
-  if (dlg) {
-    dlg.classList.remove("is-hidden");
-    dlg.setAttribute("aria-hidden", "false");
-    byId("taskCompletionReviewStatus")?.focus();
-  }
-}
-
-function closeTaskCompletionReviewDialog() {
-  const dlg = byId("taskCompletionReviewDialog");
-  if (dlg) {
-    dlg.classList.add("is-hidden");
-    dlg.setAttribute("aria-hidden", "true");
-    byId("taskCompletionReviewForm")?.reset();
-  }
-}
-
-function reviewTaskCompletion(taskId, decision, note = "") {
-  const taskIndex = state.tasks.findIndex((item) => item.id === taskId);
-  const task = taskIndex >= 0 ? state.tasks[taskIndex] : null;
-  if (!task || !canReviewTaskCompletion(task) || !["passed", "failed"].includes(decision)) return;
-
-  const timestamp = new Date().toISOString();
-  const actor = currentActorInfo();
-  const previousStatus = getDueStatus(task);
-  const approved = decision === "passed";
-  const nextTask = {
-    ...task,
-    status: approved ? TASK_STATUS_COMPLETED : "Đang thực hiện",
-    completionReviewStatus: decision,
-    completionReviewedAt: timestamp,
-    completionReviewedById: actor.id,
-    completionReviewedByName: actor.name,
-    completionReviewNote: String(note || "").trim(),
-    lateCompletion: approved && (previousStatus === "Quá hạn" || taskIsPastDeadline(task)),
-    qualityPercent: "",
-    qualityAssessedAt: "",
-    qualityAssessedById: "",
-    qualityAssessedByName: "",
-  };
-  if (approved) {
-    nextTask.completedAt = task.completedAt || timestamp;
-    nextTask.completedById = task.completedById || task.ownerId || "";
-    nextTask.completedByName = task.completedByName || personById(task.ownerId)?.name || "";
-  } else {
-    nextTask.completedAt = "";
-    nextTask.completedById = "";
-    nextTask.completedByName = "";
-  }
-  const nextStatus = getDueStatus(nextTask);
-  nextTask.progressReports = [
-    ...(task.progressReports || []),
-    {
-      id: uid("task-report"),
-      type: "completion-review",
-      decision,
-      action: approved ? "Đánh giá hoàn thành: Đạt" : "Đánh giá hoàn thành: Không đạt",
-      previousStatus,
-      status: nextStatus,
-      progress: Number(nextTask.progress || 0),
-      note: String(note || "").trim(),
-      createdAt: timestamp,
-      createdById: actor.id,
-      createdBy: actor.name,
-    },
-  ];
-  const auditedTask = applyRecordAudit(nextTask, task);
-  state.tasks[taskIndex] = auditedTask;
-  syncPersonalEvaluationTaskScoresForTask(auditedTask, task);
-  
-  logActivity({
-    action: approved ? "Đánh giá công việc Đạt" : "Đánh giá công việc Không đạt",
-    module: "Công việc",
-    targetType: "task",
-    targetId: auditedTask.id,
-    personId: auditedTask.ownerId,
-    departmentId: personById(auditedTask.ownerId)?.departmentId || "",
-    period: taskPeriod(auditedTask),
-    details: `${auditedTask.title} · ${previousStatus} -> ${nextStatus}${note ? ` · ${String(note).trim()}` : ""}`,
-  });
-
-  saveState(); // 🔥 Tự động kích hoạt lưu Local + Đồng bộ lên Supabase!
-  renderAll();
 }
 
 function taskPeriod(task) {
@@ -3024,19 +3584,19 @@ function isTaskStatusUpdateLocked(task) {
 }
 
 function taskCompletedBeforeDeadline(task) {
-  if (normalizeTaskStatus(task?.status) !== "Hoàn thành") return false;
+  if (normalizeTaskStatus(task?.status) !== "Hoàn thành" || !taskCompletionIsApproved(task)) return false;
   if (!task.completedAt) return true;
   return isTimestampBeforeDeadline(task.completedAt, task);
 }
 
 function taskViolationReasons(task) {
-  if (!isAssignedTask(task)) return [];
   if (normalizeTaskStatus(task.status) === TASK_STATUS_CLOSED) return [];
-  if (!taskIsPastDeadline(task)) return [];
+  const overdue = getDueStatus(task) === "Quá hạn" || taskIsLateCompletion(task);
+  if (!overdue) return [];
   const reasons = [];
-  if (!taskHasTimelyResponse(task)) reasons.push("Chưa phản hồi nhận việc trước thời hạn hoàn thành");
-  if (!taskHasTimelyProgressReport(task)) reasons.push("Chưa báo cáo tiến độ trước thời hạn hoàn thành");
-  if (!taskCompletedBeforeDeadline(task)) reasons.push("Chưa hoàn thành khi hết thời hạn");
+  if (isAssignedTask(task) && !taskHasTimelyResponse(task)) reasons.push("Chưa phản hồi nhận việc trước thời hạn hoàn thành");
+  if (isAssignedTask(task) && !taskHasTimelyProgressReport(task)) reasons.push("Chưa báo cáo tiến độ trước thời hạn hoàn thành");
+  reasons.push("Chậm thời hạn hoàn thành");
   return reasons;
 }
 
@@ -3586,7 +4146,7 @@ function renderPeopleTable() {
         ? `<span class="badge ${badgeClass(evaluation.finalScore)}">${formatScore(evaluation.finalScore)} - ${escapeHtml(evaluation.grade)}</span>`
         : '<span class="muted">Chưa chấm</span>';
       return `
-        <tr class="people-row">
+        <tr class="people-row" data-person-id="${escapeHtml(person.id)}">
           <td class="people-name-cell">
             <div class="people-person-card">
               <strong>${escapeHtml(person.name)}</strong>
@@ -3723,17 +4283,6 @@ function taskBoardSearchText(task) {
   return `${task.title} ${task.projectName || ""} ${taskKind} ${owner} ${collaborators} ${assigner} ${task.category} ${regularMeta} ${task.note || ""} ${task.responseNote || ""} ${reports} ${attachments}`.toLowerCase();
 }
 
-function visibleTaskRecords(search = "", status = "") {
-  const keyword = (search || "").trim().toLowerCase();
-  return state.tasks
-    .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
-    .filter((task) => canViewTaskRecord(task))
-    .filter((task) => !status || task.computedStatus === status)
-    .filter((task) => !keyword || taskBoardSearchText(task).includes(keyword));
-}
-// =========================================================================
-// 🚀 NÂNG CẤP 2.3: BỘ LỌC CÔNG VIỆC NÂNG CAO (DỰ ÁN & THỜI GIAN)
-// =========================================================================
 function currentTaskTimeFilter() {
   return {
     from: byId("taskDateFrom")?.value || "",
@@ -3780,8 +4329,8 @@ function taskMatchesProjectFilter(task, projectFilter = currentTaskProjectFilter
 }
 
 function clearTaskTimeFilter() {
-  if (byId("taskDateFrom")) byId("taskDateFrom").value = "";
-  if (byId("taskDateTo")) byId("taskDateTo").value = "";
+  byId("taskDateFrom").value = "";
+  byId("taskDateTo").value = "";
 }
 
 function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter(), projectFilter = currentTaskProjectFilter()) {
@@ -3795,8 +4344,8 @@ function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTi
     .filter((task) => !keyword || taskBoardSearchText(task).includes(keyword));
 }
 
-function visibleRegularTaskRecords(search = "", status = "") {
-  return visibleTaskRecords(search, status).filter((task) => normalizeTaskKind(task) === TASK_KIND_REGULAR);
+function visibleRegularTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter()) {
+  return visibleTaskRecords(search, status, timeFilter).filter((task) => normalizeTaskKind(task) === TASK_KIND_REGULAR);
 }
 
 function compareTaskRecords(a, b) {
@@ -3807,10 +4356,12 @@ function compareTaskRecords(a, b) {
 }
 
 function renderTaskBoard() {
-  renderTaskProjectFilterOptions(); // 👈 THÊM DÒNG NÀY VÀO ĐẦU HÀM
+  renderTaskProjectFilterOptions();
   const search = byId("taskSearch").value.trim().toLowerCase();
   const filter = byId("taskStatusFilter").value;
-  const tasks = visibleTaskRecords(search, filter);
+  const timeFilter = currentTaskTimeFilter();
+  const projectFilter = currentTaskProjectFilter();
+  const tasks = visibleTaskRecords(search, filter, timeFilter, projectFilter);
 
   const renderTaskColumns = () => {
     return taskStatuses
@@ -3826,6 +4377,7 @@ function renderTaskBoard() {
             const deletable = canDeleteTask(task);
             const copyable = canCopyTask(task);
             const reportable = canUpdateTaskProgress(task) && !taskHasQualityPercent(task);
+            const reviewable = canReviewTaskCompletion(task);
             const assessable = canAssessTaskQuality(task);
             const attachments = task.attachments || [];
             const latestReport = latestTaskProgressReport(task);
@@ -3858,6 +4410,9 @@ function renderTaskBoard() {
                 <div class="task-status-grid">
                   ${assigned ? `<span><strong>Phản hồi:</strong> ${escapeHtml(responseText)}</span>` : ""}
                   <span><strong>${assigned ? "Báo cáo" : "Cập nhật"}:</strong> ${escapeHtml(reportText)}</span>
+                  ${taskCompletionNeedsReview(task) ? `<span><strong>Đánh giá hoàn thành:</strong> Chờ đánh giá Đạt/Không đạt</span>` : ""}
+                  ${taskCompletionReviewStatus(task) === "failed" ? `<span><strong>Đánh giá hoàn thành:</strong> Không đạt · Yêu cầu tiếp tục thực hiện</span>` : ""}
+                  ${taskCompletionIsApproved(task) ? `<span><strong>Đánh giá hoàn thành:</strong> Đạt${taskIsLateCompletion(task) ? " · Chậm tiến độ" : ""}</span>` : ""}
                   <span><strong>Chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))} · Thực hiện KPI ${formatScore(taskKpiActualScore(task))}</span>
                 </div>
                 <div class="progress" aria-label="Tiến độ ${task.progress}%"><span style="width:${clamp(task.progress, 0, 100)}%"></span></div>
@@ -3867,15 +4422,16 @@ function renderTaskBoard() {
                   ${editable ? `<button class="ghost" data-edit-task="${task.id}" type="button">${assigned ? "Sửa giao việc" : "Sửa"}</button>` : ""}
                   ${copyable ? `<button class="ghost" data-copy-task="${task.id}" type="button">Sao chép</button>` : ""}
                   ${reportable ? `<button class="ghost" data-respond-task="${task.id}" type="button">${assigned ? "Phản hồi/Báo cáo" : "Cập nhật tiến độ"}</button>` : ""}
+                  ${reviewable ? `<button class="ghost" data-review-task="${task.id}" type="button">Duyệt hoàn thành</button>` : ""}
                   ${assessable && !editable ? `<button class="ghost" data-assess-task="${task.id}" type="button">Đánh giá</button>` : ""}
                   ${deletable ? `<button class="ghost" data-delete-task="${task.id}" type="button">Xóa</button>` : ""}
-                  ${editable || copyable || deletable || reportable || assessable ? "" : "<span class=\"muted\">Chỉ xem</span>"}
+                  ${editable || copyable || deletable || reportable || reviewable || assessable ? "" : "<span class=\"muted\">Chỉ xem</span>"}
                 </div>
               </article>
             `;
           })
           .join("");
-        const count = visibleTaskRecords(search, status).length;
+        const count = visibleTaskRecords(search, status, timeFilter, projectFilter).length;
         return `
           <section class="task-column">
             <button class="task-column-head" data-open-task-status="${escapeHtml(status)}" type="button" aria-label="Xem tất cả công việc trạng thái ${escapeHtml(status)}">
@@ -3922,6 +4478,7 @@ function renderTaskStatusDetailItem(task) {
         <span><strong>Ngày bắt đầu:</strong> ${escapeHtml(formatTaskStartDate(task) || "Chưa có")}</span>
         <span><strong>Ngày hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
         <span><strong>Tiến độ:</strong> ${formatScore(task.progress)}%</span>
+        <span><strong>Đánh giá hoàn thành:</strong> ${escapeHtml(taskCompletionReviewLabel(task))}${taskIsLateCompletion(task) ? " · Chậm tiến độ" : ""}</span>
         <span><strong>Đánh giá chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))}</span>
         <span><strong>Điểm thực hiện KPI:</strong> ${formatScore(taskKpiActualScore(task))}</span>
         <span><strong>Cập nhật gần nhất:</strong> ${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% - ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
@@ -3937,13 +4494,20 @@ function renderTaskStatusDetailItem(task) {
 
 function openTaskStatusDetailDialog(status) {
   const search = byId("taskSearch").value.trim();
-  const tasks = visibleTaskRecords(search, status).sort(compareTaskRecords);
+  const timeFilter = currentTaskTimeFilter();
+  const tasks = visibleTaskRecords(search, status, timeFilter).sort(compareTaskRecords);
   const averageProgress = tasks.length ? tasks.reduce((sum, task) => sum + Number(task.progress || 0), 0) / tasks.length : 0;
   const nextDeadlineTask = tasks.find((task) => taskDeadlineDate(task));
+  const rangeLabel = [
+    timeFilter.from && `từ ${formatDate(timeFilter.from)}`,
+    timeFilter.to && `đến ${formatDate(timeFilter.to)}`,
+  ].filter(Boolean).join(" ");
   byId("taskStatusDetailTitle").textContent = `${status || "Tất cả trạng thái"} (${tasks.length})`;
-  byId("taskStatusDetailSubtitle").textContent = search
-    ? `Danh sách công việc · đang lọc theo "${search}"`
-    : "Danh sách công việc · tất cả công việc bạn có quyền xem";
+  byId("taskStatusDetailSubtitle").textContent = [
+    "Danh sách công việc",
+    search && `đang lọc theo "${search}"`,
+    rangeLabel && `ngày hoàn thành ${rangeLabel}`,
+  ].filter(Boolean).join(" · ");
   byId("taskStatusDetailContext").innerHTML = `
     <span><strong>${tasks.length}</strong> công việc</span>
     <span><strong>${formatScore(averageProgress)}%</strong> tiến độ bình quân</span>
@@ -3961,84 +4525,94 @@ function closeTaskStatusDetailDialog() {
   byId("taskStatusDetailDialog").setAttribute("aria-hidden", "true");
 }
 
-function openTaskDetailDialog(taskId) {
+function closeTaskCompletionReviewDialog() {
+  byId("taskCompletionReviewDialog").classList.add("is-hidden");
+  byId("taskCompletionReviewDialog").setAttribute("aria-hidden", "true");
+  byId("taskCompletionReviewForm").reset();
+}
+
+function openTaskCompletionReviewDialog(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
-  if (!task || !canViewTaskRecord(task)) return;
+  if (!task || !canReviewTaskCompletion(task)) return;
   const owner = personById(task.ownerId);
-  const collaborators = taskCollaboratorNames(task);
-  const status = task.computedStatus || getDueStatus(task);
-  const assigned = isAssignedTask(task);
-  const latestReport = latestTaskProgressReport(task);
-  const attachments = task.attachments || [];
-  const violations = taskViolationReasons(task);
-  const attachmentList = attachments.length
-    ? `<div class="task-detail-attachments">${attachments
-        .map(
-          (file) =>
-            `<a class="attachment-link" href="${escapeHtml(file.dataUrl)}" download="${escapeHtml(file.name)}" target="_blank" rel="noopener">${escapeHtml(file.name)}</a>`,
-        )
-        .join("")}</div>`
-    : `<p class="muted">Chưa có hồ sơ liên quan.</p>`;
-
-  byId("taskDetailSubtitle").textContent = taskKindLabels[normalizeTaskKind(task)] || "Công việc";
-  byId("taskDetailTitle").textContent = task.title || "Công việc";
-  byId("taskDetailMeta").innerHTML = `
-    <span><strong>Trạng thái</strong><b class="badge ${taskStatusBadgeClass(status)}">${escapeHtml(status)}</b></span>
-    <span><strong>Tiến độ</strong><b>${formatScore(task.progress)}%</b></span>
-    <span><strong>Chất lượng</strong><b>${escapeHtml(taskQualityLabel(task))}</b></span>
-    <span><strong>Điểm thực hiện KPI</strong><b>${formatScore(taskKpiActualScore(task))}</b></span>
-  `;
-  byId("taskDetailContent").innerHTML = `
-    <section class="task-detail-section task-detail-information">
-      <h3>Thông tin công việc</h3>
-      <div class="task-detail-info-grid">
-        <span><strong>${assigned ? "Người được giao" : "Người thực hiện"}</strong>${escapeHtml(owner?.name || "Chưa cập nhật")}</span>
-        <span><strong>Người phối hợp</strong>${escapeHtml(collaborators.length ? collaborators.join(", ") : "Chưa chọn")}</span>
-        ${assigned ? `<span><strong>Người giao</strong>${escapeHtml(task.assignedByName || task.createdBy || "Chưa cập nhật")}</span>` : ""}
-        <span><strong>Tên dự án</strong>${escapeHtml(task.projectName || "Chưa cập nhật")}</span>
-        <span><strong>Danh mục KPI cá nhân</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
-        ${!assigned ? `<span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>` : ""}
-        ${!assigned ? `<span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}</span>` : ""}
-        <span><strong>Ngày bắt đầu</strong>${escapeHtml(formatTaskStartDate(task) || "Chưa cập nhật")}</span>
-        <span><strong>Ngày hoàn thành</strong>${escapeHtml(formatTaskDeadline(task) || "Chưa cập nhật")}</span>
-        <span><strong>Cập nhật gần nhất</strong>${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% · ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
-      </div>
-    </section>
-    <section class="task-detail-section">
-      <h3>${assigned ? "Nội dung giao việc" : "Nội dung công việc"}</h3>
-      <p class="task-detail-note">${escapeHtml(task.note || "Chưa cập nhật.")}</p>
-    </section>
-    ${assigned ? `
-      <section class="task-detail-section">
-        <h3>Phản hồi nhận việc</h3>
-        <div class="task-detail-info-grid">
-          <span><strong>Trạng thái phản hồi</strong>${escapeHtml(task.responseStatus || "Chưa phản hồi")}</span>
-          <span><strong>Thời điểm phản hồi</strong>${escapeHtml(formatDateTime(task.responseAt) || "Chưa cập nhật")}</span>
-        </div>
-        <p class="task-detail-note">${escapeHtml(task.responseNote || "Chưa có nội dung phản hồi.")}</p>
-      </section>
-    ` : ""}
-    <section class="task-detail-section">
-      <h3>Lịch sử báo cáo tiến độ</h3>
-      ${taskProgressReportListHtml(task) || `<p class="muted">Chưa có báo cáo tiến độ.</p>`}
-    </section>
-    <section class="task-detail-section">
-      <h3>Hồ sơ liên quan</h3>
-      ${attachmentList}
-    </section>
-    ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
-  `;
-  byId("taskDetailDialog").classList.remove("is-hidden");
-  byId("taskDetailDialog").setAttribute("aria-hidden", "false");
+  const currentStatus = getDueStatus(task);
+  byId("taskCompletionReviewTaskId").value = task.id;
+  byId("taskCompletionReviewStatus").value = "";
+  byId("taskCompletionReviewNote").value = "";
+  byId("taskCompletionReviewTitle").textContent = `Duyệt hoàn thành: ${task.title}`;
+  byId("taskCompletionReviewSummary").textContent = `${owner?.name || "Chưa rõ người thực hiện"} · Trạng thái hiện tại: ${currentStatus} · Ngày hoàn thành: ${formatTaskDeadline(task) || "chưa cập nhật"}`;
+  byId("taskCompletionReviewDialog").classList.remove("is-hidden");
+  byId("taskCompletionReviewDialog").setAttribute("aria-hidden", "false");
+  byId("taskCompletionReviewStatus").focus();
 }
 
-function closeTaskDetailDialog() {
-  byId("taskDetailDialog").classList.add("is-hidden");
-  byId("taskDetailDialog").setAttribute("aria-hidden", "true");
+function reviewTaskCompletion(taskId, decision, note = "") {
+  const taskIndex = state.tasks.findIndex((item) => item.id === taskId);
+  const task = taskIndex >= 0 ? state.tasks[taskIndex] : null;
+  if (!task || !canReviewTaskCompletion(task) || !["passed", "failed"].includes(decision)) return;
+
+  const timestamp = new Date().toISOString();
+  const actor = currentActorInfo();
+  const previousStatus = getDueStatus(task);
+  const approved = decision === "passed";
+  const nextTask = {
+    ...task,
+    status: approved ? TASK_STATUS_COMPLETED : "Đang thực hiện",
+    completionReviewStatus: decision,
+    completionReviewedAt: timestamp,
+    completionReviewedById: actor.id,
+    completionReviewedByName: actor.name,
+    completionReviewNote: String(note || "").trim(),
+    lateCompletion: approved && (previousStatus === "Quá hạn" || taskIsPastDeadline(task)),
+    qualityPercent: "",
+    qualityAssessedAt: "",
+    qualityAssessedById: "",
+    qualityAssessedByName: "",
+  };
+  if (approved) {
+    nextTask.completedAt = task.completedAt || timestamp;
+    nextTask.completedById = task.completedById || task.ownerId || "";
+    nextTask.completedByName = task.completedByName || personById(task.ownerId)?.name || "";
+  } else {
+    nextTask.completedAt = "";
+    nextTask.completedById = "";
+    nextTask.completedByName = "";
+  }
+  const nextStatus = getDueStatus(nextTask);
+  nextTask.progressReports = [
+    ...(task.progressReports || []),
+    {
+      id: uid("task-report"),
+      type: "completion-review",
+      decision,
+      action: approved ? "Đánh giá hoàn thành: Đạt" : "Đánh giá hoàn thành: Không đạt",
+      previousStatus,
+      status: nextStatus,
+      progress: Number(nextTask.progress || 0),
+      note: String(note || "").trim(),
+      createdAt: timestamp,
+      createdById: actor.id,
+      createdBy: actor.name,
+    },
+  ];
+  const auditedTask = applyRecordAudit(nextTask, task);
+  state.tasks = state.tasks.map((item, index) => (index === taskIndex ? auditedTask : item));
+  syncPersonalEvaluationTaskScoresForTask(auditedTask, task);
+  const owner = personById(auditedTask.ownerId);
+  logActivity({
+    action: approved ? "Đánh giá công việc Đạt" : "Đánh giá công việc Không đạt",
+    module: "Công việc",
+    targetType: "task",
+    targetId: auditedTask.id,
+    personId: auditedTask.ownerId,
+    departmentId: owner?.departmentId || "",
+    period: taskPeriod(auditedTask),
+    detail: `${auditedTask.title} · ${previousStatus} -> ${nextStatus}${note ? ` · ${String(note).trim()}` : ""}`,
+  });
+  saveState();
+  renderAll();
 }
-// =========================================================================
-// 🚀 NÂNG CẤP 2.3: SỬA TRỰC TIẾP NGAY TRONG POPUP CHI TIẾT
-// =========================================================================
+
 function restoreTaskDetailInlineEditor({ reset = false } = {}) {
   if (!taskDetailInlineEditor) return;
   const { form, anchor, kind } = taskDetailInlineEditor;
@@ -4052,6 +4626,26 @@ function restoreTaskDetailInlineEditor({ reset = false } = {}) {
     if (kind === TASK_KIND_ASSIGNED) resetAssignmentTaskForm();
     else resetTaskForm();
   }
+}
+
+function taskDetailActionMarkup(task) {
+  const actions = [];
+  const assigned = isAssignedTask(task);
+  const editable = canEditTaskDetails(task);
+  const copyable = canCopyTask(task);
+  const reportable = canUpdateTaskProgress(task) && (!taskHasQualityPercent(task) || isAdmin());
+  const reviewable = canReviewTaskCompletion(task);
+  const assessable = canAssessTaskQuality(task);
+  const endable = canEndTaskAssignment(task);
+  const deletable = canDeleteTask(task);
+  if (editable) actions.push('<button type="button" data-task-detail-action="edit">Sửa</button>');
+  if (copyable) actions.push('<button class="ghost" type="button" data-task-detail-action="copy">Sao chép</button>');
+  if (reportable) actions.push(`<button class="ghost" type="button" data-task-detail-action="report">${assigned ? "Phản hồi/Báo cáo" : "Cập nhật tiến độ"}</button>`);
+  if (reviewable) actions.push('<button class="ghost" type="button" data-task-detail-action="review">Duyệt hoàn thành</button>');
+  if (assessable && !editable) actions.push('<button class="ghost" type="button" data-task-detail-action="assess">Đánh giá</button>');
+  if (endable) actions.push('<button class="ghost" type="button" data-task-detail-action="end">Kết thúc</button>');
+  if (deletable) actions.push('<button class="ghost danger-action" type="button" data-task-detail-action="delete">Xóa</button>');
+  return actions.length ? actions.join("") : '<span class="muted">Chỉ xem chi tiết công việc.</span>';
 }
 
 function openTaskDetailInlineEditor(taskId, focusId = "") {
@@ -4091,6 +4685,114 @@ function openTaskDetailInlineEditor(taskId, focusId = "") {
     target.scrollIntoView({ behavior: "smooth", block: "center" });
     target.focus({ preventScroll: true });
   }
+}
+
+function deleteTaskRecord(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task || !canDeleteTask(task)) return false;
+  if (!confirm("Xóa vĩnh viễn công việc này? Dữ liệu công việc sẽ bị loại khỏi danh mục và đồng bộ xóa trên các thiết bị khác.")) return false;
+  registerDeletedId(taskId);
+  const owner = personById(task.ownerId);
+  state.tasks = state.tasks.filter((item) => item.id !== taskId);
+  syncPersonalEvaluationTaskScoresForTask(null, task);
+  logActivity({
+    action: "Xóa",
+    module: "Công việc",
+    targetType: "task",
+    targetId: taskId,
+    personId: task.ownerId,
+    departmentId: owner?.departmentId || "",
+    period: taskPeriod(task),
+    title: task.title,
+    details: `${owner?.name || "Chưa rõ người nhận"} · ${normalizeTaskStatus(task.status)}`,
+    score: `${formatScore(task.progress)}%`,
+  });
+  saveState();
+  renderAll();
+  return true;
+}
+
+function openTaskDetailDialog(taskId) {
+  restoreTaskDetailInlineEditor({ reset: true });
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task || !canViewTaskRecord(task)) return;
+  const owner = personById(task.ownerId);
+  const collaborators = taskCollaboratorNames(task);
+  const status = task.computedStatus || getDueStatus(task);
+  const assigned = isAssignedTask(task);
+  const latestReport = latestTaskProgressReport(task);
+  const attachments = task.attachments || [];
+  const violations = taskViolationReasons(task);
+  const attachmentList = attachments.length
+    ? `<div class="task-detail-attachments">${attachments
+        .map(
+          (file) =>
+            `<a class="attachment-link" href="${escapeHtml(file.dataUrl)}" download="${escapeHtml(file.name)}" target="_blank" rel="noopener">${escapeHtml(file.name)}</a>`,
+        )
+        .join("")}</div>`
+    : `<p class="muted">Chưa có hồ sơ liên quan.</p>`;
+
+  byId("taskDetailSubtitle").textContent = taskKindLabels[normalizeTaskKind(task)] || "Công việc";
+  byId("taskDetailTitle").textContent = task.title || "Công việc";
+  byId("taskDetailActions").innerHTML = taskDetailActionMarkup(task);
+  byId("taskDetailMeta").classList.remove("is-hidden");
+  byId("taskDetailMeta").innerHTML = `
+    <span><strong>Trạng thái</strong><b class="badge ${taskStatusBadgeClass(status)}">${escapeHtml(status)}</b></span>
+    <span><strong>Tiến độ</strong><b>${formatScore(task.progress)}%</b></span>
+    <span><strong>Chất lượng</strong><b>${escapeHtml(taskQualityLabel(task))}</b></span>
+    <span><strong>Điểm thực hiện KPI</strong><b>${formatScore(taskKpiActualScore(task))}</b></span>
+  `;
+  byId("taskDetailContent").innerHTML = `
+    <section class="task-detail-section task-detail-information">
+      <h3>Thông tin công việc</h3>
+      <div class="task-detail-info-grid">
+        <span><strong>${assigned ? "Người được giao" : "Người thực hiện"}</strong>${escapeHtml(owner?.name || "Chưa cập nhật")}</span>
+        <span><strong>Người phối hợp</strong>${escapeHtml(collaborators.length ? collaborators.join(", ") : "Chưa chọn")}</span>
+        ${assigned ? `<span><strong>Người giao</strong>${escapeHtml(task.assignedByName || task.createdBy || "Chưa cập nhật")}</span>` : ""}
+        <span><strong>Tên dự án</strong>${escapeHtml(task.projectName || "Chưa cập nhật")}</span>
+        <span><strong>Danh mục KPI cá nhân</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
+        ${!assigned ? `<span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>` : ""}
+        ${!assigned ? `<span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}</span>` : ""}
+        <span><strong>Ngày bắt đầu</strong>${escapeHtml(formatTaskStartDate(task) || "Chưa cập nhật")}</span>
+        <span><strong>Ngày hoàn thành</strong>${escapeHtml(formatTaskDeadline(task) || "Chưa cập nhật")}</span>
+        <span><strong>Đánh giá hoàn thành</strong>${escapeHtml(taskCompletionReviewLabel(task))}${taskIsLateCompletion(task) ? " · Chậm tiến độ" : ""}</span>
+        <span><strong>Cập nhật gần nhất</strong>${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% · ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
+      </div>
+    </section>
+    <section class="task-detail-section">
+      <h3>${assigned ? "Nội dung giao việc" : "Nội dung công việc"}</h3>
+      <p class="task-detail-note">${escapeHtml(task.note || "Chưa cập nhật.")}</p>
+    </section>
+    ${assigned ? `
+      <section class="task-detail-section">
+        <h3>Phản hồi nhận việc</h3>
+        <div class="task-detail-info-grid">
+          <span><strong>Trạng thái phản hồi</strong>${escapeHtml(task.responseStatus || "Chưa phản hồi")}</span>
+          <span><strong>Thời điểm phản hồi</strong>${escapeHtml(formatDateTime(task.responseAt) || "Chưa cập nhật")}</span>
+        </div>
+        <p class="task-detail-note">${escapeHtml(task.responseNote || "Chưa có nội dung phản hồi.")}</p>
+      </section>
+    ` : ""}
+    <section class="task-detail-section">
+      <h3>Lịch sử báo cáo tiến độ</h3>
+      ${taskProgressReportListHtml(task) || `<p class="muted">Chưa có báo cáo tiến độ.</p>`}
+    </section>
+    <section class="task-detail-section">
+      <h3>Hồ sơ liên quan</h3>
+      ${attachmentList}
+    </section>
+    ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
+  `;
+  byId("taskDetailDialog").dataset.taskId = task.id;
+  byId("taskDetailDialog").classList.remove("is-hidden");
+  byId("taskDetailDialog").setAttribute("aria-hidden", "false");
+}
+
+function closeTaskDetailDialog() {
+  restoreTaskDetailInlineEditor({ reset: true });
+  byId("taskDetailDialog").classList.add("is-hidden");
+  byId("taskDetailDialog").setAttribute("aria-hidden", "true");
+  delete byId("taskDetailDialog").dataset.taskId;
 }
 
 function formatFileSize(bytes) {
@@ -4954,6 +5656,8 @@ function activityToTimelineItem(activity) {
     timestamp: activity.timestamp,
     type: `${action} ${module}`,
     title: activity.title || module,
+    actorName: activity.actorName || "",
+    actorRole: activity.actorRole || "",
     meta: details.join(" · "),
     score: activity.score || "",
     badgeClass: action === "Xóa" ? "bad" : action === "Tạo" ? "good" : "warn",
@@ -5015,6 +5719,7 @@ function evaluationTimelineItems(evaluation) {
     targetId: evaluation.id,
     personId: evaluation.personId,
     departmentId: person?.departmentId || "",
+    actorName: evaluation.updatedBy || evaluation.createdBy || "",
     title: person?.name || "Nhân sự đã xóa",
     score: `${formatScore(evaluation.finalScore)} điểm - ${evaluation.grade}`,
     badgeClass: badgeClass(evaluation.finalScore),
@@ -5025,6 +5730,7 @@ function evaluationTimelineItems(evaluation) {
           ...base,
           type: "Tạo KPI cá nhân",
           timestamp: evaluation.createdAt,
+          actorName: evaluation.createdBy || base.actorName,
           meta: timelineRecordMeta(evaluation, evaluation.comment || evaluation.reviewer || ""),
         }
       : null,
@@ -5033,6 +5739,7 @@ function evaluationTimelineItems(evaluation) {
           ...base,
           type: "Sửa KPI cá nhân",
           timestamp: evaluation.updatedAt,
+          actorName: evaluation.updatedBy || base.actorName,
           meta: timelineRecordMeta(evaluation, evaluation.comment || evaluation.reviewer || ""),
         }
       : null,
@@ -5061,6 +5768,7 @@ function departmentEvaluationTimelineItems(evaluation) {
     targetType: "departmentEvaluation",
     targetId: evaluation.id,
     departmentId: evaluation.departmentId,
+    actorName: evaluation.updatedBy || evaluation.createdBy || "",
     title: department?.name || "Phòng đã xóa",
     score: `${formatScore(evaluation.finalScore)} điểm - ${evaluation.grade}`,
     badgeClass: badgeClass(evaluation.finalScore),
@@ -5071,6 +5779,7 @@ function departmentEvaluationTimelineItems(evaluation) {
           ...base,
           type: "Tạo KPI phòng",
           timestamp: evaluation.createdAt,
+          actorName: evaluation.createdBy || base.actorName,
           meta: timelineRecordMeta(evaluation, details),
         }
       : null,
@@ -5079,6 +5788,7 @@ function departmentEvaluationTimelineItems(evaluation) {
           ...base,
           type: "Sửa KPI phòng",
           timestamp: evaluation.updatedAt,
+          actorName: evaluation.updatedBy || base.actorName,
           meta: timelineRecordMeta(evaluation, details),
         }
       : null,
@@ -5120,6 +5830,7 @@ function taskTimelineItems(task) {
     personId: task.ownerId,
     departmentId: owner?.departmentId || "",
     title: task.title,
+    actorName: task.updatedBy || task.createdBy || "",
     score: taskHasQualityPercent(task)
       ? `Tiến độ ${formatScore(task.progress)}% · Chất lượng ${formatScore(taskQualityPercentValue(task))}%`
       : `${formatScore(task.progress)}%`,
@@ -5130,6 +5841,7 @@ function taskTimelineItems(task) {
       ...base,
       type: "Tạo Công việc",
       timestamp: task.createdAt,
+      actorName: task.createdBy || base.actorName,
       meta: timelineRecordMeta(task, baseMeta),
       badgeClass: "good",
     });
@@ -5139,6 +5851,7 @@ function taskTimelineItems(task) {
       ...base,
       type: "Giao việc",
       timestamp: task.assignedAt,
+      actorName: task.assignedByName || task.createdBy || base.actorName,
       meta: `Người giao: ${task.assignedByName || task.createdBy || "Chưa rõ"} · Người nhận: ${owner?.name || "Chưa rõ"} · ${task.category || "Chưa phân loại"}${projectMeta}`,
       badgeClass: "warn",
     });
@@ -5148,18 +5861,25 @@ function taskTimelineItems(task) {
       ...base,
       type: "Phản hồi giao việc",
       timestamp: task.responseAt,
+      actorName: task.responseByName || base.actorName,
       meta: `${task.responseStatus || "Phản hồi"} · ${task.responseByName || "Người được giao"}${task.responseNote ? ` · ${task.responseNote}` : ""}`,
       badgeClass: "warn",
     });
   }
   (task.progressReports || []).forEach((report) => {
+    const isCompletionReview = report.type === "completion-review";
+    const reportStatus = report.status || status;
+    const transition = report.previousStatus && report.previousStatus !== reportStatus
+      ? `${report.previousStatus} -> ${reportStatus}`
+      : reportStatus;
     items.push({
       ...base,
-      type: "Báo cáo tiến độ",
+      type: isCompletionReview ? "Đánh giá hoàn thành" : "Báo cáo tiến độ",
       timestamp: report.createdAt,
-      meta: `${report.createdBy || "Người cập nhật"} · ${report.status || status}${report.note ? ` · ${report.note}` : ""}`,
-      score: `${formatScore(report.progress)}%`,
-      badgeClass: taskStatusBadgeClass(report.status || status),
+      actorName: report.createdBy || base.actorName,
+      meta: `${report.createdBy || "Người cập nhật"} · ${report.action || transition}${report.note ? ` · ${report.note}` : ""}`,
+      score: isCompletionReview ? (report.decision === "passed" ? "Đạt" : "Không đạt") : `${formatScore(report.progress)}%`,
+      badgeClass: isCompletionReview ? (report.decision === "passed" ? "good" : "bad") : taskStatusBadgeClass(reportStatus),
     });
   });
   if (task.qualityAssessedAt && taskHasQualityPercent(task)) {
@@ -5167,16 +5887,25 @@ function taskTimelineItems(task) {
       ...base,
       type: "Đánh giá chất lượng",
       timestamp: task.qualityAssessedAt,
+      actorName: task.qualityAssessedByName || base.actorName,
       meta: `${task.qualityAssessedByName || "Người đánh giá"} · ${formatScore(taskQualityPercentValue(task))}% · điểm thực hiện KPI ${formatScore(taskKpiActualScore(task))}`,
       score: `${formatScore(taskQualityPercentValue(task))}%`,
       badgeClass: "good",
     });
   }
-  if (task.updatedAt && task.updatedAt !== task.createdAt && task.updatedAt !== task.assignedAt && task.updatedAt !== task.responseAt) {
+  if (
+    task.updatedAt &&
+    task.updatedAt !== task.createdAt &&
+    task.updatedAt !== task.assignedAt &&
+    task.updatedAt !== task.responseAt &&
+    task.updatedAt !== task.completionReviewedAt &&
+    task.updatedAt !== task.qualityAssessedAt
+  ) {
     items.push({
       ...base,
       type: "Sửa Công việc",
       timestamp: task.updatedAt,
+      actorName: task.updatedBy || base.actorName,
       meta: timelineRecordMeta(task, baseMeta),
       badgeClass: taskStatusBadgeClass(status),
     });
@@ -5204,6 +5933,7 @@ function taskTimelineItems(task) {
       ...base,
       type: "Hoàn thành Công việc",
       timestamp: task.completedAt,
+      actorName: task.completedByName || task.updatedBy || base.actorName,
       meta: `Hoàn thành bởi ${task.completedByName || "Chưa rõ"} · ${baseMeta}`,
       badgeClass: "good",
     });
@@ -5213,6 +5943,7 @@ function taskTimelineItems(task) {
       ...base,
       type: "Kết thúc Công việc",
       timestamp: task.closedAt,
+      actorName: task.closedBy || task.updatedBy || base.actorName,
       meta: `Kết thúc bởi ${task.closedBy || "Chưa rõ"} · Không còn tính quá hạn`,
       badgeClass: "good",
     });
@@ -5232,6 +5963,13 @@ function historyTimelineItemsForRecords(records, from, to) {
   return uniqueTimelineItems(records.flatMap((items) => items).filter((item) => timelineItemInRange(item, from, to)));
 }
 
+function historyItemActorLabel(item) {
+  const actorName = String(item.actorName || item.updatedBy || item.createdBy || "").trim();
+  const actorRole = String(item.actorRole || "").trim();
+  if (!actorName) return "Tài khoản: Chưa xác định";
+  return `Tài khoản: ${actorName}${actorRole ? ` (${actorRole})` : ""}`;
+}
+
 function renderHistoryTimeline(items) {
   const sorted = [...items].sort((a, b) => historyItemSortValue(b).localeCompare(historyItemSortValue(a)));
   byId("historyTimeline").innerHTML = sorted.length
@@ -5246,7 +5984,10 @@ function renderHistoryTimeline(items) {
             <article class="history-item${targetAttrs ? " history-link" : ""}"${targetAttrs} ${targetAttrs ? 'role="button" tabindex="0"' : ""}>
               <div class="history-item-head">
                 <span class="badge ${item.badgeClass || ""}">${escapeHtml(item.type)}</span>
-                <time>${escapeHtml(item.timestamp ? formatDateTime(item.timestamp) : formatPeriod(item.period) || "Không có kỳ")}</time>
+                <div class="history-item-audit">
+                  <time>${escapeHtml(item.timestamp ? formatDateTime(item.timestamp) : formatPeriod(item.period) || "Không có kỳ")}</time>
+                  <span class="history-item-account">${escapeHtml(historyItemActorLabel(item))}</span>
+                </div>
               </div>
               <h4>${escapeHtml(item.title)}</h4>
               <p>${escapeHtml(item.meta || "")}</p>
@@ -5905,8 +6646,9 @@ function populateBulletinForm(post) {
   applyFieldCustomizations();
 }
 
-async function migrateBulletinMediaToIndexedDb() {
+async function migrateBulletinMediaToIndexedDb({ persist = true, render = true } = {}) {
   let changed = false;
+  const pendingFiles = [];
   for (const post of state.bulletins || []) {
     if (!Array.isArray(post.media)) continue;
     for (const file of post.media) {
@@ -5914,19 +6656,22 @@ async function migrateBulletinMediaToIndexedDb() {
       const key = storedFileKey(file) || uid("bulletin-media");
       file.id = file.id || key;
       file.storageKey = key;
-      try {
-        await writeStoredFile(file, file.dataUrl);
-        delete file.dataUrl;
-        changed = true;
-      } catch {
-        // Keep legacy inline media if IndexedDB cannot accept it, so existing posts do not lose content.
-      }
+      pendingFiles.push(file);
     }
   }
+  await processWithConcurrency(pendingFiles, async (file) => {
+    try {
+      await writeStoredFile(file, file.dataUrl);
+      delete file.dataUrl;
+      changed = true;
+    } catch {
+      // Keep legacy inline media if IndexedDB cannot accept it, so existing posts do not lose content.
+    }
+  }, 3);
   if (changed) {
     try {
-      persistState();
-      renderBulletinBoard();
+      if (persist) persistState();
+      if (render) renderBulletinBoard();
     } catch {
       // If localStorage is already constrained, keep the in-memory migration for this session.
     }
@@ -6458,8 +7203,9 @@ function populateArchiveForm(record) {
   applyFieldCustomizations();
 }
 
-async function migrateArchiveFilesToIndexedDb() {
+async function migrateArchiveFilesToIndexedDb({ persist = true, render = true } = {}) {
   let changed = false;
+  const pendingFiles = [];
   for (const record of state.archiveRecords || []) {
     if (!Array.isArray(record.files)) continue;
     for (const file of record.files) {
@@ -6469,19 +7215,22 @@ async function migrateArchiveFilesToIndexedDb() {
       file.storageKey = key;
       file.kind = file.kind || archiveFileKindFromFile(file);
       file.type = file.type || archiveFileTypeFromFile(file);
-      try {
-        await writeStoredFile(file, normalizeStoredMediaDataUrl(file.dataUrl, file.type));
-        delete file.dataUrl;
-        changed = true;
-      } catch {
-        // Keep legacy inline files if IndexedDB cannot accept them.
-      }
+      pendingFiles.push(file);
     }
   }
+  await processWithConcurrency(pendingFiles, async (file) => {
+    try {
+      await writeStoredFile(file, normalizeStoredMediaDataUrl(file.dataUrl, file.type));
+      delete file.dataUrl;
+      changed = true;
+    } catch {
+      // Keep legacy inline files if IndexedDB cannot accept them.
+    }
+  }, 3);
   if (changed) {
     try {
-      persistState();
-      renderArchive();
+      if (persist) persistState();
+      if (render) renderArchive();
     } catch {
       // Keep the in-memory migration for this session if localStorage is constrained.
     }
@@ -6489,8 +7238,9 @@ async function migrateArchiveFilesToIndexedDb() {
 }
 
 // 🔥 2. HÀM MỚI BỔ SUNG: Bóc tách file đính kèm Công việc vào IndexedDB (Chống tràn 5MB)
-async function migrateTaskAttachmentsToIndexedDb() {
+async function migrateTaskAttachmentsToIndexedDb({ persist = true } = {}) {
   let changed = false;
+  const pendingFiles = [];
   for (const task of state.tasks || []) {
     if (!Array.isArray(task.attachments)) continue;
     for (const file of task.attachments) {
@@ -6498,15 +7248,19 @@ async function migrateTaskAttachmentsToIndexedDb() {
       const key = storedFileKey(file) || uid("task-file");
       file.id = file.id || key;
       file.storageKey = key;
-      try {
-        await writeStoredFile(file, file.dataUrl);
-        delete file.dataUrl; // Giải phóng bộ nhớ chuỗi nặng khỏi localStorage
-        changed = true;
-      } catch (e) {
-        console.error("❌ Lỗi lưu file công việc vào IndexedDB:", e);
-      }
+      pendingFiles.push(file);
     }
   }
+  await processWithConcurrency(pendingFiles, async (file) => {
+    try {
+      await writeStoredFile(file, file.dataUrl);
+      delete file.dataUrl;
+      changed = true;
+    } catch (error) {
+      console.error("Task attachment migration failed:", error);
+    }
+  }, 3);
+  if (changed && persist) persistState();
   return changed;
 }
 
@@ -7303,13 +8057,26 @@ function openPopupCustomizeDialog(key) {
 
 function renderAccountTable() {
   const tbody = byId("accountTable");
+  const adminQuickTools = byId("accountAdminQuickTools");
+  const accountScrollActions = byId("accountScrollActions");
+  const canUseAdminTools = isAdmin();
+  adminQuickTools?.classList.toggle("is-hidden", !canUseAdminTools);
+  accountScrollActions?.classList.toggle("is-hidden", !canUseAdminTools);
   if (!canManageAccounts() && !canEditOwnAccount()) {
     tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"5\"");
     return;
   }
-  const accounts = canManageAccounts() ? state.accounts : [currentAccount()].filter(Boolean);
+  const searchText = canUseAdminTools ? normalizeSearchText(byId("accountSearch")?.value || "") : "";
+  const accounts = (canManageAccounts() ? state.accounts : [currentAccount()].filter(Boolean)).filter((account) => {
+    if (!searchText) return true;
+    const person = personById(account.personId);
+    const department = departmentById(account.departmentId || person?.departmentId);
+    return normalizeSearchText([account.displayName, account.username, person?.name, department?.name, accountRoleLabels[account.role] || account.role].join(" ")).includes(searchText);
+  });
   if (!accounts.length) {
-    tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"5\"");
+    tbody.innerHTML = searchText
+      ? '<tr><td colspan="5" class="empty-cell">Không có tài khoản phù hợp.</td></tr>'
+      : byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"5\"");
     return;
   }
   tbody.innerHTML = accounts
@@ -7543,13 +8310,22 @@ function taskProgressReportRowsHtml(task) {
   if (!reports.length) return "";
   return reports
     .map(
-      (report, index) => `
-        <div class="progress-report-row">
-          <small>Lần ${reports.length - index} · ${escapeHtml(formatDateTime(report.createdAt) || "Chưa rõ thời gian")} · ${escapeHtml(report.createdBy || "Người cập nhật")}</small>
-          <span><strong>${escapeHtml(normalizeTaskStatus(report.status))}</strong> · Tiến độ ${formatScore(report.progress)}%</span>
-          ${report.note ? `<span>${escapeHtml(report.note)}</span>` : ""}
-        </div>
-      `,
+      (report, index) => {
+        const isCompletionReview = report.type === "completion-review";
+        const reportStatus = normalizeTaskStatus(report.status || task.status);
+        const transition = report.previousStatus && report.previousStatus !== reportStatus
+          ? `Chuyển trạng thái: ${report.previousStatus} -> ${reportStatus}`
+          : reportStatus;
+        const reviewResult = report.decision === "passed" ? "Đạt" : "Không đạt";
+        return `
+          <div class="progress-report-row">
+            <small>Lần ${reports.length - index} · ${escapeHtml(formatDateTime(report.createdAt) || "Chưa rõ thời gian")} · ${escapeHtml(report.createdBy || "Người cập nhật")}</small>
+            <span><strong>${escapeHtml(isCompletionReview ? `Đánh giá hoàn thành: ${reviewResult}` : transition)}</strong>${isCompletionReview ? "" : ` · Tiến độ ${formatScore(report.progress)}%`}</span>
+            ${report.action ? `<span>${escapeHtml(report.action)}</span>` : ""}
+            ${report.note ? `<span>${escapeHtml(report.note)}</span>` : ""}
+          </div>
+        `;
+      },
     )
     .join("");
 }
@@ -7598,6 +8374,7 @@ function updateTaskResponseMeta(task) {
 
 function updateTaskFormLock(task = null) {
   const existingTask = task || state.tasks.find((item) => item.id === byId("taskId").value);
+  const adminOverride = isAdmin();
   if (!existingTask && !canAssignTasks() && byId("taskKind").value === TASK_KIND_ASSIGNED) {
     byId("taskKind").value = TASK_KIND_REGULAR;
   }
@@ -7608,10 +8385,10 @@ function updateTaskFormLock(task = null) {
     : kind === TASK_KIND_ASSIGNED
       ? canAssignTasks()
       : canCreateRegularTasks();
-  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask);
-  const canUpdateReport = existingTask ? !reportLockedByQuality && (canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
-  const statusUpdateLocked = isTaskStatusUpdateLocked(existingTask);
-  const canEditQuality = canAssessTaskQualityForPerson(ownerId || existingTask?.ownerId, byId("taskStatus").value);
+  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
+  const canUpdateReport = existingTask ? !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
+  const statusUpdateLocked = isTaskStatusUpdateLocked(existingTask) && !adminOverride;
+  const canEditQuality = !!existingTask && (adminOverride || canAssessTaskQuality(existingTask));
   const isReportOnly = !!existingTask && !canEditDetails && canUpdateTaskProgress(existingTask) && !reportLockedByQuality;
   byId("taskKind").value = kind;
   byId("taskKind").disabled = !!existingTask || !canAssignTasks();
@@ -7663,14 +8440,16 @@ function updateTaskFormLock(task = null) {
       input.disabled = !canUpdateReport;
     });
   const qualityInput = byId("taskQualityPercent");
-  if (normalizeTaskStatus(byId("taskStatus").value) !== TASK_STATUS_COMPLETED) {
+  if (!taskCompletionIsApproved(existingTask) && !adminOverride) {
     qualityInput.value = "";
   }
   qualityInput.disabled = !canEditQuality;
   qualityInput.title = canEditQuality
-    ? "Nhập tỷ lệ chất lượng sau khi công việc hoàn thành. Điểm thực hiện KPI = tỷ lệ này / 100."
-    : "Chỉ Ban giám đốc, admin, Trưởng phòng/Phó phòng được nhập khi công việc ở trạng thái Hoàn thành.";
-  byId("taskResponseStatus").disabled = !(kind === TASK_KIND_ASSIGNED && existingTask && !reportLockedByQuality && canReportTask(existingTask));
+    ? adminOverride
+      ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
+      : "Nhập tỷ lệ chất lượng sau khi công việc được đánh giá Đạt. Điểm thực hiện KPI = tỷ lệ này / 100."
+    : "Chỉ mở sau khi Trưởng phòng/Phó phòng đánh giá công việc Đạt.";
+  byId("taskResponseStatus").disabled = !(kind === TASK_KIND_ASSIGNED && existingTask && !reportLockedByQuality && (adminOverride || canReportTask(existingTask)));
   byId("taskResponseNote").disabled = !(kind === TASK_KIND_ASSIGNED && existingTask && !reportLockedByQuality && canUpdateReport);
   if (reportLockedByQuality) {
     const progressMeta = byId("taskProgressMeta");
@@ -7705,12 +8484,13 @@ function updateAssignmentTaskResponseMeta(task) {
 
 function updateAssignmentTaskFormLock(task = null) {
   const existingTask = task || state.tasks.find((item) => item.id === byId("assignmentTaskId").value);
+  const adminOverride = isAdmin();
   const isClosed = existingTask && normalizeTaskStatus(existingTask.status) === TASK_STATUS_CLOSED;
-  const canEditDetails = existingTask ? !isClosed && canEditTaskDetails(existingTask) : canAssignTaskToPerson(byId("assignmentTaskOwner").value) || canAssignTasks();
-  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask);
-  const canUpdateReport = existingTask ? !isClosed && !reportLockedByQuality && (canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
-  const statusUpdateLocked = isTaskStatusUpdateLocked(existingTask);
-  const canEditQuality = !isClosed && canAssessTaskQualityForPerson(byId("assignmentTaskOwner").value || existingTask?.ownerId, byId("assignmentTaskStatus").value);
+  const canEditDetails = existingTask ? (!isClosed || adminOverride) && canEditTaskDetails(existingTask) : canAssignTaskToPerson(byId("assignmentTaskOwner").value) || canAssignTasks();
+  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
+  const canUpdateReport = existingTask ? (!isClosed || adminOverride) && !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
+  const statusUpdateLocked = isTaskStatusUpdateLocked(existingTask) && !adminOverride;
+  const canEditQuality = (!isClosed || adminOverride) && !!existingTask && (adminOverride || canAssessTaskQuality(existingTask));
   byId("assignmentTaskAssignerLabel").value = existingTask?.assignedByName || existingTask?.createdBy || (canAssignTasks() ? currentActorInfo().name : "");
   byId("assignmentTaskForm")
     .querySelectorAll("#assignmentTaskTitle, #assignmentTaskProjectName, #assignmentTaskOwner, #assignmentTaskCollaborator, #assignmentTaskCategory, #assignmentTaskStartDate, #assignmentTaskDue, #assignmentTaskDueTime, #assignmentTaskNote")
@@ -7729,17 +8509,19 @@ function updateAssignmentTaskFormLock(task = null) {
       input.disabled = !canUpdateReport;
     });
   const qualityInput = byId("assignmentTaskQualityPercent");
-  if (normalizeTaskStatus(byId("assignmentTaskStatus").value) !== TASK_STATUS_COMPLETED) {
+  if (!taskCompletionIsApproved(existingTask) && !adminOverride) {
     qualityInput.value = "";
   }
   qualityInput.disabled = !canEditQuality;
   qualityInput.title = canEditQuality
-    ? "Nhập tỷ lệ chất lượng sau khi công việc hoàn thành. Điểm thực hiện KPI = tỷ lệ này / 100."
-    : "Chỉ Ban giám đốc, admin, Trưởng phòng/Phó phòng được nhập khi công việc ở trạng thái Hoàn thành.";
-  const canRespondToAssignment = !!existingTask && !isClosed && !reportLockedByQuality && canReportTask(existingTask);
+    ? adminOverride
+      ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
+      : "Nhập tỷ lệ chất lượng sau khi công việc được đánh giá Đạt. Điểm thực hiện KPI = tỷ lệ này / 100."
+    : "Chỉ mở sau khi Trưởng phòng/Phó phòng đánh giá công việc Đạt.";
+  const canRespondToAssignment = !!existingTask && (!isClosed || adminOverride) && !reportLockedByQuality && (adminOverride || canReportTask(existingTask));
   const collaboratorProgressOnly = !!existingTask && !canEditDetails && canCollaborateTask(existingTask) && !canReportTask(existingTask);
   byId("assignmentTaskResponseStatus").disabled = !canRespondToAssignment;
-  byId("assignmentTaskResponseNote").disabled = !(existingTask && !isClosed && !reportLockedByQuality && canUpdateReport);
+  byId("assignmentTaskResponseNote").disabled = !(existingTask && (!isClosed || adminOverride) && !reportLockedByQuality && canUpdateReport);
   byId("assignmentTaskResponseNoteLabel").textContent = collaboratorProgressOnly ? "Báo cáo tiến độ mới" : "Nội dung phản hồi / Báo cáo tiến độ";
   byId("assignmentTaskResponseNote").placeholder = collaboratorProgressOnly
     ? "Nhập nội dung báo cáo tiến độ mới. Mỗi lần lưu sẽ tạo một dòng lịch sử riêng."
@@ -7752,6 +8534,8 @@ function updateAssignmentTaskFormLock(task = null) {
     }
   }
   byId("assignmentTaskForm").querySelector("button[type='submit']").disabled = !canEditDetails && !canUpdateReport && !canEditQuality;
+  const closedOption = byId("assignmentTaskStatus").querySelector(`option[value="${TASK_STATUS_CLOSED}"]`);
+  if (closedOption) closedOption.disabled = !adminOverride;
   byId("endAssignmentTask").classList.toggle("is-hidden", !canEndTaskAssignment(existingTask));
   byId("endAssignmentTask").disabled = !canEndTaskAssignment(existingTask);
 }
@@ -7875,10 +8659,10 @@ function resetAssignmentTaskForm() {
   updateAssignmentTaskFormLock();
 }
 
-function endAssignmentTaskFromForm() {
-  const task = state.tasks.find((item) => item.id === byId("assignmentTaskId").value);
-  if (!task || !canEndTaskAssignment(task)) return;
-  if (!confirm("Kết thúc công việc này? Công việc sẽ được đóng lại và không còn hiện thông báo quá hạn.")) return;
+function endAssignmentTask(taskId = byId("assignmentTaskId").value) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task || !canEndTaskAssignment(task)) return false;
+  if (!confirm("Kết thúc công việc này? Công việc sẽ được đóng lại và không còn hiện thông báo quá hạn.")) return false;
   const timestamp = new Date().toISOString();
   const actor = currentActorInfo();
   const owner = personById(task.ownerId);
@@ -7912,6 +8696,11 @@ function endAssignmentTaskFromForm() {
   renderTaskInboxDialog();
   renderTaskBoard();
   renderDashboard();
+  return true;
+}
+
+function endAssignmentTaskFromForm() {
+  endAssignmentTask();
 }
 
 function populateDepartmentEvaluationForm(evaluation) {
@@ -7972,6 +8761,8 @@ function openHistoryTimelineTarget(target) {
     const task = state.tasks.find((item) => item.id === targetId);
     byId("taskStatusFilter").value = "";
     byId("taskSearch").value = task?.title || title || "";
+    byId("taskProjectFilter").value = "";
+    clearTaskTimeFilter();
     renderTaskBoard();
     switchView("tasks");
     if (task && isAssignedTask(task)) {
@@ -8123,6 +8914,8 @@ function openDashboardDetail(action) {
   if (action === "overdue" && canAccessView("tasks")) {
     byId("taskStatusFilter").value = "Quá hạn";
     byId("taskSearch").value = "";
+    byId("taskProjectFilter").value = "";
+    clearTaskTimeFilter();
     renderTaskBoard();
     switchView("tasks");
     return;
@@ -8221,6 +9014,7 @@ function renderAll() {
   renderRules();
   renderModuleAccessControls();
   renderAccountTable();
+  renderAccountPresence();
   renderDirectCustomization();
   applyAccessControls();
 }
@@ -8387,53 +9181,48 @@ function seedDemoData() {
 }
 
 // 🌟 Tự động kéo dữ liệu mây MỚI NHẤT ngay khi Đăng nhập thành công
-byId("loginForm").addEventListener("submit", (event) => {
+byId("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const username = byId("loginUsername").value.trim().toLowerCase();
+  const username = byId("loginUsername").value.trim();
   const password = byId("loginPassword").value;
-  const account = state.accounts.find((item) => String(item.username || "").toLowerCase() === username && item.password === password);
-  
+  byId("loginError").textContent = "";
+  const sharedLogin = await loginSharedSession(username, password);
+  if (sharedLogin.error) {
+    byId("loginError").textContent = sharedLogin.error;
+    return;
+  }
+  const remoteSupabaseLogin = usingSupabaseSync() && sharedLogin.mode === "remote";
+  const normalizedUsername = username.toLowerCase();
+  const account = state.accounts.find((item) => String(item.username || "").toLowerCase() === normalizedUsername && (remoteSupabaseLogin || item.password === password));
   if (!account) {
     byId("loginError").textContent = "Sai tài khoản hoặc mật khẩu.";
     return;
   }
-  // 🌟 THÊM ĐOẠN KIỂM TRA NÀY NGAY PHÍA DƯỚI:
   if (account.disabled) {
-    byId("loginError").textContent = "Tài khoản này đang bị vô hiệu hóa. Vui lòng liên hệ Admin!";
+    byId("loginError").textContent = "Tài khoản này đang bị vô hiệu hóa. Vui lòng liên hệ Admin.";
     return;
   }
-  // 🌟 Lưu Username chuẩn hóa làm chìa khóa phiên
-  localStorage.setItem(SESSION_KEY, account.username);
-  byId("loginError").textContent = "";
+  localStorage.setItem(SESSION_KEY, account.id);
   byId("loginForm").reset();
-  
-  saveState(); // 🌟 Lưu state ngay lập tức để F5 không bao giờ bị mất tài khoản
   renderAll();
-  
-  syncDataFromSupabase(); // Kéo mây ngầm
+  startAccountPresenceMonitoring();
 });
 
-// 🌟 ĐỒNG BỘ SIÊU TỐC GIỮA CÁC TAB TRÌNH DUYỆT (0.1 giây)
+byId("logoutButton").addEventListener("click", () => {
+  logoutSharedSession();
+  localStorage.removeItem(SESSION_KEY);
+  renderAll();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") requestAccountPresence();
+});
+
 window.addEventListener("storage", (event) => {
   if (event.key === STORAGE_KEY) {
     reloadStateFromStorage();
-    renderAll(); // Vẽ lại ngay khi tab khác thay đổi
+    renderAll();
   }
-});
-
-// ⏳ KÍCH HOẠT CHU KỲ ĐỒNG BỘ NỀN SUPABASE (3 GIÂY/LẦN BẮT TÍN HIỆU SIÊU NHANH)
-syncDataFromSupabase(); 
-setInterval(syncDataFromSupabase, 3000); // Đã giảm từ 8s xuống 3s
-window.addEventListener("focus", syncDataFromSupabase);
-
-byId("logoutButton").addEventListener("click", () => {
-  localStorage.removeItem(SESSION_KEY);
-  
-  const loginElem = document.getElementById("loginScreen");
-  if (loginElem) loginElem.style.display = "";
-  
-  renderAll();
-  window.location.reload();
 });
 
 byId("dashboard").addEventListener("click", (event) => {
@@ -9234,13 +10023,16 @@ byId("personForm").addEventListener("submit", (event) => {
   saveState();
   resetPersonForm();
   renderAll();
+  document.dispatchEvent(new CustomEvent("person-record-saved", { detail: { personId: id } }));
 });
 
 byId("resetPersonForm").addEventListener("click", resetPersonForm);
 
 byId("accountPerson").addEventListener("change", () => {
   const person = personById(byId("accountPerson").value);
-  if (person) byId("accountDepartment").value = person.departmentId;
+  if (!person) return;
+  byId("accountDepartment").value = person.departmentId;
+  byId("accountRole").value = accountRoleForPerson(person);
 });
 
 byId("accountForm").addEventListener("submit", (event) => {
@@ -9260,9 +10052,10 @@ byId("accountForm").addEventListener("submit", (event) => {
     alert("Tên đăng nhập đã tồn tại.");
     return;
   }
-  const role = ownOnly ? existing?.role : byId("accountRole").value;
   const personId = ownOnly ? existing?.personId || "" : byId("accountPerson").value;
   const linkedPerson = personById(personId);
+  const selectedRole = ownOnly ? existing?.role : byId("accountRole").value;
+  const role = linkedPerson && isPersonnelAccountRole(selectedRole) ? accountRoleForPerson(linkedPerson) : selectedRole;
   const departmentId = ownOnly ? existing?.departmentId || linkedPerson?.departmentId || "" : byId("accountDepartment").value || linkedPerson?.departmentId || "";
   if ((role === "employee" || role === "section_head" || role === "manager" || role === "deputy_manager") && !personId) {
     alert("Tài khoản nhân viên/trưởng bộ phận/trưởng nhóm/trưởng/phó phòng cần liên kết với một hồ sơ nhân sự.");
@@ -9303,6 +10096,9 @@ byId("accountForm").addEventListener("submit", (event) => {
 });
 
 byId("resetAccountForm").addEventListener("click", resetAccountForm);
+byId("refreshAccountPresence").addEventListener("click", () => {
+  if (isAdmin()) requestAccountPresence();
+});
 
 byId("moduleAccessList").addEventListener("change", (event) => {
   const moduleId = event.target.dataset.moduleToggle || event.target.dataset.moduleId;
@@ -9362,6 +10158,8 @@ byId("systemThemeForm").addEventListener("submit", (event) => {
   saveState();
   renderAll();
 });
+
+byId("accountSearch").addEventListener("input", debounce(renderAccountTable, 160));
 
 byId("accountTable").addEventListener("click", (event) => {
   const editId = event.target.dataset.editAccount;
@@ -9439,12 +10237,13 @@ byId("peopleTable").addEventListener("click", (event) => {
 async function saveTaskRecord(record, fileInput, draftAttachments, responseStatus, responseNote, progressReportNote, resetCallback) {
   const index = state.tasks.findIndex((item) => item.id === record.id);
   const existingTask = index >= 0 ? state.tasks[index] : null;
+  const adminOverride = isAdmin();
   let uploadedAttachments = [];
   try {
     uploadedAttachments = await readTaskAttachmentFiles(fileInput.files);
   } catch (error) {
     alert(error.message || "Không thể đọc hồ sơ đính kèm. Vui lòng thử lại.");
-    return;
+    return false;
   }
   const preparedRecord = {
     ...record,
@@ -9488,8 +10287,8 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     : recordKind === TASK_KIND_ASSIGNED
       ? canAssignTaskToPerson(preparedRecord.ownerId)
       : canCreateRegularTaskForPerson(preparedRecord.ownerId);
-  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask);
-  const canUpdateReport = existingTask ? !reportLockedByQuality && canUpdateTaskProgress(existingTask) : false;
+  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
+  const canUpdateReport = existingTask ? !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask)) : false;
   if (reportLockedByQuality) {
     preparedRecord.status = existingTask.status;
     preparedRecord.progress = existingTask.progress;
@@ -9499,37 +10298,41 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
   const submittedQuality = normalizeTaskQualityInput(preparedRecord.qualityPercent);
   const priorQuality = existingTask ? normalizeTaskQualityInput(existingTask.qualityPercent) : "";
   const nextStatusForQuality = normalizeTaskStatus(preparedRecord.status);
-  const canEditQuality = canAssessTaskQualityForPerson(preparedRecord.ownerId || existingTask?.ownerId, nextStatusForQuality);
-  const nextQuality = nextStatusForQuality === TASK_STATUS_COMPLETED ? (canEditQuality ? submittedQuality : priorQuality) : "";
+  const canEditQuality = !!existingTask && (adminOverride || canAssessTaskQuality(existingTask, nextStatusForQuality));
+  const nextQuality = adminOverride
+    ? (canEditQuality ? submittedQuality : priorQuality)
+    : nextStatusForQuality === TASK_STATUS_COMPLETED && taskCompletionIsApproved(existingTask)
+      ? (canEditQuality ? submittedQuality : priorQuality)
+      : "";
   const qualityChanged = String(nextQuality) !== String(priorQuality);
-  const qualityAssessmentChanged = nextStatusForQuality === TASK_STATUS_COMPLETED && qualityChanged;
+  const qualityAssessmentChanged = qualityChanged && (nextStatusForQuality === TASK_STATUS_COMPLETED || adminOverride);
   preparedRecord.qualityPercent = nextQuality;
   if (!canEditDetails && !canUpdateReport && !canEditQuality) {
     alert("Tài khoản hiện tại không có quyền lưu hoặc cập nhật công việc này.");
-    return;
+    return false;
   }
   if (!existingTask && !canEditDetails) {
     alert("Tài khoản hiện tại không có quyền tạo loại công việc này.");
-    return;
+    return false;
   }
   if (recordKind === TASK_KIND_ASSIGNED && canEditDetails && !isAdmin() && !canAssignTaskToPerson(preparedRecord.ownerId)) {
     alert("Tài khoản hiện tại chỉ được giao việc trong phạm vi phân quyền.");
-    return;
+    return false;
   }
-  if (recordKind === TASK_KIND_ASSIGNED && normalizeTaskStatus(preparedRecord.status) === TASK_STATUS_CLOSED && (!existingTask || !canEndTaskAssignment(existingTask))) {
+  if (recordKind === TASK_KIND_ASSIGNED && normalizeTaskStatus(preparedRecord.status) === TASK_STATUS_CLOSED && !adminOverride && (!existingTask || !canEndTaskAssignment(existingTask))) {
     alert("Chỉ người giao việc mới được kết thúc công việc này.");
-    return;
+    return false;
   }
   if (recordKind === TASK_KIND_REGULAR && canEditDetails && !isAdmin() && !canCreateRegularTaskForPerson(preparedRecord.ownerId)) {
     alert("Tài khoản hiện tại chỉ được tạo/sửa công việc thường kỳ trong phạm vi được xem.");
-    return;
+    return false;
   }
   if (existingTask && isTaskStatusUpdateLocked(existingTask)) {
     const statusChanged = normalizeTaskStatus(existingTask.status) !== normalizeTaskStatus(preparedRecord.status);
     const deadlineChanged = (existingTask.startDate || "") !== (preparedRecord.startDate || "") || (existingTask.due || "") !== (preparedRecord.due || "") || (existingTask.dueTime || "") !== (preparedRecord.dueTime || "");
     if (statusChanged || deadlineChanged) {
       alert("Công việc đã quá hạn quá 24 giờ. Chỉ Ban lãnh đạo hoặc admin được cập nhật lại trạng thái hoặc thời hạn hoàn thành.");
-      return;
+      return false;
     }
   }
 
@@ -9569,7 +10372,32 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
           ...existingTask,
         };
   mergedRecord.qualityPercent = nextQuality;
-  if (nextStatusForQuality !== TASK_STATUS_COMPLETED) {
+  const completionResubmitted = nextStatusForQuality === TASK_STATUS_COMPLETED && (
+    !existingTask ||
+    normalizeTaskStatus(existingTask.status) !== TASK_STATUS_COMPLETED ||
+    taskCompletionReviewStatus(existingTask) === "failed"
+  );
+  if (completionResubmitted) {
+    mergedRecord.completionReviewStatus = "pending";
+    mergedRecord.completionReviewedAt = "";
+    mergedRecord.completionReviewedById = "";
+    mergedRecord.completionReviewedByName = "";
+    mergedRecord.completionReviewNote = "";
+    if (!adminOverride) mergedRecord.qualityPercent = "";
+    mergedRecord.qualityAssessedAt = "";
+    mergedRecord.qualityAssessedById = "";
+    mergedRecord.qualityAssessedByName = "";
+  } else if (nextStatusForQuality !== TASK_STATUS_COMPLETED) {
+    mergedRecord.completionReviewStatus = "";
+    mergedRecord.completionReviewedAt = "";
+    mergedRecord.completionReviewedById = "";
+    mergedRecord.completionReviewedByName = "";
+    mergedRecord.completionReviewNote = "";
+    mergedRecord.lateCompletion = false;
+  } else if (!mergedRecord.completionReviewStatus) {
+    mergedRecord.completionReviewStatus = taskCompletionReviewStatus(existingTask);
+  }
+  if (nextStatusForQuality !== TASK_STATUS_COMPLETED && !adminOverride) {
     mergedRecord.qualityAssessedAt = "";
     mergedRecord.qualityAssessedById = "";
     mergedRecord.qualityAssessedByName = "";
@@ -9615,8 +10443,12 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     };
   }
 
+  const previousStatus = normalizeTaskStatus(existingTask?.status);
+  const nextStatus = normalizeTaskStatus(mergedRecord.status);
+  const previousComputedStatus = existingTask ? getDueStatus(existingTask) : previousStatus;
+  const nextComputedStatus = getDueStatus(mergedRecord);
   const progressChanged = existingTask && Number(existingTask.progress || 0) !== Number(mergedRecord.progress || 0);
-  const statusChanged = existingTask && normalizeTaskStatus(existingTask.status) !== normalizeTaskStatus(mergedRecord.status);
+  const statusChanged = existingTask && (previousStatus !== nextStatus || previousComputedStatus !== nextComputedStatus);
   const progressReportNoteText = String(progressReportNote || "").trim();
   const shouldAppendProgressNote = !!progressReportNoteText && (!canEditDetails || progressReportNoteText !== (existingTask?.note || ""));
   if ((existingTask && !reportLockedByQuality && (canUpdateReport || canEditDetails)) && (shouldAppendProgressNote || progressChanged || statusChanged || uploadedAttachments.length)) {
@@ -9625,7 +10457,9 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
       {
         id: uid("task-report"),
         progress: mergedRecord.progress,
-        status: normalizeTaskStatus(mergedRecord.status),
+        status: nextComputedStatus,
+        previousStatus: previousComputedStatus,
+        action: statusChanged ? "Chuyển trạng thái công việc" : "Cập nhật tiến độ công việc",
         note: shouldAppendProgressNote ? progressReportNoteText : "Cập nhật tiến độ công việc.",
         createdAt: timestamp,
         createdById: actor.id,
@@ -9634,8 +10468,6 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     ];
   }
 
-  const previousStatus = normalizeTaskStatus(existingTask?.status);
-  const nextStatus = normalizeTaskStatus(mergedRecord.status);
   if (nextStatus === "Hoàn thành" && previousStatus !== "Hoàn thành") {
     mergedRecord.completedAt = timestamp;
     mergedRecord.completedById = actor.id;
@@ -9649,7 +10481,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
   const totalAttachmentSize = mergedRecord.attachments.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
   if (totalAttachmentSize > MAX_TASK_ATTACHMENT_TOTAL_BYTES) {
     alert("Tổng dung lượng hồ sơ đính kèm của một công việc không được vượt quá 5MB.");
-    return;
+    return false;
   }
   const previousTasks = state.tasks;
   const previousActivityLog = state.activityLog;
@@ -9695,17 +10527,19 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     state.activityLog = previousActivityLog;
     state.evaluations = previousEvaluations;
     alert("Không thể lưu hồ sơ đính kèm vì dung lượng dữ liệu trình duyệt đã đầy. Vui lòng giảm số lượng hoặc dung lượng tệp.");
-    return;
+    return false;
   }
   resetCallback();
   renderAll();
+  return true;
 }
 
 byId("taskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  await saveTaskRecord(
+  const taskId = byId("taskId").value || uid("task");
+  const saved = await saveTaskRecord(
     {
-      id: byId("taskId").value || uid("task"),
+      id: taskId,
       kind: TASK_KIND_REGULAR,
       title: byId("taskTitle").value.trim(),
       projectName: byId("taskProjectName").value.trim(),
@@ -9729,13 +10563,18 @@ byId("taskForm").addEventListener("submit", async (event) => {
     byId("taskNote").value.trim(),
     resetTaskForm,
   );
+  if (saved && taskDetailInlineEditor?.taskId === taskId) {
+    restoreTaskDetailInlineEditor();
+    openTaskDetailDialog(taskId);
+  }
 });
 
 byId("assignmentTaskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  await saveTaskRecord(
+  const taskId = byId("assignmentTaskId").value || uid("task");
+  const saved = await saveTaskRecord(
     {
-      id: byId("assignmentTaskId").value || uid("task"),
+      id: taskId,
       kind: TASK_KIND_ASSIGNED,
       title: byId("assignmentTaskTitle").value.trim(),
       projectName: byId("assignmentTaskProjectName").value.trim(),
@@ -9760,6 +10599,10 @@ byId("assignmentTaskForm").addEventListener("submit", async (event) => {
       renderTaskInboxDialog();
     },
   );
+  if (saved && taskDetailInlineEditor?.taskId === taskId) {
+    restoreTaskDetailInlineEditor();
+    openTaskDetailDialog(taskId);
+  }
 });
 
 byId("resetTaskForm").addEventListener("click", resetTaskForm);
@@ -9803,7 +10646,14 @@ byId("assignmentTaskStatus").addEventListener("change", () => {
   updateAssignmentTaskFormLock();
 });
 byId("taskSearch").addEventListener("input", debounce(renderTaskBoard, 200));
+byId("taskProjectFilter").addEventListener("change", renderTaskBoard);
 byId("taskStatusFilter").addEventListener("change", renderTaskBoard);
+byId("taskDateFrom").addEventListener("change", renderTaskBoard);
+byId("taskDateTo").addEventListener("change", renderTaskBoard);
+byId("clearTaskTimeFilter").addEventListener("click", () => {
+  clearTaskTimeFilter();
+  renderTaskBoard();
+});
 document.querySelectorAll("[data-scroll-page]").forEach((button) => button.addEventListener("click", () => {
   const scrollRoot = document.scrollingElement || document.documentElement;
   const top = button.dataset.scrollPage === "bottom" ? scrollRoot.scrollHeight : 0;
@@ -9828,17 +10678,74 @@ byId("taskStatusDetailDialog").addEventListener("click", (event) => {
     closeTaskStatusDetailDialog();
   }
 });
+byId("closeTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
+byId("cancelTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
+byId("taskCompletionReviewDialog").addEventListener("click", (event) => {
+  if (event.target === byId("taskCompletionReviewDialog")) {
+    closeTaskCompletionReviewDialog();
+  }
+});
+byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const taskId = byId("taskCompletionReviewTaskId").value;
+  const decision = byId("taskCompletionReviewStatus").value;
+  if (!decision) {
+    alert("Chọn kết quả Đạt hoặc Không đạt trước khi lưu.");
+    return;
+  }
+  reviewTaskCompletion(taskId, decision, byId("taskCompletionReviewNote").value);
+  closeTaskCompletionReviewDialog();
+});
 byId("closeTaskDetail").addEventListener("click", closeTaskDetailDialog);
 byId("taskDetailDialog").addEventListener("click", (event) => {
   if (event.target === byId("taskDetailDialog")) {
     closeTaskDetailDialog();
   }
 });
+byId("taskDetailActions").addEventListener("click", (event) => {
+  const action = event.target.closest("[data-task-detail-action]")?.dataset.taskDetailAction;
+  const taskId = byId("taskDetailDialog").dataset.taskId;
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!action || !task) return;
+  if (action === "cancel-edit") {
+    openTaskDetailDialog(taskId);
+    return;
+  }
+  if (action === "edit" && canEditTaskDetails(task)) {
+    openTaskDetailInlineEditor(taskId);
+    return;
+  }
+  if (action === "report" && canUpdateTaskProgress(task)) {
+    openTaskDetailInlineEditor(taskId, isAssignedTask(task) ? "assignmentTaskResponseNote" : "taskNote");
+    return;
+  }
+  if (action === "assess" && canAssessTaskQuality(task)) {
+    openTaskDetailInlineEditor(taskId, isAssignedTask(task) ? "assignmentTaskQualityPercent" : "taskQualityPercent");
+    return;
+  }
+  if (action === "copy" && canCopyTask(task)) {
+    closeTaskDetailDialog();
+    copyTaskToForm(task);
+    return;
+  }
+  if (action === "review" && canReviewTaskCompletion(task)) {
+    closeTaskDetailDialog();
+    openTaskCompletionReviewDialog(taskId);
+    return;
+  }
+  if (action === "end" && canEndTaskAssignment(task)) {
+    if (endAssignmentTask(taskId)) closeTaskDetailDialog();
+    return;
+  }
+  if (action === "delete" && canDeleteTask(task)) {
+    if (deleteTaskRecord(taskId)) closeTaskDetailDialog();
+  }
+});
 byId("taskStatusDetailList").addEventListener("click", (event) => {
   const taskId = event.target.closest("[data-open-status-task]")?.dataset.openStatusTask;
   if (!taskId) return;
   closeTaskStatusDetailDialog();
-  openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
+  openTaskDetailDialog(taskId);
 });
 byId("closeKpiTaskDetail").addEventListener("click", closeKpiTaskDetailDialog);
 byId("kpiTaskDetailDialog").addEventListener("click", (event) => {
@@ -9871,6 +10778,7 @@ byId("taskBoard").addEventListener("click", (event) => {
   const editId = event.target.closest("[data-edit-task]")?.dataset.editTask;
   const copyId = event.target.closest("[data-copy-task]")?.dataset.copyTask;
   const respondId = event.target.closest("[data-respond-task]")?.dataset.respondTask;
+  const reviewId = event.target.closest("[data-review-task]")?.dataset.reviewTask;
   const assessId = event.target.closest("[data-assess-task]")?.dataset.assessTask;
   const deleteId = event.target.closest("[data-delete-task]")?.dataset.deleteTask;
   if (statusButton) {
@@ -9915,6 +10823,10 @@ byId("taskBoard").addEventListener("click", (event) => {
     populateTaskForm(task);
     focusEditForm("taskForm", isAssignedTask(task) ? "taskResponseStatus" : "taskNote");
   }
+  if (reviewId) {
+    openTaskCompletionReviewDialog(reviewId);
+    return;
+  }
   if (assessId) {
     const task = state.tasks.find((item) => item.id === assessId);
     if (!task || !canAssessTaskQuality(task)) return;
@@ -9930,28 +10842,7 @@ byId("taskBoard").addEventListener("click", (event) => {
     populateTaskForm(task);
     focusEditForm("taskForm", "taskQualityPercent");
   }
-  if (deleteId && confirm("Xóa công việc này?")) {
-    registerDeletedId(deleteId); // 🔥 THÊM DÒNG NÀY Ở ĐÂY
-    const task = state.tasks.find((item) => item.id === deleteId);
-    if (!task || !canDeleteTask(task)) return;
-    const owner = personById(task.ownerId);
-    state.tasks = state.tasks.filter((item) => item.id !== deleteId);
-    syncPersonalEvaluationTaskScoresForTask(null, task);
-    logActivity({
-      action: "Xóa",
-      module: "Công việc",
-      targetType: "task",
-      targetId: deleteId,
-      personId: task.ownerId,
-      departmentId: owner?.departmentId || "",
-      period: taskPeriod(task),
-      title: task.title,
-      details: `${owner?.name || "Chưa rõ người nhận"} · ${normalizeTaskStatus(task.status)}`,
-      score: `${formatScore(task.progress)}%`,
-    });
-    saveState();
-    renderAll();
-  }
+  if (deleteId) deleteTaskRecord(deleteId);
 });
 
 byId("deptEvalPeriod").addEventListener("change", loadDepartmentEvaluationForSelection);
@@ -10312,7 +11203,311 @@ async function stateForExport() {
   return exported;
 }
 
+const SPLIT_JSON_FORMAT = "phuc-thinh-kpi-split-json";
+const SPLIT_JSON_VERSION = 1;
+const SPLIT_JSON_GROUPS = new Set(["bulletins", "archive", "people-accounts", "operations"]);
+
+function splitStateForExport(exported) {
+  const period = String(exported.activePeriod || state.activePeriod || currentMonth());
+  const metadata = {
+    format: SPLIT_JSON_FORMAT,
+    version: SPLIT_JSON_VERSION,
+    exportedAt: new Date().toISOString(),
+    activePeriod: period,
+  };
+  return [
+    {
+      filename: `du-lieu-bang-tin-${period}.json`,
+      data: { ...metadata, group: "bulletins", bulletins: exported.bulletins || [] },
+    },
+    {
+      filename: `du-lieu-luu-tru-${period}.json`,
+      data: { ...metadata, group: "archive", archiveRecords: exported.archiveRecords || [] },
+    },
+    {
+      filename: `du-lieu-nhan-su-tai-khoan-${period}.json`,
+      data: {
+        ...metadata,
+        group: "people-accounts",
+        people: exported.people || [],
+        accounts: exported.accounts || [],
+        importedPeopleVersion: exported.importedPeopleVersion || "",
+      },
+    },
+    {
+      filename: `du-lieu-cong-viec-kpi-he-thong-${period}.json`,
+      data: {
+        ...metadata,
+        group: "operations",
+        tasks: exported.tasks || [],
+        evaluations: exported.evaluations || [],
+        departmentEvaluations: exported.departmentEvaluations || [],
+        moduleSettings: exported.moduleSettings || {},
+        systemCustomization: exported.systemCustomization || {},
+        activityLog: exported.activityLog || [],
+        canBoGpmbKpiCatalogVersion: exported.canBoGpmbKpiCatalogVersion || "",
+        deletedIds: exported.deletedIds || [],
+      },
+    },
+  ];
+}
+
+function downloadJsonFile(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+function selectedJsonExportGroups() {
+  return Array.from(document.querySelectorAll("input[name='jsonExportGroup']:checked"))
+    .map((input) => input.value)
+    .filter((group) => SPLIT_JSON_GROUPS.has(group));
+}
+
+function updateJsonExportSelectAll() {
+  const selectAll = byId("jsonExportSelectAll");
+  if (!selectAll) return;
+  const selectedCount = selectedJsonExportGroups().length;
+  selectAll.checked = selectedCount === SPLIT_JSON_GROUPS.size;
+  selectAll.indeterminate = selectedCount > 0 && selectedCount < SPLIT_JSON_GROUPS.size;
+}
+
+function openJsonExportDialog() {
+  if (!isAdmin()) {
+    alert("Chi tai khoan admin duoc xuat du lieu JSON.");
+    return;
+  }
+  document.querySelectorAll("input[name='jsonExportGroup']").forEach((input) => {
+    input.checked = true;
+  });
+  updateJsonExportSelectAll();
+  openModal("jsonExportDialog");
+}
+
+function closeJsonExportDialog() {
+  closeModal("jsonExportDialog");
+}
+
+async function exportSeparatedJsonData(selectedGroups = [...SPLIT_JSON_GROUPS]) {
+  if (!isAdmin()) {
+    alert("Chi tai khoan admin duoc xuat du lieu JSON.");
+    return false;
+  }
+  const selected = new Set(selectedGroups.filter((group) => SPLIT_JSON_GROUPS.has(group)));
+  if (!selected.size) {
+    alert("Vui long chon it nhat mot nhom du lieu de xuat.");
+    return false;
+  }
+  try {
+    const exported = await stateForExport();
+    splitStateForExport(exported)
+      .filter(({ data }) => selected.has(data.group))
+      .forEach(({ filename, data }) => downloadJsonFile(filename, data));
+    return true;
+  } catch (error) {
+    alert(`Khong the chuan bi du lieu xuat: ${error.message}`);
+    return false;
+  }
+}
+
+function readUploadedJsonFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Khong the doc tep ${file.name}.`));
+    reader.onload = () => {
+      try {
+        resolve(JSON.parse(String(reader.result || "")));
+      } catch {
+        reject(new Error(`Tep ${file.name} khong phai JSON hop le.`));
+      }
+    };
+    reader.readAsText(file);
+  });
+}
+
+function importBundleFromJson(data, sourceName) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error(`Tep ${sourceName} khong co cau truc du lieu hop le.`);
+  }
+  if (data.format === SPLIT_JSON_FORMAT) {
+    const group = String(data.group || "");
+    if (!SPLIT_JSON_GROUPS.has(group)) throw new Error(`Tep ${sourceName} khong thuoc nhom du lieu duoc ho tro.`);
+    return { group, data };
+  }
+  if (Array.isArray(data.people) && Array.isArray(data.tasks) && Array.isArray(data.evaluations)) {
+    return { group: "legacy", data };
+  }
+  throw new Error(`Tep ${sourceName} khong dung dinh dang JSON cua he thong.`);
+}
+
+function touchImportedRecords(records, timestamp) {
+  if (!Array.isArray(records)) return [];
+  return records.map((item) => (item && typeof item === "object" ? { ...item, updatedAt: timestamp } : item));
+}
+
+function mergeImportedRecords(localRecords, importedRecords, timestamp) {
+  const recordsById = new Map();
+  (Array.isArray(localRecords) ? localRecords : []).forEach((item) => {
+    if (item && item.id) recordsById.set(item.id, item);
+  });
+  touchImportedRecords(importedRecords, timestamp).forEach((item) => {
+    if (item && item.id) recordsById.set(item.id, item);
+  });
+  const createdAtById = new Map();
+  recordsById.forEach((item, id) => {
+    createdAtById.set(id, new Date(item.createdAt || item.assignedAt || 0).getTime() || 0);
+  });
+  return [...recordsById.values()].sort((left, right) => createdAtById.get(left.id) - createdAtById.get(right.id));
+}
+
+function requireImportArray(data, key, group) {
+  if (!Array.isArray(data[key])) throw new Error(`Nhom ${group} thieu truong ${key}.`);
+  return data[key];
+}
+
+function mergePeopleAndAccounts(target, data, timestamp, allowMissing = false) {
+  const people = Array.isArray(data.people) ? data.people : allowMissing ? null : requireImportArray(data, "people", "people-accounts");
+  const accounts = Array.isArray(data.accounts) ? data.accounts : allowMissing ? null : requireImportArray(data, "accounts", "people-accounts");
+  if (people) {
+    target.people = mergeImportedRecords(target.people, people, timestamp);
+    // Imported personnel is authoritative and must not be replaced by the
+    // bundled Excel source on another browser.
+    target.importedPeopleVersion = data.importedPeopleVersion || IMPORTED_PEOPLE_VERSION;
+  }
+  if (accounts) target.accounts = mergeImportedRecords(target.accounts, accounts, timestamp);
+}
+
+function mergeOperations(target, data, timestamp, allowMissing = false) {
+  const tasks = Array.isArray(data.tasks) ? data.tasks : allowMissing ? null : requireImportArray(data, "tasks", "operations");
+  const evaluations = Array.isArray(data.evaluations) ? data.evaluations : allowMissing ? null : requireImportArray(data, "evaluations", "operations");
+  const departmentEvaluations = Array.isArray(data.departmentEvaluations) ? data.departmentEvaluations : allowMissing ? null : requireImportArray(data, "departmentEvaluations", "operations");
+  if (tasks) target.tasks = mergeImportedRecords(target.tasks, tasks, timestamp);
+  if (evaluations) target.evaluations = mergeImportedRecords(target.evaluations, evaluations, timestamp);
+  if (departmentEvaluations) target.departmentEvaluations = mergeImportedRecords(target.departmentEvaluations, departmentEvaluations, timestamp);
+  if (data.activePeriod) target.activePeriod = data.activePeriod;
+  if (data.moduleSettings) target.moduleSettings = normalizeModuleSettings(data.moduleSettings);
+  if (data.systemCustomization) target.systemCustomization = normalizeSystemCustomization(data.systemCustomization);
+  if (Array.isArray(data.activityLog)) target.activityLog = data.activityLog;
+  if (data.canBoGpmbKpiCatalogVersion) target.canBoGpmbKpiCatalogVersion = data.canBoGpmbKpiCatalogVersion;
+  if (Array.isArray(data.deletedIds)) target.deletedIds = data.deletedIds;
+}
+
+function mergeImportBundle(target, bundle, timestamp) {
+  const { group, data } = bundle;
+  if (group === "bulletins") {
+    target.bulletins = mergeImportedRecords(target.bulletins, requireImportArray(data, "bulletins", group), timestamp);
+    return;
+  }
+  if (group === "archive") {
+    target.archiveRecords = mergeImportedRecords(target.archiveRecords, requireImportArray(data, "archiveRecords", group), timestamp);
+    return;
+  }
+  if (group === "people-accounts") {
+    mergePeopleAndAccounts(target, data, timestamp);
+    return;
+  }
+  if (group === "operations") {
+    mergeOperations(target, data, timestamp);
+    return;
+  }
+  if (group !== "legacy") throw new Error("Nhom du lieu khong duoc ho tro.");
+
+  mergePeopleAndAccounts(target, data, timestamp, true);
+  mergeOperations(target, data, timestamp, true);
+  if (Array.isArray(data.bulletins) && data.bulletins.length) target.bulletins = mergeImportedRecords(target.bulletins, data.bulletins, timestamp);
+  if (Array.isArray(data.archiveRecords) && data.archiveRecords.length) target.archiveRecords = mergeImportedRecords(target.archiveRecords, data.archiveRecords, timestamp);
+}
+
+async function importSeparatedJsonData(files) {
+  if (!isAdmin()) {
+    alert("Chi tai khoan admin duoc nhap du lieu JSON.");
+    return;
+  }
+  if (!files.length) return;
+  const jsonData = await Promise.all(files.map((file) => readUploadedJsonFile(file)));
+  const bundles = jsonData.map((data, index) => importBundleFromJson(data, files[index].name));
+  const legacyBundle = bundles.find((bundle) => bundle.group === "legacy");
+  if (legacyBundle && bundles.length !== 1) throw new Error("Tep JSON cu phai duoc nhap mot minh, khong chon kem tep da tach.");
+  const groups = new Set();
+  bundles.forEach((bundle) => {
+    if (groups.has(bundle.group)) throw new Error(`Da chon trung nhom du lieu ${bundle.group}.`);
+    groups.add(bundle.group);
+  });
+
+  const nextState = cloneStatePayload(state);
+  const timestamp = new Date().toISOString();
+  bundles.forEach((bundle) => mergeImportBundle(nextState, bundle, timestamp));
+  Object.assign(state, nextState);
+  migrateDepartmentTermLabels({ persist: false });
+  syncPersonnelAccounts();
+  const localPersist = persistState();
+  sharedSync.localChangeVersion += 1;
+  await markSharedStateDirty();
+  // Show imported records immediately. Media is moved to IndexedDB afterwards
+  // so a large JSON backup does not block the whole interface.
+  renderAll();
+  await new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(resolve);
+    else setTimeout(resolve, 0);
+  });
+  await Promise.all([
+    migrateBulletinMediaToIndexedDb({ persist: false, render: false }),
+    migrateArchiveFilesToIndexedDb({ persist: false, render: false }),
+    migrateTaskAttachmentsToIndexedDb({ persist: false }),
+  ]);
+  await localPersist;
+  await persistState();
+  queueSharedStateSync();
+  let syncResult = { ok: false, pending: true, reason: "offline" };
+  if (sharedSync.session && (sharedSync.available === true || (await probeSharedSync({ force: true })))) {
+    syncResult = await flushSharedStateSync();
+  }
+  renderAll();
+  if (syncResult.ok && !(syncResult.fileWarnings || []).length) {
+    alert("Da nhap JSON va dong bo du lieu len may chu thanh cong.");
+    return;
+  }
+  if (syncResult.ok) {
+    alert(`Da nhap va dong bo du lieu thanh cong, tru ${syncResult.fileWarnings.length} tep vuot gioi han 10MB cua may chu. Cac tep nay van duoc giu tren thiet bi nhap va duoc danh dau can xu ly.`);
+    return;
+  }
+  alert("Da nhap va luu du lieu tren thiet bi. Dong bo may chu chua hoan tat; he thong se tu dong thu lai khi ket noi on dinh. Khong nen tai JSON moi de tranh ghi de ban dang cho dong bo.");
+}
+
+byId("jsonExportSelectAll").addEventListener("change", (event) => {
+  const checked = event.target.checked;
+  document.querySelectorAll("input[name='jsonExportGroup']").forEach((input) => {
+    input.checked = checked;
+  });
+  event.target.indeterminate = false;
+});
+
+document.querySelectorAll("input[name='jsonExportGroup']").forEach((input) => {
+  input.addEventListener("change", updateJsonExportSelectAll);
+});
+
+byId("jsonExportForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const exported = await exportSeparatedJsonData(selectedJsonExportGroups());
+  if (exported) closeJsonExportDialog();
+});
+
+byId("cancelJsonExport").addEventListener("click", closeJsonExportDialog);
+
+byId("jsonExportDialog").addEventListener("click", (event) => {
+  if (event.target === byId("jsonExportDialog")) closeJsonExportDialog();
+});
+
+byId("exportData").textContent = "Xu\u1ea5t JSON";
+byId("exportData").title = "Ch\u1ecdn nh\u00f3m d\u1eef li\u1ec7u c\u1ea7n xu\u1ea5t";
+
 byId("exportData").addEventListener("click", async () => {
+  return openJsonExportDialog();
   if (!isAdmin()) {
     alert("Chỉ tài khoản admin được xuất dữ liệu JSON.");
     return;
@@ -10333,6 +11528,11 @@ byId("exportData").addEventListener("click", async () => {
 });
 
 byId("importData").addEventListener("change", (event) => {
+  const selectedFiles = Array.from(event.target.files || []);
+  event.target.value = "";
+  return importSeparatedJsonData(selectedFiles).catch((error) => {
+    alert(`Khong the nhap du lieu: ${error.message}`);
+  });
   if (!isAdmin()) {
     event.target.value = "";
     alert("Chỉ tài khoản admin được nhập dữ liệu JSON.");
@@ -10343,9 +11543,6 @@ byId("importData").addEventListener("change", (event) => {
 
   const reader = new FileReader();
   reader.onload = async () => {
-    const flags = getSyncFlags();
-    flags.isSyncing = true; // Khóa luồng quét ngầm trong lúc gộp
-
     try {
       const imported = JSON.parse(reader.result);
       if (!Array.isArray(imported.people) || !Array.isArray(imported.tasks) || !Array.isArray(imported.evaluations)) {
@@ -10388,7 +11585,7 @@ byId("importData").addEventListener("change", (event) => {
       state.evaluations = combineAndSort(state.evaluations, imported.evaluations);
       
       const mergedAccounts = combineAndSort(state.accounts, imported.accounts);
-      state.accounts = ensureDefaultAccounts(mergedAccounts);
+      state.accounts = mergedAccounts;
 
       if (imported.bulletins?.length) state.bulletins = combineAndSort(state.bulletins, imported.bulletins);
       if (imported.archiveRecords?.length) state.archiveRecords = combineAndSort(state.archiveRecords, imported.archiveRecords);
@@ -10406,18 +11603,16 @@ byId("importData").addEventListener("change", (event) => {
       await migrateArchiveFilesToIndexedDb();
       await migrateTaskAttachmentsToIndexedDb();
       
-      persistState(); 
-      
-      // Bắn file Master siêu nhẹ lên Supabase
-      await backupDataToSupabase();
+      persistState();
+      sharedSync.localChangeVersion += 1;
+      queueSharedStateSync();
+      if (sharedSync.session && sharedSync.available) await flushSharedStateSync();
       
       renderAll();
-      alert("🎉 Đã gộp dữ liệu thành công và tự động đồng bộ lên Mây cho tất cả các máy trạm!");
+      alert("Đã gộp dữ liệu thành công và đồng bộ theo phiên đăng nhập hiện tại.");
 
     } catch (error) {
       alert(`Không thể nhập dữ liệu: ${error.message}`);
-    } finally {
-      flags.isSyncing = false;
     }
   };
   reader.readAsText(file);
@@ -10448,9 +11643,6 @@ migrateTaskAttachmentsToIndexedDb();
 // =========================================================================
 // ⏳ KÍCH HOẠT CHU KỲ ĐỒNG BỘ NỀN SUPABASE STORAGE DIRECT (8 GIÂY/LẦN)
 // =========================================================================
-syncDataFromSupabase(); // Quét dữ liệu trên mây ngay lập tức khi mở trang
-setInterval(syncDataFromSupabase, 2000); // Cứ 8 giây tự động quét ngầm một lần
-window.addEventListener("focus", syncDataFromSupabase); // Quét lại khi người dùng chuyển tab quay lại phần mềm
 
 // Kịch bản kích hoạt Service Worker chạy Offline ngầm của trình duyệt
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
@@ -10569,6 +11761,57 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 /* =========================================================================
+   📱 LOGIC DỮ LIỆU & ĐĂNG XUẤT CHO POPUP MENU MOBILE
+   ========================================================================= */
+
+document.addEventListener('DOMContentLoaded', function() {
+  const openBtn = document.getElementById('openMobileMenuBtn');
+  const closeBtn = document.getElementById('closeMobileMenuBtn');
+  const popup = document.getElementById('mobileMenuPopup');
+  const logoutBtn = document.getElementById('mobileLogoutBtn');
+
+  // 1. Đồng bộ thông tin Tên + Chức vụ vào Popup mỗi khi mở Menu
+  function syncUserProfile() {
+    const mainUserLabel = document.getElementById('currentUserLabel');
+    const mainUserMeta = document.getElementById('currentUserMeta');
+    const mobileUserLabel = document.getElementById('mobileUserLabel');
+    const mobileUserMeta = document.getElementById('mobileUserMeta');
+
+    if (mainUserLabel && mobileUserLabel) {
+      mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
+    }
+    if (mainUserMeta && mobileUserMeta) {
+      mobileUserMeta.textContent = mainUserMeta.textContent || "";
+    }
+  }
+
+  // 2. Mở / Đóng Popup Menu
+  if (openBtn && popup) {
+    openBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      syncUserProfile();
+      popup.classList.toggle('is-active');
+    });
+  }
+
+  if (closeBtn && popup) {
+    closeBtn.addEventListener('click', () => popup.classList.remove('is-active'));
+  }
+
+  // 3. Xử lý bấm Đăng xuất từ Popup Mobile
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', function() {
+      const mainLogoutBtn = document.getElementById('logoutButton');
+      if (mainLogoutBtn) {
+        mainLogoutBtn.click(); // Gọi hàm Đăng xuất gốc của hệ thống
+      } else {
+        localStorage.clear();
+        location.reload();
+      }
+    });
+  }
+});
+/* =========================================================================
    📱 BẤM VÀO TÊN NHÂN SỰ ĐỂ MỞ POPUP XEM TOÀN BỘ THÔNG TIN CHI TIẾT
    ========================================================================= */
 
@@ -10580,6 +11823,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const detailContent = document.getElementById('personDetailContent');
 
   if (!peopleTable || !dialog) return;
+  return; // Replaced by the state-backed detail dialog below.
 
   // Lắng nghe cú bấm vào bất kỳ dòng nào trong bảng Nhân sự
   peopleTable.addEventListener('click', function(e) {
@@ -10640,6 +11884,200 @@ document.addEventListener('DOMContentLoaded', function() {
       dialog.classList.add('is-hidden');
       dialog.setAttribute('aria-hidden', 'true');
     }
+  });
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  const peopleTable = byId("peopleTable");
+  const dialog = byId("personDetailDialog");
+  const detailName = byId("personDetailName");
+  const detailMeta = byId("personDetailMeta");
+  const detailContent = byId("personDetailContent");
+  const editButton = byId("editPersonDetail");
+  const deleteButton = byId("deletePersonDetail");
+  const closeButton = byId("closePersonDetail");
+  if (!peopleTable || !dialog || !detailContent) return;
+
+  const detailValue = (label, value, wide = false) => `
+    <div class="person-detail-field${wide ? " person-detail-field-wide" : ""}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value || "Chưa cập nhật")}</strong>
+    </div>
+  `;
+  const detailSection = (title, content, wide = false) => `
+    <section class="person-detail-section${wide ? " person-detail-section-wide" : ""}">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="person-detail-fields">${content}</div>
+    </section>
+  `;
+  const closePersonDetail = () => {
+    // Return the shared form before hiding the dialog so the main Personnel screen remains usable.
+    restorePersonDetailInlineEditor({ reset: true });
+    dialog.classList.add("is-hidden");
+    dialog.setAttribute("aria-hidden", "true");
+    delete dialog.dataset.personId;
+  };
+  const populatePersonForm = (person) => {
+    byId("personId").value = person.id;
+    byId("personName").value = person.name || "";
+    byId("personGender").value = person.gender || "";
+    byId("personDepartment").value = person.departmentId || "";
+    updateRoleOptions(person.roleId);
+    byId("personContract").value = person.contract || "";
+    byId("personQualification").value = person.qualification || "";
+    byId("personContractTerm").value = person.contractTerm || "";
+    byId("personContractSignedDate").value = person.contractSignedDate || "";
+    byId("personPhone").value = person.phone || "";
+    byId("personBirthDate").value = person.birthDate || "";
+    byId("personSalaryCoefficient").value = person.salaryCoefficient || "";
+    byId("personSalaryGrade").value = person.salaryGrade || "";
+    byId("personSalaryReviewDate").value = person.salaryReviewDate || "";
+    byId("personAddress").value = person.address || "";
+    byId("personNote").value = person.note || "";
+    renderCustomFieldsForScope("people");
+    applyFieldCustomizations();
+    focusEditForm("personForm", "personName");
+  };
+  const restorePersonDetailInlineEditor = ({ reset = false } = {}) => {
+    if (!personDetailInlineEditor) return;
+    const { form, anchor } = personDetailInlineEditor;
+    if (anchor?.parentNode) {
+      anchor.parentNode.insertBefore(form, anchor.nextSibling);
+      anchor.remove();
+    }
+    form.classList.remove("person-detail-inline-form");
+    personDetailInlineEditor = null;
+    if (reset) resetPersonForm();
+    editButton.textContent = "Sửa hồ sơ";
+    closeButton.textContent = "×";
+    closeButton.classList.remove("person-detail-cancel");
+    closeButton.title = "Đóng";
+    closeButton.setAttribute("aria-label", "Đóng hồ sơ chi tiết");
+  };
+  const openPersonDetailInlineEditor = (person) => {
+    if (!person || !canEditPeople()) return;
+    restorePersonDetailInlineEditor({ reset: true });
+    const form = byId("personForm");
+    const anchor = document.createElement("span");
+    anchor.className = "person-detail-form-anchor";
+    form.parentNode.insertBefore(anchor, form);
+    personDetailInlineEditor = { personId: person.id, form, anchor };
+    detailName.textContent = person.name || "Hồ sơ nhân sự";
+    detailMeta.textContent = "Chỉnh sửa trực tiếp trong màn hình hồ sơ chi tiết.";
+    detailContent.className = "person-detail-editor";
+    detailContent.innerHTML = '<section><h3>Chỉnh sửa hồ sơ</h3><div id="personDetailEditorSlot"></div></section>';
+    byId("personDetailEditorSlot").append(form);
+    form.classList.add("person-detail-inline-form");
+    editButton.classList.add("is-hidden");
+    deleteButton.classList.add("is-hidden");
+    closeButton.textContent = "Hủy";
+    closeButton.classList.add("person-detail-cancel");
+    closeButton.title = "Hủy chỉnh sửa";
+    closeButton.setAttribute("aria-label", "Hủy chỉnh sửa hồ sơ");
+    populatePersonForm(person);
+  };
+  const deletePerson = (person) => {
+    if (!canEditPeople()) return;
+    if (!confirm("Xóa nhân sự này? Công việc và đánh giá liên quan vẫn được giữ để tra cứu.")) return;
+    registerDeletedId(person.id);
+    state.people = state.people.filter((item) => item.id !== person.id);
+    logActivity({
+      action: "Xóa",
+      module: "Nhân sự",
+      targetType: "person",
+      targetId: person.id,
+      personId: person.id,
+      departmentId: person.departmentId || "",
+      title: person.name || "Nhân sự đã xóa",
+      details: departmentById(person.departmentId)?.name || "",
+    });
+    closePersonDetail();
+    saveState();
+    renderAll();
+  };
+  const openPersonDetail = (personId) => {
+    restorePersonDetailInlineEditor({ reset: true });
+    const person = personById(personId);
+    if (!person) return;
+    const department = departmentById(person.departmentId)?.name || "Chưa cập nhật";
+    const role = roleById(person.roleId)?.name || "Chưa cập nhật";
+    const evaluation = latestEvaluation(person.id);
+    const account = state.accounts.find((item) => item.personId === person.id);
+    const salary = [
+      person.salaryCoefficient ? `Hệ số ${person.salaryCoefficient}` : "",
+      person.salaryGrade ? `Bậc ${person.salaryGrade}` : "",
+    ].filter(Boolean).join(" · ");
+    const kpi = evaluation
+      ? `${formatScore(evaluation.finalScore)} điểm · ${evaluation.grade}`
+      : "Chưa có kết quả KPI trong kỳ";
+
+    detailName.textContent = person.name || "Hồ sơ nhân sự";
+    detailMeta.textContent = `${department} · ${role}`;
+    detailContent.className = "person-detail-grid";
+    detailContent.innerHTML = [
+      detailSection("Thông tin cá nhân", [
+        detailValue("Giới tính", person.gender),
+        detailValue("Ngày sinh", formatDate(person.birthDate)),
+        detailValue("Điện thoại", person.phone),
+        detailValue("Địa chỉ cư trú", person.address, true),
+      ].join("")),
+      detailSection("Công tác", [
+        detailValue("Phòng", department),
+        detailValue("Vị trí", role),
+        detailValue("Trình độ chuyên môn", person.qualification, true),
+        detailValue("KPI kỳ này", kpi, true),
+      ].join("")),
+      detailSection("Hợp đồng và lương", [
+        detailValue("Loại hợp đồng", person.contract),
+        detailValue("Ngày ký hợp đồng", formatDate(person.contractSignedDate)),
+        detailValue("Thời hạn hợp đồng", person.contractTerm, true),
+        detailValue("Hệ số / bậc lương", salary),
+        detailValue("Thời điểm xét nâng lương", formatDate(person.salaryReviewDate)),
+      ].join("")),
+      detailSection("Tài khoản hệ thống", [
+        detailValue("Tên đăng nhập", account?.username || "Chưa liên kết"),
+        detailValue("Vai trò", account ? accountRoleLabels[account.role] || account.role : "Chưa liên kết"),
+      ].join("")),
+      person.note
+        ? detailSection("Ghi chú", detailValue("Thông tin bổ sung", person.note, true), true)
+        : "",
+    ].join("");
+
+    dialog.dataset.personId = person.id;
+    const canManage = canEditPeople();
+    editButton.classList.toggle("is-hidden", !canManage);
+    deleteButton.classList.toggle("is-hidden", !canManage);
+    dialog.classList.remove("is-hidden");
+    dialog.setAttribute("aria-hidden", "false");
+    closeButton.focus({ preventScroll: true });
+  };
+
+  peopleTable.addEventListener("click", (event) => {
+    if (event.target.closest("button, a, input, select, textarea, label")) return;
+    const personId = event.target.closest("tr[data-person-id]")?.dataset.personId;
+    if (personId) openPersonDetail(personId);
+  });
+  editButton.addEventListener("click", () => {
+    const person = personById(dialog.dataset.personId);
+    if (!person || !canEditPeople()) return;
+    openPersonDetailInlineEditor(person);
+  });
+  deleteButton.addEventListener("click", () => {
+    const person = personById(dialog.dataset.personId);
+    if (person) deletePerson(person);
+  });
+  closeButton.addEventListener("click", closePersonDetail);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) closePersonDetail();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !dialog.classList.contains("is-hidden")) closePersonDetail();
+  });
+  document.addEventListener("person-record-saved", (event) => {
+    const personId = event.detail?.personId;
+    if (!personId || personDetailInlineEditor?.personId !== personId) return;
+    restorePersonDetailInlineEditor();
+    openPersonDetail(personId);
   });
 });
 /* =========================================================================
@@ -10739,33 +12177,13 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 });
 
-// =========================================================================
-// 🚀 NÂNG CẤP 2.3: LẮNG NGHE SỰ KIỆN CHO CÁC TÍNH NĂNG MỚI
-// =========================================================================
-if (byId("taskProjectFilter")) byId("taskProjectFilter").addEventListener("change", renderTaskBoard);
-if (byId("taskDateFrom")) byId("taskDateFrom").addEventListener("change", renderTaskBoard);
-if (byId("taskDateTo")) byId("taskDateTo").addEventListener("change", renderTaskBoard);
-if (byId("clearTaskTimeFilter")) {
-  byId("clearTaskTimeFilter").addEventListener("click", () => {
-    clearTaskTimeFilter();
-    renderTaskBoard();
-  });
-}
 
-// Bắt sự kiện nộp Form duyệt Đạt / Không đạt
-if (byId("taskCompletionReviewForm")) {
-  byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const taskId = byId("taskCompletionReviewTaskId")?.value;
-    const decision = byId("taskCompletionReviewStatus")?.value;
-    if (!decision) {
-      alert("Chọn kết quả Đạt hoặc Không đạt trước khi lưu.");
-      return;
-    }
-    reviewTaskCompletion(taskId, decision, byId("taskCompletionReviewNote")?.value);
-    closeTaskCompletionReviewDialog();
-  });
-}
 
-if (byId("closeTaskCompletionReview")) byId("closeTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
-if (byId("cancelTaskCompletionReview")) byId("cancelTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
+// Secure cloud synchronization retained from the production baseline.
+if (!window.__phucThinhSecureSyncBooted) {
+  window.__phucThinhSecureSyncBooted = true;
+  window.addEventListener("focus", refreshSharedState);
+  window.addEventListener("online", refreshSharedState);
+  setInterval(refreshSharedState, SHARED_SYNC_REFRESH_MS);
+  restoreSharedSession();
+}

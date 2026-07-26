@@ -1266,6 +1266,23 @@ h3 {
   align-items: center;
 }
 
+.history-item-audit {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  min-width: 0;
+  text-align: right;
+}
+
+.history-item-account {
+  color: var(--primary-dark);
+  font-size: 0.78rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 .history-item h4 {
   margin: 10px 0 6px;
 }
@@ -1642,6 +1659,145 @@ body.is-customization-resizing {
 .danger-action {
   border-color: #f0b8b8;
   color: var(--bad);
+}
+
+.account-presence-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.account-presence-head {
+  align-items: center;
+}
+
+.account-presence-head h3 {
+  margin: 0;
+}
+
+.account-presence-head .eyebrow {
+  margin-bottom: 4px;
+}
+
+.account-presence-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-presence-metrics > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.account-presence-metrics span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.account-presence-metrics strong {
+  color: var(--primary-dark);
+  font-size: 1.36rem;
+  line-height: 1;
+}
+
+.account-presence-list {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.account-presence-list > .muted {
+  margin: 0;
+  padding: 13px 0;
+}
+
+.account-presence-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.account-presence-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #24966b;
+  box-shadow: 0 0 0 3px rgb(36 150 107 / 14%);
+}
+
+.account-presence-person {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-presence-person strong,
+.account-presence-person span,
+.account-presence-row time {
+  overflow-wrap: anywhere;
+}
+
+.account-presence-person span,
+.account-presence-row time {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.account-presence-row time {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.account-admin-quick-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin: 12px 0 8px;
+}
+
+.account-search-field {
+  display: grid;
+  gap: 5px;
+  width: min(420px, 100%);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.account-search-field input {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .account-presence-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .account-presence-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .account-presence-row time {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .account-admin-quick-tools {
+    justify-content: stretch;
+  }
+
+  .account-search-field {
+    width: 100%;
+  }
 }
 
 .custom-fields-container {
@@ -2310,6 +2466,30 @@ td:last-child {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(160px, 200px);
   gap: 12px;
+}
+
+.task-filter {
+  grid-template-columns: minmax(200px, 1.35fr) minmax(170px, 1fr) minmax(145px, 180px) minmax(138px, 158px) minmax(138px, 158px) auto;
+  align-items: end;
+}
+
+.task-date-filter {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.task-filter > * {
+  min-width: 0;
+}
+
+.task-filter button {
+  min-height: 36px;
+  padding: 7px 10px;
+  white-space: nowrap;
 }
 
 .filter-note {
@@ -3711,6 +3891,138 @@ td:last-child {
   padding: 16px;
 }
 
+#personDetailDialog {
+  padding: 20px;
+}
+
+.modal-card.person-detail-modal {
+  width: min(840px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  gap: 16px;
+  padding: 18px;
+  align-content: start;
+}
+
+.person-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.person-detail-identity {
+  min-width: 0;
+}
+
+.person-detail-identity .eyebrow {
+  margin-bottom: 4px;
+}
+
+.person-detail-identity h2 {
+  margin: 0;
+  color: var(--primary-dark);
+  font-size: 1.38rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.person-detail-identity .muted {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.person-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.person-detail-actions button {
+  min-height: 36px;
+  padding: 7px 11px;
+}
+
+.person-detail-actions .person-detail-close {
+  width: 36px;
+  padding: 0;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.person-detail-actions .person-detail-close.person-detail-cancel {
+  width: auto;
+  padding: 7px 11px;
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.person-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 22px;
+}
+
+.person-detail-section {
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.person-detail-section-wide {
+  grid-column: 1 / -1;
+}
+
+.person-detail-section h3 {
+  margin: 0 0 9px;
+  color: var(--primary-dark);
+  font-size: 0.94rem;
+}
+
+.person-detail-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 14px;
+  border-top: 1px solid var(--line);
+}
+
+.person-detail-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.person-detail-field-wide {
+  grid-column: 1 / -1;
+}
+
+.person-detail-field span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.person-detail-field strong {
+  color: var(--ink);
+  font-size: 0.91rem;
+  font-weight: 650;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.modal-card.task-completion-review-modal {
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  align-content: start;
+}
+
 .modal-card.task-detail-modal {
   width: min(var(--app-wide-popup-width, 980px), calc(100vw - 32px));
   max-height: calc(100vh - 32px);
@@ -3724,6 +4036,18 @@ td:last-child {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+.task-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+
+.task-detail-actions .muted {
+  font-size: 0.88rem;
 }
 
 .task-detail-meta > span {
@@ -3750,6 +4074,39 @@ td:last-child {
 .task-detail-content {
   display: grid;
   gap: 10px;
+}
+
+.task-detail-editor,
+.person-detail-editor {
+  display: grid;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.task-detail-editor > h3,
+.person-detail-editor > section > h3 {
+  margin: 0;
+  color: var(--primary-dark);
+  font-size: 1rem;
+}
+
+.task-detail-inline-form,
+.person-detail-inline-form {
+  width: 100%;
+  margin: 0;
+}
+
+.person-detail-editor > section {
+  display: grid;
+  gap: 12px;
+}
+
+.task-detail-form-anchor,
+.person-detail-form-anchor {
+  display: none;
 }
 
 .task-detail-section {
@@ -4031,7 +4388,8 @@ td:last-child {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  /* Keep every application dialog above the sticky header and mobile navigation. */
+  z-index: 10000000 !important;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -4140,6 +4498,48 @@ td:last-child {
 
 .print-option input {
   width: auto;
+}
+
+.json-export-modal {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.json-export-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.json-export-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.json-export-option:hover {
+  border-color: var(--primary);
+  background: #eef6fa;
+}
+
+.json-export-option input {
+  width: auto;
+  min-height: auto;
+  margin: 0;
+}
+
+.json-export-select-all {
+  grid-column: 1 / -1;
+  border-color: #a8c6d4;
+  background: #eaf5fa;
+  color: var(--primary-dark);
 }
 
 .rules-criteria {
@@ -4287,6 +4687,10 @@ td:last-child {
     font-size: 0.72rem;
   }
 
+  .json-export-options {
+    grid-template-columns: 1fr;
+  }
+
   #taskInboxDialog {
     padding: 10px;
   }
@@ -4308,8 +4712,51 @@ td:last-child {
     padding: 14px;
   }
 
+  #personDetailDialog {
+    padding: 10px;
+  }
+
+  .modal-card.person-detail-modal {
+    width: min(100%, calc(100vw - 20px));
+    max-height: calc(100vh - 20px);
+    padding: 15px;
+    gap: 16px;
+  }
+
+  .person-detail-header {
+    flex-direction: column;
+    gap: 11px;
+    padding-bottom: 13px;
+  }
+
+  .person-detail-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .person-detail-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .person-detail-section-wide {
+    grid-column: auto;
+  }
+
+  .person-detail-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .person-detail-field-wide {
+    grid-column: auto;
+  }
+
   .task-detail-meta {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-detail-actions {
+    width: 100%;
   }
 
   .task-detail-info-grid {
@@ -4568,6 +5015,31 @@ td:last-child {
     gap: 8px;
   }
 
+  .task-filter {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-filter #taskSearch,
+  .task-filter #taskProjectFilter,
+  .task-filter #taskStatusFilter,
+  .task-filter #clearTaskTimeFilter {
+    grid-column: 1 / -1;
+  }
+
+  .task-filter > * {
+    width: auto !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .task-date-filter {
+    font-size: 0.78rem;
+  }
+
+  .task-filter button {
+    min-height: 40px;
+  }
+
   .filter-row input,
   .filter-row select {
     min-height: 34px;
@@ -4804,6 +5276,10 @@ td:last-child {
   .task-detail-meta,
   .task-detail-info-grid {
     grid-template-columns: 1fr;
+  }
+
+  .task-detail-actions > button {
+    flex: 1 1 calc(50% - 4px);
   }
 
   .task-inbox-modal .section-head {
@@ -7306,8 +7782,7 @@ body {
     width: auto !important;
   }
 }
-/* =========================================================================
-   🔓 FIX LỖI KẸT MÀN HÌNH ĐĂNG NHẬP KHI BẤM ĐĂNG NHẬP
+  🔓 FIX LỖI KẸT MÀN HÌNH ĐĂNG NHẬP KHI BẤM ĐĂNG NHẬP
    ========================================================================= */
 
 /* 1. CHƯA ĐĂNG NHẬP: Hiện màn hình Login full-screen, ẩn ứng dụng bên dưới */
@@ -7439,259 +7914,28 @@ html.is-authenticated #loginScreen,
   font-size: 11.5px !important;
   border-radius: 4px !important;
 }
-/* =========================================================================
-   🚀 CÁC THÀNH PHẦN GIAO DIỆN NÂNG CẤP TỪ BẢN 2.3
-   ========================================================================= */
 
-/* --- 1. Bộ Lọc Công Việc Nâng Cao (Dự án & Khoảng thời gian) --- */
-.task-filter {
-  grid-template-columns: minmax(200px, 1.35fr) minmax(170px, 1fr) minmax(145px, 180px) minmax(138px, 158px) minmax(138px, 158px) auto !important;
-  align-items: end !important;
-}
-
-.task-date-filter {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-  color: #475569;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.task-filter > * {
-  min-width: 0;
-}
-
-.task-filter button {
-  min-height: 36px;
-  padding: 7px 10px;
-  white-space: nowrap;
-}
-
-/* --- 2. Popup Duyệt Hoàn Thành Công Việc (Đạt / Không đạt) --- */
-.modal-card.task-completion-review-modal {
-  width: min(620px, calc(100vw - 32px)) !important;
-  max-height: calc(100vh - 32px);
-  overflow: auto;
-  align-content: start;
-}
-
-/* --- 3. Nhúng Form Sửa Trực Tiếp Ngay Trong Popup (Inline Editor) --- */
-.task-detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-}
-
-.task-detail-actions .muted {
-  font-size: 0.88rem;
-}
-
-.task-detail-editor,
-.person-detail-editor {
-  display: grid;
-  gap: 13px;
-  padding: 14px;
-  border: 1px solid var(--line, #dfe7ef);
-  border-radius: 8px;
-  background: var(--surface-2, #fafbfd);
-}
-
-.task-detail-editor > h3,
-.person-detail-editor > section > h3 {
-  margin: 0;
-  color: var(--primary-dark, #0b4a61);
-  font-size: 1rem;
-}
-
-.task-detail-inline-form,
-.person-detail-inline-form {
-  width: 100%;
-  margin: 0;
-}
-
-.person-detail-editor > section {
-  display: grid;
-  gap: 12px;
-}
-
-.task-detail-form-anchor,
-.person-detail-form-anchor {
-  display: none;
-}
-
-/* --- 4. Popup Xem & Chỉnh Sửa Hồ Sơ Nhân Sự Chi Tiết --- */
-#personDetailDialog {
-  padding: 20px;
-}
-
-.modal-card.person-detail-modal {
-  width: min(840px, calc(100vw - 40px)) !important;
-  max-height: calc(100vh - 40px);
-  overflow: auto;
-  gap: 16px;
-  padding: 18px;
-  align-content: start;
-}
-
-.person-detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line, #dfe7ef);
-}
-
-.person-detail-identity {
-  min-width: 0;
-}
-
-.person-detail-identity .eyebrow {
-  margin-bottom: 4px;
-}
-
-.person-detail-identity h2 {
-  margin: 0;
-  color: var(--primary-dark, #0b4a61);
-  font-size: 1.38rem;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.person-detail-identity .muted {
-  margin: 5px 0 0;
-  overflow-wrap: anywhere;
-}
-
-.person-detail-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.person-detail-actions button {
-  min-height: 36px;
-  padding: 7px 11px;
-}
-
-.person-detail-actions .person-detail-close {
-  width: 36px;
-  padding: 0;
-  font-size: 1.35rem;
-  line-height: 1;
-}
-
-.person-detail-actions .person-detail-close.person-detail-cancel {
-  width: auto;
-  padding: 7px 11px;
-  font-size: 0.9rem;
-  line-height: 1.2;
-}
-
-.person-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px 22px;
-}
-
-.person-detail-section {
-  min-width: 0;
-  padding-top: 2px;
-}
-
-.person-detail-section-wide {
-  grid-column: 1 / -1;
-}
-
-.person-detail-section h3 {
-  margin: 0 0 9px;
-  color: var(--primary-dark, #0b4a61);
-  font-size: 0.94rem;
-}
-
-.person-detail-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 14px;
-  border-top: 1px solid var(--line, #dfe7ef);
-}
-
-.person-detail-field {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--line, #dfe7ef);
-}
-
-.person-detail-field-wide {
-  grid-column: 1 / -1;
-}
-
-.person-detail-field span {
-  color: var(--muted, #64748b);
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-.person-detail-field strong {
-  color: var(--text, #152033);
-  font-size: 0.91rem;
-  font-weight: 650;
-  line-height: 1.42;
-  overflow-wrap: anywhere;
-}
-
-/* --- 5. Kiểm Toán Tài Khoản Trong Nhật Ký Lịch Sử --- */
-.history-item-audit {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 5px 9px;
-  min-width: 0;
-  text-align: right;
-}
-
-.history-item-account {
-  color: var(--primary-dark, #0b4a61);
-  font-size: 0.78rem;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-
-/* --- 6. Responsive Mobile Cho Bộ Lọc Mới --- */
+/* Preserve every personnel column on touch screens and allow horizontal browsing. */
 @media (max-width: 768px) {
-  .task-filter {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  #people .table-wrap {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    width: 100% !important;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+    scrollbar-width: auto;
   }
 
-  .task-filter #taskSearch,
-  .task-filter #taskProjectFilter,
-  .task-filter #taskStatusFilter,
-  .task-filter #clearTaskTimeFilter {
-    grid-column: 1 / -1 !important;
+  #people .table-wrap table {
+    width: max-content !important;
+    min-width: 1480px !important;
+    table-layout: auto !important;
   }
 
-  .person-detail-header {
-    flex-direction: column;
-    gap: 11px;
-    padding-bottom: 13px;
-  }
-
-  .person-detail-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .person-detail-grid,
-  .person-detail-fields {
-    grid-template-columns: 1fr !important;
+  #people .table-wrap th:nth-child(n),
+  #people .table-wrap td:nth-child(n) {
+    display: table-cell !important;
+    width: auto !important;
   }
 }

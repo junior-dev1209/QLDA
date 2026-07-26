@@ -1,4 +1,4 @@
-const CACHE_NAME = "phuc-thinh-kpi-v221";
+const CACHE_NAME = "phuc-thinh-kpi-v220";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -7,7 +7,7 @@ const APP_SHELL = [
   "./supabase-config.js",
   "./script.js",
   "./manifest.webmanifest",
-  "./app-icon-phuc-thinh.png", // 👈 Nếu trong thư mục bạn tên là icon.svg thì sửa lại thành "./icon.svg" nhé
+  "./app-icon-phuc-thinh.png",
 ];
 
 self.addEventListener("install", (event) => {
