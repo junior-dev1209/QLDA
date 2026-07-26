@@ -1099,11 +1099,7 @@ const accountPresence = {
   inFlight: false,
   payload: null,
   error: "",
-};
-// =========================================================================
-// 🌟 SUPABASE DIRECT SYNC HELPER (BẢN 2.3)
-// =========================================================================
-// ❌ ĐOẠN BỊ LỖI CŨ:
+};// ❌ ĐOẠN BỊ LỖI CŨ:
 // const supabase = window.supabaseClient || window.supabase;
 
 // ✅ SỬA THÀNH (Chỉ dùng window.supabaseClient):
@@ -1129,18 +1125,48 @@ async function syncCollectionToSupabase(tableName, items) {
 }
 
 // Hàm đẩy toàn bộ các mảng dữ liệu trong state lên Supabase
-async function pushAllStateToSupabase() {
-  if (!usingSupabaseSync() && !window.supabaseClient) return;
-  
-  await Promise.all([
-    syncCollectionToSupabase("people", state.people),
-    syncCollectionToSupabase("tasks", state.tasks),
-    syncCollectionToSupabase("bulletins", state.bulletins),
-    syncCollectionToSupabase("archive_records", state.archiveRecords),
-    syncCollectionToSupabase("evaluations", state.evaluations),
-    syncCollectionToSupabase("department_evaluations", state.departmentEvaluations),
-    syncCollectionToSupabase("accounts", state.accounts)
-  ]);
+// ✅ BỔ SUNG HÀM NÀY NGAY BÊN DƯỚI pushAllStateToSupabase():
+async function pullAllStateFromSupabase() {
+  const supabase = window.supabaseClient;
+  if (!supabase || typeof supabase.from !== "function") return false;
+
+  try {
+    // Truy vấn trực tiếp 7 bảng Database
+    const [
+      { data: people },
+      { data: tasks },
+      { data: bulletins },
+      { data: archiveRecords },
+      { data: evaluations },
+      { data: departmentEvaluations },
+      { data: accounts }
+    ] = await Promise.all([
+      supabase.from("people").select("*"),
+      supabase.from("tasks").select("*"),
+      supabase.from("bulletins").select("*"),
+      supabase.from("archive_records").select("*"),
+      supabase.from("evaluations").select("*"),
+      supabase.from("department_evaluations").select("*"),
+      supabase.from("accounts").select("*")
+    ]);
+
+    // Cập nhật vào bộ nhớ State
+    if (people && people.length) state.people = people;
+    if (tasks && tasks.length) state.tasks = tasks;
+    if (bulletins && bulletins.length) state.bulletins = bulletins;
+    if (archiveRecords && archiveRecords.length) state.archiveRecords = archiveRecords;
+    if (evaluations && evaluations.length) state.evaluations = evaluations;
+    if (departmentEvaluations && departmentEvaluations.length) state.departmentEvaluations = departmentEvaluations;
+    if (accounts && accounts.length) state.accounts = accounts;
+
+    persistState();
+    renderAll();
+    console.log("✅ Đã kéo đồng bộ toàn bộ dữ liệu từ Supabase thành công!");
+    return true;
+  } catch (err) {
+    console.error("❌ Lỗi khi kéo dữ liệu từ Supabase:", err);
+    return false;
+  }
 }
 
 const TASK_STATUS_PREPARING = "Chuẩn bị thực hiện";
@@ -2435,27 +2461,13 @@ async function flushSharedStateSync() {
   }
 }
 
+// ❌ HÀM CŨ: Gọi sang Edge Function kpi-sync gây lỗi 404
+// ✅ THAY THÀNH:
 async function refreshSharedState() {
-  if (!sharedSync.session || sharedSync.inFlight || sharedSync.pending || sharedSync.dirty) return;
-  if (sharedSync.available !== true && !(await probeSharedSync({ force: true }))) return;
   if (document.activeElement?.matches("input, textarea, select") || document.querySelector(".modal-backdrop:not(.is-hidden)")) return;
-  try {
-    const { response, payload } = await sharedJsonRequest("state");
-    if (response.status === 401) {
-      sharedSync.session = false;
-      sharedSync.sessionToken = "";
-      localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-      localStorage.removeItem(SESSION_KEY);
-      stopAccountPresenceMonitoring();
-      renderAll();
-      return;
-    }
-    if (!response.ok || !payload?.state || Number(payload.revision) === sharedSync.revision) return;
-    sharedSync.revision = Number(payload.revision) || 0;
-    await adoptSharedState(payload.state);
-  } catch {
-    // Keep the last successful local view while the network is temporarily unavailable.
-  }
+  
+  // Tự động kéo dữ liệu từ các Bảng Supabase về màn hình
+  await pullAllStateFromSupabase();
 }
 
 function logoutSharedSession() {
@@ -2476,9 +2488,12 @@ function logoutSharedSession() {
   }).catch(() => {});
 }
 
+// ✅ HÀM MỚI: Khôi phục phiên làm việc & Kéo dữ liệu trực tiếp từ Bảng Supabase
 async function restoreSharedSession() {
+  // 1. Khôi phục dữ liệu lưu tạm trong bộ nhớ trình duyệt
   const restoredDurableState = await ensureDurableStateRestored();
   await restoreSharedSyncCheckpoint();
+
   if (restoredDurableState) {
     await Promise.all([
       migrateBulletinMediaToIndexedDb({ persist: false, render: false }),
@@ -2488,41 +2503,15 @@ async function restoreSharedSession() {
     await persistState();
     renderAll();
   }
-  if (!localStorage.getItem(SESSION_KEY) || !sharedSyncSupported()) return;
-  if (usingSupabaseSync() && !sharedSync.sessionToken) {
-    localStorage.removeItem(SESSION_KEY);
-    renderAll();
-    return;
-  }
-  sharedSync.session = true;
-  if (!(await probeSharedSync())) {
-    // Preserve the authenticated local session and durable snapshot while the
-    // connection is unavailable. A transient outage must not look like data loss.
-    return;
-  }
+
+  // 2. Nếu chưa đăng nhập thì không cần làm gì thêm
+  if (!localStorage.getItem(SESSION_KEY)) return;
+
+  // 3. Đã đăng nhập -> Đọc thẳng dữ liệu từ các Bảng Supabase về máy
   try {
-    const { response, payload } = await sharedJsonRequest("state");
-    if (response.status === 401) throw new Error("Session expired.");
-    if (!response.ok || !payload?.state) throw new Error("Shared state is unavailable.");
-    sharedSync.revision = Number(payload.revision) || 0;
-    if (sharedSync.dirty) {
-      await retainUnsyncedLocalChanges(payload.state);
-    } else {
-      await adoptSharedState(payload.state);
-    }
-    startAccountPresenceMonitoring();
+    await pullAllStateFromSupabase();
   } catch (error) {
-    if (String(error?.message || "") !== "Session expired.") {
-      // Keep the last locally persisted state when a request fails midway.
-      sharedSync.available = null;
-      return;
-    }
-    sharedSync.session = false;
-    sharedSync.sessionToken = "";
-    localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-    localStorage.removeItem(SESSION_KEY);
-    stopAccountPresenceMonitoring();
-    renderAll();
+    console.warn("Chưa thể kết nối kéo dữ liệu Supabase khi khởi động:", error);
   }
 }
 
