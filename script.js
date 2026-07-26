@@ -1124,6 +1124,42 @@ async function syncCollectionToSupabase(tableName, items) {
   }
 }
 
+// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE
+async function syncCollectionToSupabase(tableName, items) {
+  const supabase = window.supabaseClient;
+  if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
+
+  try {
+    const cleanItems = items.map(item => {
+      const copy = { ...item };
+      delete copy.dataUrl; 
+      return copy;
+    });
+
+    const { error } = await supabase
+      .from(tableName)
+      .upsert(cleanItems, { onConflict: 'id' });
+
+    if (error) console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error.message);
+  } catch (err) {
+    console.error(`❌ Lỗi kết nối Supabase bảng [${tableName}]:`, err);
+  }
+}
+
+async function pushAllStateToSupabase() {
+  const supabase = window.supabaseClient;
+  if (!supabase || typeof supabase.from !== "function") return;
+  
+  await Promise.all([
+    syncCollectionToSupabase("people", state.people),
+    syncCollectionToSupabase("tasks", state.tasks),
+    syncCollectionToSupabase("bulletins", state.bulletins),
+    syncCollectionToSupabase("archive_records", state.archiveRecords),
+    syncCollectionToSupabase("evaluations", state.evaluations),
+    syncCollectionToSupabase("department_evaluations", state.departmentEvaluations),
+    syncCollectionToSupabase("accounts", state.accounts)
+  ]);
+}
 // Hàm đẩy toàn bộ các mảng dữ liệu trong state lên Supabase
 // ✅ BỔ SUNG HÀM NÀY NGAY BÊN DƯỚI pushAllStateToSupabase():
 async function pullAllStateFromSupabase() {
@@ -2035,34 +2071,9 @@ function renderAccountPresence() {
     : '<p class="muted">Không có tài khoản nào đang hoạt động trong thời gian giám sát.</p>';
 }
 
+// ✅ TẮT GỌI EDGE FUNCTION KPI-SYNC CHO TÍNH NĂNG PRESENCE
 async function requestAccountPresence() {
-  if (!accountPresenceAvailable() || document.visibilityState === "hidden" || accountPresence.inFlight) return;
-  accountPresence.inFlight = true;
-  try {
-    const { response, payload } = await sharedJsonRequest("presence");
-    if (response.status === 401) {
-      sharedSync.session = false;
-      sharedSync.sessionToken = "";
-      localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-      localStorage.removeItem(SESSION_KEY);
-      stopAccountPresenceMonitoring();
-      renderAll();
-      return;
-    }
-    if (!response.ok) throw new Error(payload?.error || "Presence request failed.");
-    if (isAdmin()) {
-      accountPresence.payload = payload;
-      accountPresence.error = "";
-      renderAccountPresence();
-    }
-  } catch {
-    if (isAdmin()) {
-      accountPresence.error = "Không thể cập nhật trạng thái trực tuyến. Hệ thống sẽ tự thử lại.";
-      renderAccountPresence();
-    }
-  } finally {
-    accountPresence.inFlight = false;
-  }
+  return; // Bỏ qua không gọi kpi-sync nữa
 }
 
 function startAccountPresenceMonitoring() {
