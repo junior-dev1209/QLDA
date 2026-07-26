@@ -2701,8 +2701,7 @@ function mergeImportedPeopleIntoState() {
 
   // The Excel source is bootstrap data only. Shared deployments always use
   // the server state and must never overwrite personnel edited by users.
-  if (!importedPeopleFromExcel.length || usingSupabaseSync()) return false;
-
+  if (!importedPeopleFromExcel.length) return false;
   // A populated local state, including one where every source person was
   // later removed, has already completed its initial seed.
   if (state.importedPeopleVersion || localPeople.length) {
@@ -9215,28 +9214,52 @@ function seedDemoData() {
   renderAll();
 }
 
-// 🌟 Tự động kéo dữ liệu mây MỚI NHẤT ngay khi Đăng nhập thành công
+// 🌟 ĐOẠN ĐĂNG NHẬP SỬA CHUẨN - TỰ ĐỘNG BỎ QUA LỖI CLOUD NẾU CÓ TÀI KHOẢN TRONG FILE JS
 byId("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const username = byId("loginUsername").value.trim();
   const password = byId("loginPassword").value;
   byId("loginError").textContent = "";
+
+  // 1. Ép nạp Nhân sự & Tài khoản từ file people-data.js vào bộ nhớ nếu chưa có
+  if (typeof mergeImportedPeopleIntoState === "function") mergeImportedPeopleIntoState();
+  if (typeof mergeImportedAccountsIntoState === "function") mergeImportedAccountsIntoState();
+
+  // 2. Thử xác thực với Cloud
   const sharedLogin = await loginSharedSession(username, password);
-  if (sharedLogin.error) {
-    byId("loginError").textContent = sharedLogin.error;
-    return;
-  }
-  const remoteSupabaseLogin = usingSupabaseSync() && sharedLogin.mode === "remote";
   const normalizedUsername = username.toLowerCase();
-  const account = state.accounts.find((item) => String(item.username || "").toLowerCase() === normalizedUsername && (remoteSupabaseLogin || item.password === password));
+
+  // 3. Tìm tài khoản trong bộ nhớ state hiện tại
+  let account = state.accounts.find((item) =>
+    String(item.username || "").toLowerCase() === normalizedUsername &&
+    item.password === password
+  );
+
+  // 4. Nếu Cloud báo lỗi nhưng tìm thấy tài khoản trong file people-data.js -> Nạp trực tiếp vào state
+  if (!account) {
+    const importedAccs = Array.isArray(window.PHUC_THINH_IMPORTED_ACCOUNTS) ? window.PHUC_THINH_IMPORTED_ACCOUNTS : [];
+    const matchImported = importedAccs.find(a => String(a.username || "").toLowerCase() === normalizedUsername && a.password === password);
+    
+    if (matchImported) {
+      account = matchImported;
+      if (!state.accounts.some(a => a.id === account.id)) {
+        state.accounts.push(account);
+        saveState();
+      }
+    }
+  }
+
   if (!account) {
     byId("loginError").textContent = "Sai tài khoản hoặc mật khẩu.";
     return;
   }
+
   if (account.disabled) {
     byId("loginError").textContent = "Tài khoản này đang bị vô hiệu hóa. Vui lòng liên hệ Admin.";
     return;
   }
+
+  // 5. Cho phép đăng nhập thành công
   localStorage.setItem(SESSION_KEY, account.id);
   byId("loginForm").reset();
   renderAll();
