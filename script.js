@@ -4742,14 +4742,9 @@ function deleteTaskRecord(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task || !canDeleteTask(task)) return false;
   if (!confirm("Xóa vĩnh viễn công việc này? Dữ liệu công việc sẽ bị loại khỏi danh mục và đồng bộ xóa trên các thiết bị khác.")) return false;
-  
   registerDeletedId(taskId);
   const owner = personById(task.ownerId);
   state.tasks = state.tasks.filter((item) => item.id !== taskId);
-
-  // 🔥 CHÈN DÒNG NÀY ĐỂ XÓA CÔNG VIỆC TRÊN SUPABASE CLOUD:
-  deleteFromSupabase("tasks", taskId);
-
   syncPersonalEvaluationTaskScoresForTask(null, task);
   logActivity({
     action: "Xóa",
@@ -9999,14 +9994,10 @@ byId("archiveList").addEventListener("click", (event) => {
     focusEditForm("archiveForm", "archiveTitle");
     return;
   }
-    if (deleteId && canManageArchive() && confirm("Xóa hồ sơ lưu trữ này?")) {
-    registerDeletedId(deleteId);
+  if (deleteId && canManageArchive() && confirm("Xóa hồ sơ lưu trữ này?")) {
+    registerDeletedId(deleteId); // 🔥 THÊM DÒNG NÀY Ở ĐÂY
     const record = archiveById(deleteId);
     state.archiveRecords = (state.archiveRecords || []).filter((item) => item.id !== deleteId);
-    
-    // 🔥 CHÈN DÒNG NÀY ĐỂ XÓA TRỰC TIẾP TRÊN SUPABASE CLOUD:
-    deleteFromSupabase("archive_records", deleteId);
-
     logActivity({
       action: "Xóa",
       module: "Lưu Trữ",
@@ -10018,11 +10009,6 @@ byId("archiveList").addEventListener("click", (event) => {
       personId: record?.personId || "",
       details: `${record?.category || "Lưu Trữ"} · ${record?.status || "Đã xóa"}`,
     });
-    saveState();
-    (record?.files || []).forEach((file) => deleteStoredFile(file));
-    renderAll();
-    return;
-  }
     saveState();
     (record?.files || []).forEach((file) => deleteStoredFile(file));
     renderAll();
