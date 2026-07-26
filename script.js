@@ -9024,6 +9024,7 @@ function printSelectedSections(sectionIds) {
 function renderAll() {
   applySystemCustomization();
   applyAccessControls();
+  if (!currentAccount()) return;
   if (currentAccount()) ensureRecurringTasksForPeriod();
   byId("activePeriod").value = state.activePeriod;
   byId("evalPeriod").value = state.activePeriod;
@@ -9245,7 +9246,8 @@ byId("loginForm").addEventListener("submit", async (event) => {
 byId("logoutButton").addEventListener("click", () => {
   logoutSharedSession();
   localStorage.removeItem(SESSION_KEY);
-  renderAll();
+  localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+  location.reload(); // 🌟 Tải lại trang sạch sẽ để hiển thị màn hình Đăng nhập
 });
 
 document.addEventListener("visibilitychange", () => {
@@ -12159,59 +12161,57 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 });
-/* =========================================================================
-   📱 LOGIC DỮ LIỆU & ĐĂNG XUẤT CHO POPUP MENU MOBILE
-   ========================================================================= */
 
+/* =========================================================================
+   📱 BỘ ĐIỀU KHIỂN MOBILE MENU (ĐÃ TỐI ƯU - CHỈ GIỮ 1 ĐOẠN NÀY)
+   ========================================================================= */
 document.addEventListener('DOMContentLoaded', function() {
   const openBtn = document.getElementById('openMobileMenuBtn');
   const closeBtn = document.getElementById('closeMobileMenuBtn');
   const popup = document.getElementById('mobileMenuPopup');
   const logoutBtn = document.getElementById('mobileLogoutBtn');
 
-  // 1. Đồng bộ thông tin Tên + Chức vụ vào Popup mỗi khi mở Menu
   function syncUserProfile() {
     const mainUserLabel = document.getElementById('currentUserLabel');
     const mainUserMeta = document.getElementById('currentUserMeta');
     const mobileUserLabel = document.getElementById('mobileUserLabel');
     const mobileUserMeta = document.getElementById('mobileUserMeta');
 
-    if (mainUserLabel && mobileUserLabel) {
-      mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
-    }
-    if (mainUserMeta && mobileUserMeta) {
-      mobileUserMeta.textContent = mainUserMeta.textContent || "";
-    }
+    if (mainUserLabel && mobileUserLabel) mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
+    if (mainUserMeta && mobileUserMeta) mobileUserMeta.textContent = mainUserMeta.textContent || "";
   }
 
-  // 2. Mở / Đóng Popup Menu
   if (openBtn && popup) {
-    openBtn.addEventListener('click', function(e) {
+    openBtn.onclick = function(e) {
+      e.preventDefault();
       e.stopPropagation();
       syncUserProfile();
       popup.classList.toggle('is-active');
-    });
+    };
   }
 
   if (closeBtn && popup) {
-    closeBtn.addEventListener('click', () => popup.classList.remove('is-active'));
+    closeBtn.onclick = function(e) {
+      e.preventDefault();
+      popup.classList.remove('is-active');
+    };
   }
 
-  // 3. Xử lý bấm Đăng xuất từ Popup Mobile
   if (logoutBtn) {
     logoutBtn.addEventListener('click', function() {
       const mainLogoutBtn = document.getElementById('logoutButton');
-      if (mainLogoutBtn) {
-        mainLogoutBtn.click(); // Gọi hàm Đăng xuất gốc của hệ thống
-      } else {
-        localStorage.clear();
-        location.reload();
-      }
+      if (mainLogoutBtn) mainLogoutBtn.click();
     });
   }
+
+  document.addEventListener('click', function(e) {
+    if (popup && popup.classList.contains('is-active')) {
+      if (!popup.contains(e.target) && openBtn && !openBtn.contains(e.target)) {
+        popup.classList.remove('is-active');
+      }
+    }
+  });
 });
-
-
 
 // Secure cloud synchronization retained from the production baseline.
 if (!window.__phucThinhSecureSyncBooted) {
@@ -12224,30 +12224,23 @@ if (!window.__phucThinhSecureSyncBooted) {
 // =========================================================================
 // 🌟 ÉP NẠP TÀI KHOẢN MỚI TỪ DEFAULT ACCOUNTS ĐỂ TRÁNH KẸT LOCALSTORAGE
 // =========================================================================
+// ✅ ĐOẠN SỬA CHUẨN AN TOÀN:
 setTimeout(() => {
   if (typeof defaultAccounts === "function") {
     let changed = false;
     const defaults = defaultAccounts();
     
     defaults.forEach(defAcc => {
-      // Nếu tài khoản chưa tồn tại trong bộ nhớ thì ép thêm vào
       const exists = state.accounts.some(a => String(a.username).toLowerCase() === String(defAcc.username).toLowerCase());
       if (!exists) {
         state.accounts.push(defAcc);
         changed = true;
-      } else {
-        // Cập nhật lại mật khẩu nếu bị đổi trong code
-        const index = state.accounts.findIndex(a => String(a.username).toLowerCase() === String(defAcc.username).toLowerCase());
-        if (state.accounts[index].password !== defAcc.password) {
-          state.accounts[index].password = defAcc.password;
-          changed = true;
-        }
       }
     });
 
     if (changed) {
       persistState();
-      console.log("✅ Đã tự động cập nhật danh sách tài khoản mới vào bộ nhớ.");
+      console.log("✅ Đã bổ sung tài khoản mặc định còn thiếu.");
     }
   }
 }, 500);
