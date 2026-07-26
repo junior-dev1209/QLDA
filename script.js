@@ -12221,3 +12221,33 @@ if (!window.__phucThinhSecureSyncBooted) {
   setInterval(refreshSharedState, SHARED_SYNC_REFRESH_MS);
   restoreSharedSession();
 }
+// =========================================================================
+// 🌟 ÉP NẠP TÀI KHOẢN MỚI TỪ DEFAULT ACCOUNTS ĐỂ TRÁNH KẸT LOCALSTORAGE
+// =========================================================================
+setTimeout(() => {
+  if (typeof defaultAccounts === "function") {
+    let changed = false;
+    const defaults = defaultAccounts();
+    
+    defaults.forEach(defAcc => {
+      // Nếu tài khoản chưa tồn tại trong bộ nhớ thì ép thêm vào
+      const exists = state.accounts.some(a => String(a.username).toLowerCase() === String(defAcc.username).toLowerCase());
+      if (!exists) {
+        state.accounts.push(defAcc);
+        changed = true;
+      } else {
+        // Cập nhật lại mật khẩu nếu bị đổi trong code
+        const index = state.accounts.findIndex(a => String(a.username).toLowerCase() === String(defAcc.username).toLowerCase());
+        if (state.accounts[index].password !== defAcc.password) {
+          state.accounts[index].password = defAcc.password;
+          changed = true;
+        }
+      }
+    });
+
+    if (changed) {
+      persistState();
+      console.log("✅ Đã tự động cập nhật danh sách tài khoản mới vào bộ nhớ.");
+    }
+  }
+}, 500);
