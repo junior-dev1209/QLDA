@@ -2198,7 +2198,11 @@ async function uploadSharedBinaryFile(file) {
   const key = storedFileKey(file);
   if (!key || file?.remoteKey) return file?.remoteKey || "";
   const dataUrl = file?.dataUrl || (await readStoredFileDataUrl(file));
-  if (!dataUrl) throw new Error(`Khong tim thay du lieu tep ${file?.name || key}.`);
+    // ✅ DÒNG MỚI (Cảnh báo và bỏ qua file bị mất dữ liệu để sync tiếp):
+  if (!dataUrl) {
+    console.warn(`Đã bỏ qua tệp không tìm thấy dữ liệu: ${file?.name || key}`);
+    return file?.remoteKey || "";
+  }
   const formData = new FormData();
   formData.append("key", key);
   formData.append("file", dataUrlToBlob(dataUrl, file?.type || "application/octet-stream"), file?.name || key);
