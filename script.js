@@ -1123,6 +1123,17 @@ async function syncCollectionToSupabase(tableName, items) {
     console.error(`❌ Lỗi kết nối Supabase bảng [${tableName}]:`, err);
   }
 }
+// ✅ HÀM XÓA TRỰC TIẾP TRÊN SUPABASE CLOUD
+async function deleteFromSupabase(tableName, id) {
+  const supabase = window.supabaseClient;
+  if (!supabase || !id) return;
+  try {
+    const { error } = await supabase.from(tableName).delete().eq("id", id);
+    if (error) console.warn(`⚠️ Lỗi xóa [${tableName}]:`, error.message);
+  } catch (err) {
+    console.error(`❌ Lỗi kết nối xóa Supabase [${tableName}]:`, err);
+  }
+}
 
 // ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE
 async function syncCollectionToSupabase(tableName, items) {
@@ -9776,10 +9787,14 @@ byId("bulletinList").addEventListener("click", (event) => {
     focusEditForm("bulletinForm", "bulletinTitle");
     return;
   }
+  // ✅ CODE MỚI (Đã thêm lệnh xóa trực tiếp trên Supabase)
   if (deleteId && canManageBulletins() && confirm("Xóa tin bài này?")) {
     registerDeletedId(deleteId);
     const post = (state.bulletins || []).find((item) => item.id === deleteId);
     state.bulletins = (state.bulletins || []).filter((item) => item.id !== deleteId);
+    
+    // 🔥 ÉP SUPABASE XÓA HẲN BẢN GHI TRÊN CLOUD
+    deleteFromSupabase("bulletins", deleteId);
     logActivity({
       action: "Xóa",
       module: "Bảng tin",
