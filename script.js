@@ -716,15 +716,6 @@ function defaultAccounts() {
       departmentId: "",
     },
     {
-      id: "account-admin-1",
-      username: "adminn",
-      password: "123456",
-      displayName: "Test",
-      role: "director",
-      personId: "",
-      departmentId: "",
-    },
-    {
       id: "account-director",
       username: "daongochuan",
       password: "123456",
