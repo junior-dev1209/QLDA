@@ -1103,15 +1103,18 @@ const accountPresence = {
 // =========================================================================
 // 🌟 SUPABASE DIRECT SYNC HELPER (BẢN 2.3)
 // =========================================================================
+// ❌ ĐOẠN BỊ LỖI CŨ:
+// const supabase = window.supabaseClient || window.supabase;
+
+// ✅ SỬA THÀNH (Chỉ dùng window.supabaseClient):
 async function syncCollectionToSupabase(tableName, items) {
-  const supabase = window.supabaseClient || window.supabase;
-  if (!supabase || !Array.isArray(items) || !items.length) return;
+  const supabase = window.supabaseClient;
+  if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
 
   try {
-    // Làm sạch dữ liệu trước khi đẩy lên (Bỏ các thuộc tính tạm/DOM)
     const cleanItems = items.map(item => {
       const copy = { ...item };
-      delete copy.dataUrl; // File nhị phân nặng đã cất ở IndexedDB
+      delete copy.dataUrl; 
       return copy;
     });
 
