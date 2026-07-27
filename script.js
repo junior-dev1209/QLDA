@@ -1178,7 +1178,6 @@ async function pullAllStateFromSupabase() {
   if (!supabase || typeof supabase.from !== "function") return false;
 
   try {
-    // Truy vấn trực tiếp 7 bảng Database
     const [
       { data: people },
       { data: tasks },
@@ -1197,13 +1196,15 @@ async function pullAllStateFromSupabase() {
       supabase.from("accounts").select("*")
     ]);
 
-    // Cập nhật vào bộ nhớ State
-    if (people && people.length) state.people = people;
-    if (tasks && tasks.length) state.tasks = tasks;
-    if (bulletins && bulletins.length) state.bulletins = bulletins;
-    if (archiveRecords && archiveRecords.length) state.archiveRecords = archiveRecords;
-    if (evaluations && evaluations.length) state.evaluations = evaluations;
-    if (departmentEvaluations && departmentEvaluations.length) state.departmentEvaluations = departmentEvaluations;
+    // ✅ LỌC BỎ CÁC ID ĐÃ BỊ XÓA TRONG MEMORY (CHỐNG HỒI SINH)
+    const deletedSet = new Set(state.deletedIds || []);
+
+    if (people && people.length) state.people = people.filter(item => !deletedSet.has(item.id));
+    if (tasks && tasks.length) state.tasks = tasks.filter(item => !deletedSet.has(item.id));
+    if (bulletins && bulletins.length) state.bulletins = bulletins.filter(item => !deletedSet.has(item.id));
+    if (archiveRecords && archiveRecords.length) state.archiveRecords = archiveRecords.filter(item => !deletedSet.has(item.id));
+    if (evaluations && evaluations.length) state.evaluations = evaluations.filter(item => !deletedSet.has(item.id));
+    if (departmentEvaluations && departmentEvaluations.length) state.departmentEvaluations = departmentEvaluations.filter(item => !deletedSet.has(item.id));
     if (accounts && accounts.length) state.accounts = accounts;
 
     persistState();
@@ -1843,7 +1844,6 @@ function persistState() {
   return durableStateWritePromise;
 }
 
-// ⚡ BẢN CẤP NHẬT: saveState tự động đẩy dữ liệu lên Supabase Cloud mỗi khi có thay đổi
 function saveState() {
   persistState();
   if (sharedSync.session) {
@@ -1853,11 +1853,8 @@ function saveState() {
   scheduleDashboardRefresh();
   queueSharedStateSync();
 
-  // 🌟 ĐỒNG BỘ THẲNG LÊN SUPABASE CLOUD (Kèm chống nghẽn mạng Debounce)
-  if (window.__supabaseSyncTimer) clearTimeout(window.__supabaseSyncTimer);
-  window.__supabaseSyncTimer = setTimeout(() => {
-    pushAllStateToSupabase();
-  }, 1000); // Trì hoãn 1 giây để gom nhiều thao tác liên tiếp
+  // ✅ ĐẨY NGAY LÊN SUPABASE CLOUD
+  pushAllStateToSupabase();
 }
 
 async function restoreDurableState() {
@@ -4738,13 +4735,21 @@ function openTaskDetailInlineEditor(taskId, focusId = "") {
   }
 }
 
-function deleteTaskRecord(taskId) {
+// ✅ THÊM async VÀ await ĐỂ ĐẢM BẢO XÓA TRÊN SUPABASE XONG MỚI RENDER LAI
+async function deleteTaskRecord(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task || !canDeleteTask(task)) return false;
   if (!confirm("Xóa vĩnh viễn công việc này? Dữ liệu công việc sẽ bị loại khỏi danh mục và đồng bộ xóa trên các thiết bị khác.")) return false;
+  
   registerDeletedId(taskId);
   const owner = personById(task.ownerId);
+
+  // 1. Ép chờ Supabase xóa xong trên Cloud trước
+  await deleteFromSupabase("tasks", taskId);
+
+  // 2. Sau đó mới cập nhật lại State ở Frontend
   state.tasks = state.tasks.filter((item) => item.id !== taskId);
+
   syncPersonalEvaluationTaskScoresForTask(null, task);
   logActivity({
     action: "Xóa",
@@ -4758,6 +4763,7 @@ function deleteTaskRecord(taskId) {
     details: `${owner?.name || "Chưa rõ người nhận"} · ${normalizeTaskStatus(task.status)}`,
     score: `${formatScore(task.progress)}%`,
   });
+
   saveState();
   renderAll();
   return true;
@@ -9777,9 +9783,11 @@ byId("bulletinMediaList").addEventListener("click", (event) => {
   bulletinMediaDraft = bulletinMediaDraft.filter((file) => file.id !== removeId);
   renderBulletinMediaDraft();
 });
-byId("bulletinList").addEventListener("click", (event) => {
+// ✅ SỬA LẠI: THÊM async / await KHI XÓA BẢNG TIN
+byId("bulletinList").addEventListener("click", async (event) => {
   const editId = event.target.closest("[data-edit-bulletin]")?.dataset.editBulletin;
   const deleteId = event.target.closest("[data-delete-bulletin]")?.dataset.deleteBulletin;
+  
   if (editId) {
     if (!canManageBulletins()) return;
     const post = (state.bulletins || []).find((item) => item.id === editId);
@@ -9787,14 +9795,15 @@ byId("bulletinList").addEventListener("click", (event) => {
     focusEditForm("bulletinForm", "bulletinTitle");
     return;
   }
-  // ✅ CODE MỚI (Đã thêm lệnh xóa trực tiếp trên Supabase)
+  
   if (deleteId && canManageBulletins() && confirm("Xóa tin bài này?")) {
     registerDeletedId(deleteId);
     const post = (state.bulletins || []).find((item) => item.id === deleteId);
+
+    // 🔥 Chờ Supabase xóa xong hẳn trên Cloud
+    await deleteFromSupabase("bulletins", deleteId);
+
     state.bulletins = (state.bulletins || []).filter((item) => item.id !== deleteId);
-    
-    // 🔥 ÉP SUPABASE XÓA HẲN BẢN GHI TRÊN CLOUD
-    deleteFromSupabase("bulletins", deleteId);
     logActivity({
       action: "Xóa",
       module: "Bảng tin",
@@ -9809,6 +9818,7 @@ byId("bulletinList").addEventListener("click", (event) => {
     renderAll();
     return;
   }
+
   if (event.target.closest("a, video, audio, iframe, object, embed")) return;
   const openId = event.target.closest("[data-open-bulletin]")?.dataset.openBulletin;
   if (openId) openBulletinDetailDialog(openId);
@@ -9985,18 +9995,25 @@ byId("archiveFileList").addEventListener("click", (event) => {
   archiveFileDraft = archiveFileDraft.filter((file) => file.id !== removeId);
   renderArchiveFileDraft();
 });
-byId("archiveList").addEventListener("click", (event) => {
+// ✅ SỬA LẠI: DỌN SẠCH CODE DƯ VÀ THÊM await XÓA CLOUD
+byId("archiveList").addEventListener("click", async (event) => {
   const editId = event.target.closest("[data-edit-archive]")?.dataset.editArchive;
   const deleteId = event.target.closest("[data-delete-archive]")?.dataset.deleteArchive;
+  
   if (editId) {
     if (!canManageArchive()) return;
     populateArchiveForm(archiveById(editId));
     focusEditForm("archiveForm", "archiveTitle");
     return;
   }
+  
   if (deleteId && canManageArchive() && confirm("Xóa hồ sơ lưu trữ này?")) {
-    registerDeletedId(deleteId); // 🔥 THÊM DÒNG NÀY Ở ĐÂY
+    registerDeletedId(deleteId);
     const record = archiveById(deleteId);
+
+    // 🔥 Chờ Supabase xóa xong hẳn trên Cloud
+    await deleteFromSupabase("archive_records", deleteId);
+
     state.archiveRecords = (state.archiveRecords || []).filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -10014,6 +10031,7 @@ byId("archiveList").addEventListener("click", (event) => {
     renderAll();
     return;
   }
+
   if (handleArchiveRelatedTarget(event)) return;
   if (event.target.closest("a, button, video, audio, object, embed")) return;
   const openId = event.target.closest("[data-open-archive-detail]")?.dataset.openArchiveDetail;
@@ -10242,19 +10260,27 @@ byId("systemThemeForm").addEventListener("submit", (event) => {
 
 byId("accountSearch").addEventListener("input", debounce(renderAccountTable, 160));
 
-byId("accountTable").addEventListener("click", (event) => {
+// ✅ SỬA LẠI: BỔ SUNG LỆNH XÓA TÀI KHOẢN TRÊN SUPABASE CLOUD
+byId("accountTable").addEventListener("click", async (event) => {
   const editId = event.target.dataset.editAccount;
   const deleteId = event.target.dataset.deleteAccount;
+
   if (editId) {
     if (!canManageAccounts() && !(canEditOwnAccount() && editId === currentAccount()?.id)) return;
     const account = accountById(editId);
     populateAccountForm(account);
     focusEditForm("accountForm", "accountDisplayName");
   }
+
   if (deleteId && canManageAccounts() && deleteId !== currentAccount()?.id && confirm("Xóa tài khoản này?")) {
+    registerDeletedId(deleteId);
     const account = accountById(deleteId);
     const linkedPerson = personById(account?.personId);
-    state.accounts = state.accounts.filter((account) => account.id !== deleteId);
+
+    // 🔥 Xóa trực tiếp tài khoản trên Supabase Cloud
+    await deleteFromSupabase("accounts", deleteId);
+
+    state.accounts = state.accounts.filter((acc) => acc.id !== deleteId);
     logActivity({
       action: "Xóa",
       module: "Tài khoản",
@@ -10270,35 +10296,25 @@ byId("accountTable").addEventListener("click", (event) => {
   }
 });
 
-byId("peopleTable").addEventListener("click", (event) => {
+// ✅ SỬA LẠI: BỔ SUNG LỆNH XÓA NHÂN SỰ TRÊN SUPABASE CLOUD
+byId("peopleTable").addEventListener("click", async (event) => {
   const editId = event.target.dataset.editPerson;
   const deleteId = event.target.dataset.deletePerson;
   if ((editId || deleteId) && !canEditPeople()) return;
+
   if (editId) {
     const person = personById(editId);
-    byId("personId").value = person.id;
-    byId("personName").value = person.name;
-    byId("personGender").value = person.gender || "";
-    byId("personDepartment").value = person.departmentId;
-    updateRoleOptions(person.roleId);
-    byId("personContract").value = person.contract;
-    byId("personQualification").value = person.qualification || "";
-    byId("personContractTerm").value = person.contractTerm || "";
-    byId("personContractSignedDate").value = person.contractSignedDate || "";
-    byId("personPhone").value = person.phone;
-    byId("personBirthDate").value = person.birthDate || "";
-    byId("personSalaryCoefficient").value = person.salaryCoefficient || "";
-    byId("personSalaryGrade").value = person.salaryGrade || "";
-    byId("personSalaryReviewDate").value = person.salaryReviewDate || "";
-    byId("personAddress").value = person.address || "";
-    byId("personNote").value = person.note;
-    renderCustomFieldsForScope("people");
-    applyFieldCustomizations();
+    populatePersonForm(person);
     focusEditForm("personForm", "personName");
   }
+
   if (deleteId && confirm("Xóa nhân sự này? Công việc và đánh giá liên quan vẫn được giữ để tra cứu.")) {
-    registerDeletedId(deleteId); // 🔥 THÊM DÒNG NÀY Ở ĐÂY
+    registerDeletedId(deleteId);
     const person = personById(deleteId);
+
+    // 🔥 Xóa trực tiếp nhân sự trên Supabase Cloud
+    await deleteFromSupabase("people", deleteId);
+
     state.people = state.people.filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -11021,7 +11037,7 @@ byId("departmentEvaluationForm").addEventListener("submit", (event) => {
 
 byId("resetDeptEvalForm").addEventListener("click", resetDepartmentEvaluationForm);
 
-byId("departmentEvaluationTable").addEventListener("click", (event) => {
+byId("departmentEvaluationTable").addEventListener("click", async (event) => {
   const editId = event.target.dataset.editDeptEval;
   const deleteId = event.target.dataset.deleteDeptEval;
   if (editId) {
@@ -11033,6 +11049,11 @@ byId("departmentEvaluationTable").addEventListener("click", (event) => {
   if (deleteId && confirm("Xóa phiếu KPI phòng này? Điểm phòng trong các phiếu cá nhân đã lưu sẽ được giữ nguyên.")) {
     const evaluation = state.departmentEvaluations.find((item) => item.id === deleteId);
     if (!evaluation || !canEditDepartmentEvaluation(evaluation.departmentId, evaluation.period)) return;
+    
+    registerDeletedId(deleteId);
+    // 🔥 Xóa KPI phòng trên Supabase Cloud
+    await deleteFromSupabase("department_evaluations", deleteId);
+
     state.departmentEvaluations = state.departmentEvaluations.filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -11150,7 +11171,8 @@ byId("clearEvaluationGradeFilter").addEventListener("click", () => {
   renderEvaluationTable();
 });
 
-byId("evaluationTable").addEventListener("click", (event) => {
+// ✅ SỬA THÀNH:
+byId("evaluationTable").addEventListener("click", async (event) => {
   const editId = event.target.dataset.editEval;
   const deleteId = event.target.dataset.deleteEval;
   if (editId) {
@@ -11172,6 +11194,11 @@ byId("evaluationTable").addEventListener("click", (event) => {
     const evaluation = state.evaluations.find((item) => item.id === deleteId);
     if (!evaluation || !canEditEvaluation(evaluation.personId, evaluation.period)) return;
     const person = personById(evaluation.personId);
+    
+    registerDeletedId(deleteId);
+    // 🔥 Xóa KPI cá nhân trên Supabase Cloud
+    await deleteFromSupabase("evaluations", deleteId);
+
     state.evaluations = state.evaluations.filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -12057,10 +12084,13 @@ document.addEventListener("DOMContentLoaded", () => {
     closeButton.setAttribute("aria-label", "Hủy chỉnh sửa hồ sơ");
     populatePersonForm(person);
   };
-  const deletePerson = (person) => {
+  
+  const deletePerson = async (person) => {
     if (!canEditPeople()) return;
     if (!confirm("Xóa nhân sự này? Công việc và đánh giá liên quan vẫn được giữ để tra cứu.")) return;
     registerDeletedId(person.id);
+    // 🔥 Xóa trực tiếp nhân sự trên Supabase Cloud
+    await deleteFromSupabase("people", person.id);
     state.people = state.people.filter((item) => item.id !== person.id);
     logActivity({
       action: "Xóa",
