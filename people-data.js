@@ -172,22 +172,6 @@ window.PHUC_THINH_IMPORTED_ACCOUNTS = [
     "updatedById": "account-admin"
   },
   {
-    "id": "account-mreqe57p-wxmcdc",
-    "username": "lehonglinh",
-    "password": "123456",
-    "displayName": "Lê Hồng Linh",
-    "role": "employee",
-    "personId": "excel-s1-r19",
-    "departmentId": "ke-hoach",
-    "customFields": {},
-    "createdAt": "2026-07-10T09:26:29.605Z",
-    "createdBy": "Chưa đăng nhập",
-    "createdById": "account-admin",
-    "updatedAt": "2026-07-23T06:13:31.108Z",
-    "updatedBy": "Admin tổng hợp",
-    "updatedById": "account-admin"
-  },
-  {
     "id": "account-person-person-mrd8tbys-10hkvj",
     "username": "tranduytung",
     "password": "123456",
