@@ -2020,10 +2020,14 @@ function accountPresenceRelativeTime(timestamp) {
   return `${minutes} phút trước`;
 }
 
+/* =========================================================================
+   🟢 HÀM GIÁM SÁT TÀI KHOẢN & VẼ THANH TRẠNG THÁI HOẠT ĐỘNG (FACEBOOK STYLE)
+   ========================================================================= */
+
 function renderAccountPresence() {
   const panel = byId("accountPresencePanel");
   if (!panel) return;
-  const canMonitor = isAdmin();
+  const canMonitor = isAdmin() || isDirector() || hasDepartmentManagementAccess();
   panel.classList.toggle("is-hidden", !canMonitor);
   if (!canMonitor) return;
 
@@ -2042,6 +2046,7 @@ function renderAccountPresence() {
       ? "Đang kết nối máy chủ để cập nhật trạng thái trực tuyến."
       : "Giám sát trực tuyến yêu cầu cấu hình Supabase Cloud.";
     list.innerHTML = '<p class="muted">Chưa có dữ liệu giám sát trực tuyến.</p>';
+    renderActiveStatusBar(); // 🟢 Cập nhật thanh Facebook
     return;
   }
 
@@ -2052,6 +2057,7 @@ function renderAccountPresence() {
     monthCount.textContent = "...";
     status.textContent = accountPresence.error || "Đang cập nhật trạng thái trực tuyến...";
     list.innerHTML = '<p class="muted">Đang tải danh sách tài khoản trực tuyến...</p>';
+    renderActiveStatusBar(); // 🟢 Cập nhật thanh Facebook
     return;
   }
 
@@ -2077,11 +2083,119 @@ function renderAccountPresence() {
         })
         .join("")
     : '<p class="muted">Không có tài khoản nào đang hoạt động trong thời gian giám sát.</p>';
+
+  // 🟢 THÊM DÒNG NÀY ĐỂ TỰ ĐỘNG CẬP NHẬT THANH BONG BÓNG ONLINE FACEBOOK
+  renderActiveStatusBar();
 }
 
-// ✅ TẮT GỌI EDGE FUNCTION KPI-SYNC CHO TÍNH NĂNG PRESENCE
+// 🟢 HÀM CẬP NHẬT THANH TRẠNG THÁI ONLINE (HIỂN THỊ ĐẦY ĐỦ HỌ TÊN + CHỨC VỤ)
+function renderActiveStatusBar() {
+  const bar = byId("activeStatusBar");
+  const list = byId("activeUserList");
+  const countElem = byId("activeUserCount");
+  const floatBtn = byId("openActiveStatusFloatingBtn");
+  const floatCount = byId("floatingUserCount");
+
+  if (!bar || !list) return;
+
+  const onlineAccounts = accountPresence?.payload?.onlineAccounts || [];
+  const count = onlineAccounts.length;
+
+  if (countElem) countElem.textContent = String(count);
+  if (floatCount) floatCount.textContent = String(count);
+
+  if (!count) {
+    bar.classList.add("is-hidden");
+    if (floatBtn) floatBtn.classList.add("is-hidden");
+    return;
+  }
+
+  // Bật hiển thị thanh trạng thái
+  bar.classList.remove("is-hidden");
+  if (floatBtn) floatBtn.classList.remove("is-hidden");
+
+  // Vẽ danh sách tài khoản
+  list.innerHTML = onlineAccounts
+    .map((acc) => {
+      // 🌟 LẤY HỌ TÊN ĐẦY ĐỦ (Ví dụ: Kỹ Thuật Viên)
+      const fullName = acc.displayName || acc.username || "Tài khoản";
+      const initial = fullName.charAt(0).toUpperCase();
+      
+      // Lấy thông tin Chức vụ & Phòng ban
+      const roleText = accountRoleLabels[acc.role] || acc.role || "";
+      const deptObj = departmentById(acc.departmentId);
+      const deptText = deptObj ? deptObj.name : "";
+      const subInfo = [roleText, deptText].filter(Boolean).join(" · ");
+
+      return `
+        <div class="active-user-item">
+          <div class="active-avatar-box">
+            ${escapeHtml(initial)}
+            <span class="active-dot"></span>
+          </div>
+          <div class="active-user-info">
+            <span class="active-user-fullname">${escapeHtml(fullName)}</span>
+            ${subInfo ? `<span class="active-user-role">${escapeHtml(subInfo)}</span>` : ""}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+// 🌟 CẬP NHẬT TRẠNG THÁI ONLINE & GIÁM SÁT TÀI KHOẢN QUA SUPABASE
 async function requestAccountPresence() {
-  return; // Bỏ qua không gọi kpi-sync nữa
+  const account = currentAccount();
+  const supabase = window.supabaseClient;
+  if (!account || !supabase) return;
+
+  const now = new Date().toISOString();
+
+  try {
+    // 1. Gửi tín hiệu "Heartbeat" cập nhật thời gian hoạt động của tài khoản hiện tại
+    await supabase
+      .from("accounts")
+      .update({ last_seen_at: now })
+      .eq("id", account.id);
+
+    // 2. Nếu là Admin -> Lấy danh sách tài khoản đang Online (hoạt động trong 2 phút gần nhất)
+    if (isAdmin()) {
+      const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+      const startOfToday = new Date(new Date().setHours(0,0,0,0)).toISOString();
+
+      // Lấy danh sách đang online
+      const { data: onlineList } = await supabase
+        .from("accounts")
+        .select("*")
+        .gte("last_seen_at", twoMinutesAgo);
+
+      // Lấy số lượng tài khoản đã truy cập trong ngày
+      const { data: todayList } = await supabase
+        .from("accounts")
+        .select("id")
+        .gte("last_seen_at", startOfToday);
+
+      if (onlineList) {
+        accountPresence.payload = {
+          onlineCount: onlineList.length,
+          todayUniqueAccounts: todayList ? todayList.length : onlineList.length,
+          monthUniqueAccounts: state.accounts.length,
+          generatedAt: now,
+          onlineWindowSeconds: 120,
+          onlineAccounts: onlineList.map(acc => ({
+            displayName: acc.displayName || acc.display_name || acc.username,
+            username: acc.username,
+            role: acc.role,
+            departmentId: acc.departmentId || acc.department_id,
+            lastSeenAt: acc.last_seen_at || acc.lastSeenAt
+          }))
+        };
+        renderAccountPresence();
+      }
+    }
+  } catch (err) {
+    console.warn("⚠️ Chưa thể cập nhật trạng thái trực tuyến:", err);
+  }
 }
 
 function startAccountPresenceMonitoring() {
@@ -9083,6 +9197,11 @@ function renderAll() {
   renderAccountPresence();
   renderDirectCustomization();
   applyAccessControls();
+
+  // 🌟 ĐOẠN MỚI CHÈN THÊM VÀO ĐÂY:
+  if (typeof requestAccountPresence === "function") {
+    requestAccountPresence();
+  }
 }
 
 function resetPersonForm() {
@@ -12165,4 +12284,82 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     }
   });
+});
+// 🟢 HÀM CẬP NHẬT THANH TRẠNG THÁI ONLINE CHUẨN KỂU FACEBOOK
+function renderActiveStatusBar() {
+  const bar = byId("activeStatusBar");
+  const list = byId("activeUserList");
+  const countElem = byId("activeUserCount");
+  const floatBtn = byId("openActiveStatusFloatingBtn");
+  const floatCount = byId("floatingUserCount");
+
+  if (!bar || !list) return;
+
+  const onlineAccounts = accountPresence?.payload?.onlineAccounts || [];
+  const count = onlineAccounts.length;
+
+  if (countElem) countElem.textContent = String(count);
+  if (floatCount) floatCount.textContent = String(count);
+
+  if (!count) {
+    bar.classList.add("is-hidden");
+    if (floatBtn) floatBtn.classList.add("is-hidden");
+    return;
+  }
+
+  // Bật hiển thị thanh trạng thái
+  bar.classList.remove("is-hidden");
+  if (floatBtn) floatBtn.classList.remove("is-hidden");
+
+  // Vẽ danh sách tài khoản theo giao diện Facebook
+  list.innerHTML = onlineAccounts
+    .map((acc) => {
+      const fullName = acc.displayName || acc.username || "Tài khoản";
+      const initial = fullName.charAt(0).toUpperCase();
+      const roleText = accountRoleLabels[acc.role] || acc.role || "";
+      const deptObj = departmentById(acc.departmentId);
+      const deptText = deptObj ? deptObj.name : "";
+      const subInfo = [roleText, deptText].filter(Boolean).join(" · ");
+
+      return `
+        <div class="active-user-item" title="${escapeHtml(fullName)} (${escapeHtml(subInfo || "Đang hoạt động")})">
+          <div class="active-avatar-box">
+            ${escapeHtml(initial)}
+            <span class="active-dot"></span>
+          </div>
+          <div class="active-user-info">
+            <span class="active-user-fullname">${escapeHtml(fullName)}</span>
+            <span class="active-user-role">${escapeHtml(subInfo || "Đang hoạt động")}</span>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+// 🟢 BỘ ĐIỀU KHIỂN THU GỌN / MỞ RỘNG THANH ONLINE TRÊN PC & MOBILE
+document.addEventListener("DOMContentLoaded", () => {
+  const bar = byId("activeStatusBar");
+  const toggleBtn = byId("toggleActiveStatusBtn");
+  const floatBtn = byId("openActiveStatusFloatingBtn");
+
+  // Bấm nút "-" trên đầu thanh Online -> Thu gọn
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      if (bar) {
+        bar.classList.add("is-collapsed");
+        if (floatBtn) floatBtn.classList.remove("is-hidden");
+      }
+    });
+  }
+
+  // Bấm vào Nút nổi góc dưới bên phải -> Mở lại thanh Online
+  if (floatBtn) {
+    floatBtn.addEventListener("click", () => {
+      if (bar) {
+        bar.classList.remove("is-collapsed");
+        floatBtn.classList.add("is-hidden");
+      }
+    });
+  }
 });
