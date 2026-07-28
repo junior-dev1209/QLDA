@@ -1099,30 +1099,7 @@ const accountPresence = {
   inFlight: false,
   payload: null,
   error: "",
-};// ❌ ĐOẠN BỊ LỖI CŨ:
-// const supabase = window.supabaseClient || window.supabase;
-
-// ✅ SỬA THÀNH (Chỉ dùng window.supabaseClient):
-async function syncCollectionToSupabase(tableName, items) {
-  const supabase = window.supabaseClient;
-  if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
-
-  try {
-    const cleanItems = items.map(item => {
-      const copy = { ...item };
-      delete copy.dataUrl; 
-      return copy;
-    });
-
-    const { error } = await supabase
-      .from(tableName)
-      .upsert(cleanItems, { onConflict: 'id' });
-
-    if (error) console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error.message);
-  } catch (err) {
-    console.error(`❌ Lỗi kết nối Supabase bảng [${tableName}]:`, err);
-  }
-}
+};
 // ✅ HÀM XÓA TRỰC TIẾP TRÊN SUPABASE CLOUD
 async function deleteFromSupabase(tableName, id) {
   const supabase = window.supabaseClient;
