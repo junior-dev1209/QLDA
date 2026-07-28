@@ -7252,14 +7252,6 @@ body {
    ========================================================================= */
 
 @media (min-width: 769px) {
-  /* 1. Đảm bảo form chạy lưới 4 cột tiêu chuẩn */
-  #archiveForm {
-    display: grid !important;
-    grid-template-columns: repeat(4, 1fr) !important;
-    gap: 14px 16px !important; /* Khoảng cách dọc 14px, ngang 16px */
-    align-items: start !important;
-  }
-
   /* Thẻ textarea tự động giãn nở lấp đầy chiều cao 100% */
   #archiveDescription {
     flex: 1 !important;
@@ -7958,5 +7950,789 @@ body.mobile-menu-open .mobile-menu-popup {
   /* 4. Tắt transition thay đổi lưới layout */
   .layout {
     transition: none !important;
+  }
+}
+/* =========================================================================
+   🟢 GIAO DIỆN THANH ONLINE (PC: THANH THU GỌN | MOBILE: BẢNG TRƯỢT TÊN ĐẦY ĐỦ)
+   ========================================================================= */
+
+.online-pulse {
+  width: 9px;
+  height: 9px;
+  background: #10b981;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  animation: pulse 1.8s infinite;
+  display: inline-block;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+/* 💻 1. HIỂN THỊ TRÊN MÁY TÍNH (PC >= 769px) */
+@media (min-width: 769px) {
+  .active-status-bar {
+    background: #ffffff !important;
+    border: 1px solid var(--line, #dfe7ef) !important;
+    border-radius: 12px !important;
+    padding: 10px 16px !important;
+    margin-bottom: 16px !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04) !important;
+  }
+
+  .active-status-container {
+    display: flex !important;
+    align-items: center !important;
+    gap: 16px !important;
+  }
+
+  .active-status-head {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    white-space: nowrap !important;
+  }
+
+  .active-status-toggle-btn {
+    background: #f1f5f9;
+    border: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    font-weight: bold;
+    color: #64748b;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-only-inline { display: none !important; }
+
+  /* Danh sách thẻ user dạng hàng ngang trên PC */
+  .active-user-list {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 10px !important;
+  }
+
+  .active-user-item {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    padding: 4px 12px 4px 6px !important;
+    border-radius: 30px !important;
+  }
+
+  .active-user-fullname {
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    color: #0f2d3a !important;
+  }
+
+  .active-user-role {
+    font-size: 11px !important;
+    color: #64748b !important;
+    margin-left: 4px;
+  }
+
+  /* Khi bấm Thu gọn trên PC */
+  .active-status-bar.is-collapsed .active-user-list {
+    display: none !important;
+  }
+
+  .active-status-bar.is-collapsed {
+    width: fit-content !important;
+  }
+
+  .active-status-backdrop,
+  .active-status-floating-btn {
+    display: none !important;
+  }
+}
+
+/* 📱 2. HIỂN THỊ DẠNG BẢNG TRƯỢT TRÊN MOBILE (<= 768px) */
+@media (max-width: 768px) {
+  .desktop-only-inline { display: none !important; }
+
+  .active-status-bar {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    width: 280px !important;
+    max-width: 82vw !important;
+    height: 100vh !important;
+    background: #ffffff !important;
+    z-index: 9999999 !important;
+    box-shadow: -5px 0 25px rgba(0, 0, 0, 0.15) !important;
+    transform: translateX(100%) !important;
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    padding: 16px !important;
+    box-sizing: border-box !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  .active-status-bar.is-mobile-open {
+    transform: translateX(0) !important;
+  }
+
+  .active-status-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.4);
+    z-index: 9999998;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+  }
+
+  .active-status-backdrop.is-active {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .active-status-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    gap: 16px;
+  }
+
+  .active-status-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #edf2f7;
+  }
+
+  .active-status-toggle-btn {
+    background: #f1f5f9;
+    border: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    font-weight: bold;
+    color: #64748b;
+    cursor: pointer;
+  }
+
+  /* Danh sách xếp dòng dọc hiển thị Tên đầy đủ trên Mobile */
+  .active-user-list {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+    overflow-y: auto !important;
+    flex: 1 !important;
+  }
+
+  .active-user-item {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    width: 100% !important;
+    padding: 8px 10px !important;
+    border-radius: 10px !important;
+    background: #f8fafc !important;
+    border: 1px solid #edf2f7 !important;
+  }
+
+  .active-user-info {
+    display: flex !important;
+    flex-direction: column !important;
+    text-align: left !important;
+    min-width: 0 !important;
+  }
+
+  .active-user-fullname {
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    color: #0f2d3a !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .active-user-role {
+    font-size: 12px !important;
+    color: #64748b !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    margin-top: 2px !important;
+  }
+
+  /* Nút bong bóng bấm mở mép phải Mobile */
+  .active-status-floating-btn {
+    position: fixed !important;
+    top: 30% !important;
+    right: 0 !important;
+    z-index: 999999 !important;
+    background: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+    border-right: none !important;
+    border-radius: 20px 0 0 20px !important;
+    padding: 8px 12px !important;
+    box-shadow: -2px 4px 12px rgba(0,0,0,0.12) !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    cursor: pointer !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    color: #0b4a61 !important;
+  }
+}
+
+/* Avatar hình tròn + Chấm xanh */
+.active-avatar-box {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #176b87 0%, #0b4a61 100%);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px #cbd5e1;
+}
+
+.active-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 11px;
+  height: 11px;
+  background-color: #10b981;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+}
+/* =========================================================================
+   🌐 THANH TRẠNG THÁI ONLINE CHUẨN FACEBOOK SIDEBAR (DÀNH CHO PC)
+   ========================================================================= */
+@media (min-width: 769px) {
+  /* Cố định toàn bộ thanh trạng thái bên mép phải màn hình PC */
+  #activeStatusBar {
+    position: fixed;
+    top: 60px; /* Nằm ngay dưới thanh topbar header */
+    right: 0;
+    width: 280px;
+    height: calc(100vh - 60px);
+    background-color: #ffffff;
+    border-left: 1px solid #e5e7eb;
+    box-shadow: -2px 0 10px rgba(0, 0, 0, 0.03);
+    display: flex;
+    flex-direction: column;
+    z-index: 99;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Thu gọn sang phải khi bấm nút thu gọn */
+  #activeStatusBar.is-collapsed {
+    transform: translateX(230px);
+  }
+
+  /* Tiêu đề "Người liên hệ / Online" */
+  .active-status-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px 10px 16px;
+    border-bottom: 1px solid #f3f4f6;
+    font-size: 15px;
+    font-weight: 600;
+    color: #4b5563;
+  }
+
+  /* Khung danh sách cuộn dọc */
+  #activeUserList {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* Thanh cuộn nhỏ gọn kiểu Facebook */
+  #activeUserList::-webkit-scrollbar {
+    width: 6px;
+  }
+  #activeUserList::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 10px;
+  }
+
+  /* Dòng mỗi tài khoản (Hover đổi màu xám nhẹ giống Facebook) */
+  .active-user-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .active-user-item:hover {
+    background-color: #f3f4f6;
+  }
+
+  /* Khung Avatar hình tròn */
+  .active-avatar-box {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background-color: #176b87; /* Màu nền đại diện */
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+
+  /* Dấu chấm xanh Online đè lên góc dưới Avatar chuẩn Facebook */
+  .active-dot {
+    position: absolute;
+    bottom: -1px;
+    right: -1px;
+    width: 11px;
+    height: 11px;
+    background-color: #22c55e; /* Xanh lá rực rỡ */
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+  }
+
+  /* Khung chữ thông tin bên phải Avatar */
+  .active-user-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  /* Tên đầy đủ */
+  .active-user-fullname {
+    font-size: 14px;
+    font-weight: 500;
+    color: #1f2937;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+
+  /* Chức vụ / Phòng ban hiển thị mờ bên dưới */
+  .active-user-role {
+    font-size: 11px;
+    color: #6b7280;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+}
+/* =========================================================================
+   🌐 TÁI CẤU TRÚC GIAO DIỆN PC CHUẨN FACEBOOK (FULL TOPBAR & RIGHT SIDEBAR)
+   ========================================================================= */
+@media (min-width: 769px) {
+  /* 1. Ép Topbar tràn 100% chiều ngang màn hình */
+  .topbar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100vw !important;
+    height: 56px !important;
+    z-index: 1000 !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+    background-color: #ffffff !important;
+  }
+
+  /* Đẩy phần thân trang web xuống dưới Topbar để không bị che */
+  body {
+    padding-top: 56px !important;
+  }
+
+  /* 2. Cột trạng thái Online nằm cố định bên phải (Sát dưới Topbar) */
+  #activeStatusBar {
+    position: fixed !important;
+    top: 56px !important;
+    right: 0 !important;
+    width: 280px !important;
+    height: calc(100vh - 56px) !important;
+    background-color: #ffffff !important;
+    border-left: 1px solid #e5e7eb !important;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.03) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    z-index: 900 !important;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease !important;
+  }
+
+  /* 3. LỖI THU GỌN: Khi bấm thu gọn, trượt êm sang phải */
+  #activeStatusBar.is-collapsed {
+    transform: translateX(100%) !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  /* 4. NÚT NỔI BONG BÓNG Ở GÓC DƯỚI BÊN PHẢI (Hiển thị khi thanh Online thu gọn) */
+  #openActiveStatusFloatingBtn {
+    position: fixed !important;
+    bottom: 24px !important;
+    right: 24px !important;
+    z-index: 999 !important;
+    background-color: #176b87 !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 50px !important;
+    padding: 10px 18px !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    transition: transform 0.2s ease, background-color 0.2s ease !important;
+  }
+
+  #openActiveStatusFloatingBtn:hover {
+    transform: translateY(-2px) scale(1.03) !important;
+    background-color: #0b4a61 !important;
+  }
+
+  /* Khi thanh Online đang mở -> Ẩn nút nổi đi */
+  #activeStatusBar:not(.is-collapsed) ~ #openActiveStatusFloatingBtn,
+  body:not(:has(#activeStatusBar.is-collapsed)) #openActiveStatusFloatingBtn {
+    display: none !important;
+  }
+
+  /* Đảm bảo danh sách người dùng cuộn mượt */
+  #activeUserList {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  /* Format từng dòng tài khoản */
+  .active-user-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .active-user-item:hover {
+    background-color: #f3f4f6;
+  }
+}
+/* =========================================================================
+   🌐 TÁI CẤU TRÚC GIAO DIỆN PC CHUẨN FACEBOOK (FULL TOPBAR & RIGHT SIDEBAR)
+   ========================================================================= */
+@media (min-width: 769px) {
+  /* 1. Ép Topbar tràn 100% chiều ngang màn hình */
+  .topbar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100vw !important;
+    height: 56px !important;
+    z-index: 1000 !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+    background-color: #ffffff !important;
+  }
+
+  /* Đẩy phần thân trang web xuống dưới Topbar để không bị che */
+  body {
+    padding-top: 56px !important;
+  }
+
+  /* 2. Cột trạng thái Online nằm cố định bên phải (Sát dưới Topbar) */
+  #activeStatusBar {
+    position: fixed !important;
+    top: 56px !important;
+    right: 0 !important;
+    width: 280px !important;
+    height: calc(100vh - 56px) !important;
+    background-color: #ffffff !important;
+    border-left: 1px solid #e5e7eb !important;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.03) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    z-index: 900 !important;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease !important;
+  }
+
+  /* 3. LỖI THU GỌN: Khi bấm thu gọn, trượt êm sang phải */
+  #activeStatusBar.is-collapsed {
+    transform: translateX(100%) !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  /* 4. NÚT NỔI BONG BÓNG Ở GÓC DƯỚI BÊN PHẢI (Hiển thị khi thanh Online thu gọn) */
+  #openActiveStatusFloatingBtn {
+    position: fixed !important;
+    bottom: 24px !important;
+    right: 24px !important;
+    z-index: 999 !important;
+    background-color: #176b87 !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 50px !important;
+    padding: 10px 18px !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    transition: transform 0.2s ease, background-color 0.2s ease !important;
+  }
+
+  #openActiveStatusFloatingBtn:hover {
+    transform: translateY(-2px) scale(1.03) !important;
+    background-color: #0b4a61 !important;
+  }
+
+  /* Khi thanh Online đang mở -> Ẩn nút nổi đi */
+  #activeStatusBar:not(.is-collapsed) ~ #openActiveStatusFloatingBtn,
+  body:not(:has(#activeStatusBar.is-collapsed)) #openActiveStatusFloatingBtn {
+    display: none !important;
+  }
+
+  /* Đảm bảo danh sách người dùng cuộn mượt */
+  #activeUserList {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  /* Format từng dòng tài khoản */
+  .active-user-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .active-user-item:hover {
+    background-color: #f3f4f6;
+  }
+}
+/* =========================================================================
+   🛠️ FIX TẠO KHOẢNG CÁCH DỌC - CHỐNG ĐÈ NÚT Ở GÓC DƯỚI BÊN PHẢI
+   ========================================================================= */
+
+/* 1. Nút bong bóng Online (Nằm ở vị trí dưới cùng) */
+#openActiveStatusFloatingBtn {
+  position: fixed !important;
+  bottom: 20px !important;
+  right: 24px !important;
+  z-index: 1002 !important;
+}
+
+/* 2. Nút cuộn lên đầu trang ↑ (Tự động đẩy cao lên cách nút Online) */
+.scroll-jump-button[data-scroll-page="top"],
+button[data-scroll-page="top"],
+.scroll-to-top {
+  position: fixed !important;
+  bottom: 75px !important; /* Đẩy lên vị trí 75px */
+  right: 24px !important;
+  z-index: 1001 !important;
+}
+
+/* 3. Nút cuộn xuống cuối trang ↓ (Nằm ở vị trí cao nhất) */
+.scroll-jump-button[data-scroll-page="bottom"],
+button[data-scroll-page="bottom"],
+.scroll-to-bottom {
+  position: fixed !important;
+  bottom: 125px !important; /* Đẩy lên vị trí 125px */
+  right: 24px !important;
+  z-index: 1000 !important;
+}
+/* =========================================================================
+   🛠️ FIX LỖI ÉP DANH SÁCH ONLINE NẰM XUỐNG DƯỚI TIÊU ĐỀ (IMAGE_2770B9)
+   ========================================================================= */
+@media (min-width: 769px) {
+  /* 1. Ép khung Cột Online xếp theo CỘT DỌC (Top -> Bottom) */
+  #activeStatusBar {
+    display: flex !important;
+    flex-direction: column !important; /* Bắt buộc xếp từ trên xuống dưới */
+    justify-content: flex-start !important;
+    align-items: stretch !important;
+    width: 280px !important;
+    max-width: 280px !important;
+    padding: 12px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+  }
+
+  /* 2. HÀNG 1: Khối Tiêu đề "🟢 Đang online (1)" và Nút "-" */
+  #activeStatusBar > div:first-child,
+  .active-status-header {
+    display: flex !important;
+    flex-direction: row !important; /* Đang online và nút "-" nằm ngang */
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    padding-bottom: 10px !important;
+    margin-bottom: 10px !important;
+    border-bottom: 1px solid #e4e6eb !important; /* Đường gạch ngang ranh giới */
+    box-sizing: border-box !important;
+  }
+
+  /* 3. HÀNG 2 TRỞ ĐI: Danh sách tài khoản (Nằm hoàn toàn dưới đường gạch ngang) */
+  #activeUserList {
+    display: flex !important;
+    flex-direction: column !important; /* Mỗi người dùng nằm trên 1 dòng */
+    gap: 8px !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 4. Định dạng từng dòng người dùng (Avatar bên trái, Tên bên phải) */
+  .active-user-item {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 12px !important;
+    width: 100% !important;
+    padding: 8px 10px !important;
+    border-radius: 8px !important;
+    box-sizing: border-box !important;
+    background: transparent !important;
+    cursor: pointer !important;
+  }
+
+  .active-user-item:hover {
+    background-color: #e4e6eb !important; /* Rê chuột đổi màu nhẹ */
+  }
+
+  /* Kích thước Avatar tròn chuẩn */
+  .active-avatar-box {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+    border-radius: 50% !important;
+    position: relative !important;
+    flex-shrink: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  /* Chữ Họ tên + Chức vụ */
+  .active-user-info {
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 !important;
+    min-width: 0 !important;
+  }
+}
+/* =========================================================================
+   📱 FIX LỖI CỘT ONLINE CHE KHUẤT GIAO DIỆN MOBILE (IMAGE_261E3F)
+   ========================================================================= */
+@media (max-width: 768px) {
+
+  /* 1. Ép Khung Online trượt ẩn hoàn toàn khỏi màn hình Mobile khi đóng */
+  #activeStatusBar,
+  .active-status-bar {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 280px !important;
+    max-width: 80vw !important;
+    height: 100vh !important;
+    background: #ffffff !important;
+    z-index: 9999 !important;
+    box-shadow: -4px 0 15px rgba(0, 0, 0, 0.15) !important;
+    transition: transform 0.3s ease !important;
+    /* Giấu sạch sang lề phải ngoài màn hình */
+    transform: translateX(100%) !important;
+  }
+
+  /* Khi được mở ra trên Mobile mới trượt vào */
+  #activeStatusBar.is-open,
+  #activeStatusBar:not(.is-hidden):not(.is-collapsed) {
+    transform: translateX(0) !important;
+  }
+
+  #activeStatusBar.is-hidden {
+    display: none !important;
+  }
+
+  /* 2. Nút nổi bong bóng "🟢 1" gọn gàng bên mép phải (Neo an toàn theo Lề Đáy) */
+  #openActiveStatusFloatingBtn,
+  .active-status-floating-btn {
+    position: fixed !important;
+    right: 10px !important;   
+    bottom: auto !important;   
+    top: 50% !important;  
+    z-index: 9999 !important;
+    background: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    padding: 6px 12px !important;
+    border-radius: 20px !important;
+    transform: translateY(-50%) !important; /* Ép tâm nút nằm CHUẨN ĐÉT ở chính giữa */
+}
+  }
+
+  /* 3. Đưa Nút cuộn trang (↓ ↑) về góc dưới bên phải gọn gàng, xóa bỏ dải nền trắng dài */
+  .task-scroll-actions,
+  .view-scroll-actions {
+    position: fixed !important;
+    right: 12px !important;
+    bottom: 75px !important; /* Cách thanh Menu đáy Mobile 75px */
+    z-index: 900 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+    background: transparent !important; /* Xóa phông trắng đè giao diện */
+    width: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .scroll-jump-button {
+    background: #ffffff !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
+    border-radius: 50% !important;
+    width: 36px !important;
+    height: 36px !important;
   }
 }
