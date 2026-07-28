@@ -2114,7 +2114,7 @@ window.PHUC_THINH_IMPORTED_PEOPLE = [
         "qualification": "",
         "phone": "",
         "address": "TP Hà Nội",
-        "customFields": ,
+        "customFields": {},
         "createdAt": "2026-07-23T00:00:00.000Z",
         "createdBy": "Hệ thống"
     },
