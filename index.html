@@ -6,14 +6,12 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="app-icon-phuc-thinh.png" type="image/png">
   <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png">
   <link rel="stylesheet" href="styles.css">
- 
   <!-- 🔥 CHẶN ĐỨNG MÀN ĐĂNG NHẬP TRƯỚC KHI TRÌNH DUYỆT BẮT ĐẦU VẼ GIAO DIỆN -->
   <script>
     if (localStorage.getItem("phuc-thinh-current-account-v1")) {
@@ -1504,58 +1502,5 @@
   <script src="supabase-config.js"></script>
   <script src="people-data.js"></script>
   <script src="script.js"></script>
-  <!-- 📱 POPUP MENU MOBILE CHUẨN GIAO DIỆN FACEBOOK -->
-  <div id="mobileMenuPopup" class="mobile-menu-popup mobile-only">
-    
-    <!-- 1. KHỐI THÔNG TIN CÁ NHÂN TRÊN ĐẦU -->
-    <div class="mobile-profile-card">
-      <div class="mobile-profile-avatar">👤</div>
-      <div class="mobile-profile-info">
-        <strong id="mobileUserLabel">Tài khoản</strong>
-        <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
-      </div>
-      <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
-    </div>
-
-    <!-- 2. DANH SÁCH MENU THEO HÀNG (MÔ PHỎNG 100% ẢNH 2) -->
-    <div class="mobile-menu-list">
-      <button type="button" class="mobile-menu-item" data-view="archive">
-        <div class="mobile-icon-box">▧</div>
-        <span class="mobile-menu-text">Lưu Trữ</span>
-      </button>
-
-      <button type="button" class="mobile-menu-item" data-view="department-evaluations">
-        <div class="mobile-icon-box">▥</div>
-        <span class="mobile-menu-text">KPI phòng</span>
-      </button>
-
-      <button type="button" class="mobile-menu-item" data-view="evaluations">
-        <div class="mobile-icon-box">◇</div>
-        <span class="mobile-menu-text">KPI cá nhân</span>
-      </button>
-
-      <button type="button" class="mobile-menu-item" data-view="history">
-        <div class="mobile-icon-box">◷</div>
-        <span class="mobile-menu-text">Lịch sử</span>
-      </button>
-
-      <button type="button" class="mobile-menu-item" data-view="accounts">
-        <div class="mobile-icon-box">◫</div>
-        <span class="mobile-menu-text">Tài khoản</span>
-      </button>
-
-      <button type="button" class="mobile-menu-item" data-view="rules">
-        <div class="mobile-icon-box">§</div>
-        <span class="mobile-menu-text">Quy chế</span>
-      </button>
-    </div>
-
-    <!-- 3. NÚT ĐĂNG XUẤT NẰM Ở DƯỚI CÙNG -->
-    <div class="mobile-menu-footer">
-      <button type="button" id="mobileLogoutBtn" class="mobile-logout-button">
-        <span>🚪</span> Đăng xuất
-      </button>
-    </div>
-  </div>
 </body>
 </html>
