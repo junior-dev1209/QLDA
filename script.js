@@ -11770,155 +11770,6 @@ setTimeout(() => {
     window.scrollTo(0, parseInt(savedScrollY, 10));
   }
 }, 200); // Trì hoãn 200ms chờ hệ thống vẽ xong việc là cuộn xuống ngay
-// =========================================================================
-// 🌟 XỬ LÝ ĐÓNG / MỞ MENU TRƯỢT MOBILE KIỂU FACEBOOK
-// =========================================================================
-document.addEventListener("click", (event) => {
-  const isMobile = window.innerWidth <= 768;
-  if (!isMobile) return;
-
-  // 1. Bấm nút Mở / Đóng Menu
-  const toggleBtn = event.target.closest("#sidebarToggle");
-  if (toggleBtn) {
-    event.preventDefault();
-    event.stopPropagation();
-    document.body.classList.toggle("mobile-menu-open");
-    return;
-  }
-
-  // 2. Bấm vào bất kỳ mục chuyển Tab nào -> Tự động đóng Menu trượt
-  const navItem = event.target.closest(".nav-item");
-  if (navItem) {
-    document.body.classList.remove("mobile-menu-open");
-    return;
-  }
-
-  // 3. Bấm ra ngoài khoảng tối màn hình -> Tự động đóng Menu
-  if (document.body.classList.contains("mobile-menu-open") && !event.target.closest(".sidebar")) {
-    document.body.classList.remove("mobile-menu-open");
-  }
-});
-// =========================================================================
-// 📱 BỘ ĐIỀU KHIỂN GIAO DIỆN MOBILE CHUẨN APP FACEBOOK
-// =========================================================================
-document.addEventListener("click", (event) => {
-  const isMobile = window.innerWidth <= 768;
-  if (!isMobile) return;
-
-  // 1. Bấm nút "Menu ☰" ở đáy màn hình -> Bật trang Menu Lối tắt (Ảnh 2)
-  if (event.target.closest("#openMobileMenuBtn")) {
-    event.preventDefault();
-    document.body.classList.add("mobile-menu-open");
-    return;
-  }
-
-  // 2. Chuyển Tab từ Bottom Nav hoặc từ Trang Menu -> Đổi View & Cập nhật Active Icon
-  const navBtn = event.target.closest("[data-view]");
-  if (navBtn) {
-    const viewId = navBtn.dataset.view;
-    
-    // Cập nhật trạng thái Active nút Bottom Nav
-    document.querySelectorAll(".bottom-nav-item").forEach(btn => {
-      btn.classList.toggle("is-active", btn.dataset.view === viewId);
-    });
-
-    // Tự động đóng trang Menu sau khi chọn chức năng
-    document.body.classList.remove("mobile-menu-open");
-  }
-});
-/* =========================================================================
-   📱 KẾT NỐI DỮ LIỆU & CHUYỂN TAB MƯỢT MÀ CHO THANH BOTTOM NAV (MOBILE)
-   ========================================================================= */
-
-document.addEventListener('DOMContentLoaded', function() {
-  // 1. Quét tất cả nút điều hướng Mobile (Thanh đáy + Popup Menu)
-  const mobileNavButtons = document.querySelectorAll('.mobile-bottom-nav [data-view], #mobileMenuPopup [data-view]');
-  const popupMenu = document.getElementById('mobileMenuPopup');
-
-  mobileNavButtons.forEach(btn => {
-    btn.addEventListener('click', function(e) {
-      e.preventDefault();
-      const viewId = this.getAttribute('data-view');
-      if (!viewId) return;
-
-      // 2. Kích hoạt nút Sidebar gốc tương ứng (Đảm bảo chạy $100\%$ logic nạp dữ liệu cũ của app)
-      const originalSidebarBtn = document.querySelector(`aside.sidebar .nav-item[data-view="${viewId}"]`);
-      if (originalSidebarBtn) {
-        originalSidebarBtn.click();
-      } else {
-        // Dự phòng: Tự bật view nếu không thấy sidebar
-        document.querySelectorAll('.view').forEach(v => v.classList.remove('is-active'));
-        const targetView = document.getElementById(viewId);
-        if (targetView) targetView.classList.add('is-active');
-      }
-
-      // 3. Đổi trạng thái "sáng đèn" (is-active) cho 4 nút dưới thanh đáy Mobile
-      document.querySelectorAll('.mobile-bottom-nav .bottom-nav-item').forEach(navBtn => {
-        if (navBtn.getAttribute('data-view') === viewId) {
-          navBtn.classList.add('is-active');
-        } else {
-          navBtn.classList.remove('is-active');
-        }
-      });
-
-      // 4. Nếu bấm từ trong Popup Menu -> Tự động khép Popup lại
-      if (popupMenu) {
-        popupMenu.classList.remove('is-active');
-      }
-    });
-  });
-});
-/* =========================================================================
-   📱 LOGIC DỮ LIỆU & ĐĂNG XUẤT CHO POPUP MENU MOBILE
-   ========================================================================= */
-
-document.addEventListener('DOMContentLoaded', function() {
-  const openBtn = document.getElementById('openMobileMenuBtn');
-  const closeBtn = document.getElementById('closeMobileMenuBtn');
-  const popup = document.getElementById('mobileMenuPopup');
-  const logoutBtn = document.getElementById('mobileLogoutBtn');
-
-  // 1. Đồng bộ thông tin Tên + Chức vụ vào Popup mỗi khi mở Menu
-  function syncUserProfile() {
-    const mainUserLabel = document.getElementById('currentUserLabel');
-    const mainUserMeta = document.getElementById('currentUserMeta');
-    const mobileUserLabel = document.getElementById('mobileUserLabel');
-    const mobileUserMeta = document.getElementById('mobileUserMeta');
-
-    if (mainUserLabel && mobileUserLabel) {
-      mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
-    }
-    if (mainUserMeta && mobileUserMeta) {
-      mobileUserMeta.textContent = mainUserMeta.textContent || "";
-    }
-  }
-
-  // 2. Mở / Đóng Popup Menu
-  if (openBtn && popup) {
-    openBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      syncUserProfile();
-      popup.classList.toggle('is-active');
-    });
-  }
-
-  if (closeBtn && popup) {
-    closeBtn.addEventListener('click', () => popup.classList.remove('is-active'));
-  }
-
-  // 3. Xử lý bấm Đăng xuất từ Popup Mobile
-  if (logoutBtn) {
-    logoutBtn.addEventListener('click', function() {
-      const mainLogoutBtn = document.getElementById('logoutButton');
-      if (mainLogoutBtn) {
-        mainLogoutBtn.click(); // Gọi hàm Đăng xuất gốc của hệ thống
-      } else {
-        localStorage.clear();
-        location.reload();
-      }
-    });
-  }
-});
 /* =========================================================================
    📱 BẤM VÀO TÊN NHÂN SỰ ĐỂ MỞ POPUP XEM TOÀN BỘ THÔNG TIN CHI TIẾT
    ========================================================================= */
@@ -12191,103 +12042,6 @@ document.addEventListener("DOMContentLoaded", () => {
     openPersonDetail(personId);
   });
 });
-/* =========================================================================
-   ⚡ FIX LỖI BẤM MENU MOBILE (DÙNG ONCLICK TRỰC TIẾP CHỐNG XUNG ĐỘT)
-   ========================================================================= */
-
-document.addEventListener('DOMContentLoaded', function() {
-  const openBtn = document.getElementById('openMobileMenuBtn');
-  const closeBtn = document.getElementById('closeMobileMenuBtn');
-  const popup = document.getElementById('mobileMenuPopup');
-
-  if (openBtn && popup) {
-    // Ghi đè trực tiếp sự kiện click, ngăn chặn mọi xung đột chồng chéo
-    openBtn.onclick = function(e) {
-      e.preventDefault();
-      e.stopPropagation(); // Chặn sự kiện lan ra ngoài làm đóng menu
-
-      // Đồng bộ thông tin người dùng đang đăng nhập
-      const mainUserLabel = document.getElementById('currentUserLabel');
-      const mainUserMeta = document.getElementById('currentUserMeta');
-      const mobileUserLabel = document.getElementById('mobileUserLabel');
-      const mobileUserMeta = document.getElementById('mobileUserMeta');
-
-      if (mainUserLabel && mobileUserLabel) mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
-      if (mainUserMeta && mobileUserMeta) mobileUserMeta.textContent = mainUserMeta.textContent || "";
-
-      // Bật / Tắt Popup Menu
-      popup.classList.toggle('is-active');
-    };
-  }
-
-  if (closeBtn && popup) {
-    closeBtn.onclick = function(e) {
-      e.preventDefault();
-      popup.classList.remove('is-active');
-    };
-  }
-
-  // Bấm chạm ra ngoài vùng Popup thì mới đóng Menu
-  document.addEventListener('click', function(e) {
-    if (popup && popup.classList.contains('is-active')) {
-      if (!popup.contains(e.target) && openBtn && !openBtn.contains(e.target)) {
-        popup.classList.remove('is-active');
-      }
-    }
-  });
-});
-
-/* =========================================================================
-   📱 BỘ ĐIỀU KHIỂN MOBILE MENU (ĐÃ TỐI ƯU - CHỈ GIỮ 1 ĐOẠN NÀY)
-   ========================================================================= */
-document.addEventListener('DOMContentLoaded', function() {
-  const openBtn = document.getElementById('openMobileMenuBtn');
-  const closeBtn = document.getElementById('closeMobileMenuBtn');
-  const popup = document.getElementById('mobileMenuPopup');
-  const logoutBtn = document.getElementById('mobileLogoutBtn');
-
-  function syncUserProfile() {
-    const mainUserLabel = document.getElementById('currentUserLabel');
-    const mainUserMeta = document.getElementById('currentUserMeta');
-    const mobileUserLabel = document.getElementById('mobileUserLabel');
-    const mobileUserMeta = document.getElementById('mobileUserMeta');
-
-    if (mainUserLabel && mobileUserLabel) mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
-    if (mainUserMeta && mobileUserMeta) mobileUserMeta.textContent = mainUserMeta.textContent || "";
-  }
-
-  if (openBtn && popup) {
-    openBtn.onclick = function(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      syncUserProfile();
-      popup.classList.toggle('is-active');
-    };
-  }
-
-  if (closeBtn && popup) {
-    closeBtn.onclick = function(e) {
-      e.preventDefault();
-      popup.classList.remove('is-active');
-    };
-  }
-
-  if (logoutBtn) {
-    logoutBtn.addEventListener('click', function() {
-      const mainLogoutBtn = document.getElementById('logoutButton');
-      if (mainLogoutBtn) mainLogoutBtn.click();
-    });
-  }
-
-  document.addEventListener('click', function(e) {
-    if (popup && popup.classList.contains('is-active')) {
-      if (!popup.contains(e.target) && openBtn && !openBtn.contains(e.target)) {
-        popup.classList.remove('is-active');
-      }
-    }
-  });
-});
-
 // Secure cloud synchronization retained from the production baseline.
 if (!window.__phucThinhSecureSyncBooted) {
   window.__phucThinhSecureSyncBooted = true;
@@ -12319,3 +12073,88 @@ setTimeout(() => {
     }
   }
 }, 500);
+// =========================================================================
+// 📱 BỘ ĐIỀU KHIỂN MENU & BOTTOM NAV MOBILE (HOÀN CHỈNH & CHỐNG XUNG ĐỘT)
+// =========================================================================
+document.addEventListener("DOMContentLoaded", function () {
+  const openBtn = document.getElementById("openMobileMenuBtn");
+  const closeBtn = document.getElementById("closeMobileMenuBtn");
+  const popup = document.getElementById("mobileMenuPopup");
+  const logoutBtn = document.getElementById("mobileLogoutBtn");
+
+  // 1. Đồng bộ thông tin Tên + Chức vụ vào Popup Mobile
+  function syncUserProfile() {
+    const mainUserLabel = document.getElementById("currentUserLabel");
+    const mainUserMeta = document.getElementById("currentUserMeta");
+    const mobileUserLabel = document.getElementById("mobileUserLabel");
+    const mobileUserMeta = document.getElementById("mobileUserMeta");
+
+    if (mainUserLabel && mobileUserLabel) mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
+    if (mainUserMeta && mobileUserMeta) mobileUserMeta.textContent = mainUserMeta.textContent || "";
+  }
+
+  // 2. Hàm Bật/Tắt Menu Mobile
+  function toggleMobileMenu(show) {
+    if (!popup) return;
+    const isActive = show !== undefined ? show : !popup.classList.contains("is-active");
+    
+    if (isActive) syncUserProfile();
+    popup.classList.toggle("is-active", isActive);
+    document.body.classList.toggle("mobile-menu-open", isActive);
+  }
+
+  // 3. Sự kiện Bấm nút Menu ở thanh đáy
+  if (openBtn) {
+    openBtn.onclick = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleMobileMenu();
+    };
+  }
+
+  // 4. Sự kiện Nút Đóng Popup (Dấu ✕)
+  if (closeBtn) {
+    closeBtn.onclick = function (e) {
+      e.preventDefault();
+      toggleMobileMenu(false);
+    };
+  }
+
+  // 5. Sự kiện Nút Đăng xuất trên Mobile
+  if (logoutBtn) {
+    logoutBtn.onclick = function () {
+      const mainLogoutBtn = document.getElementById("logoutButton");
+      if (mainLogoutBtn) mainLogoutBtn.click();
+    };
+  }
+
+  // 6. Xử lý Chuyển Tab (bấm ở Thanh đáy hoặc trong Popup Menu)
+  document.querySelectorAll(".mobile-bottom-nav [data-view], #mobileMenuPopup [data-view]").forEach((btn) => {
+    btn.onclick = function (e) {
+      e.preventDefault();
+      const viewId = this.getAttribute("data-view");
+      if (!viewId) return;
+
+      // Kích hoạt tab tương ứng ở Sidebar chính
+      const sidebarBtn = document.querySelector(`aside.sidebar .nav-item[data-view="${viewId}"]`);
+      if (sidebarBtn) sidebarBtn.click();
+
+      // Cập nhật trạng thái sáng đèn nút đáy Mobile
+      document.querySelectorAll(".mobile-bottom-nav .bottom-nav-item").forEach((nav) => {
+        nav.classList.toggle("is-active", nav.getAttribute("data-view") === viewId);
+      });
+
+      // Tự động khép Popup Menu lại
+      toggleMobileMenu(false);
+    };
+  });
+
+  // 7. Chạm ra vùng ngoài Popup -> Tự động đóng Menu
+  document.addEventListener("click", function (e) {
+    if (popup && popup.classList.contains("is-active")) {
+      if (!popup.contains(e.target) && openBtn && !openBtn.contains(e.target)) {
+        toggleMobileMenu(false);
+      }
+    }
+  });
+});
