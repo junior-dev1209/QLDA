@@ -114,6 +114,32 @@
     </aside>
 
     <section class="content">
+      <!-- 🟢 THANH TRẠNG THÁI HOẠT ĐỘNG (PC: Thu nhỏ / Mobile: Trượt bên phải) -->
+      <div id="activeStatusBar" class="active-status-bar is-hidden">
+        <div class="active-status-container">
+          <div class="active-status-head">
+            <div class="active-status-title">
+              <span class="online-pulse"></span>
+              <strong>Đang online (<span id="activeUserCount">0</span>)</strong>
+            </div>
+            <!-- Nút thu nhỏ trên PC / Nút đóng ✕ trên Mobile -->
+            <button id="toggleActiveStatusBtn" type="button" class="active-status-toggle-btn" title="Thu gọn / Đóng">
+              <span class="desktop-only-inline">−</span>
+              <span class="mobile-only-inline">✕</span>
+            </button>
+          </div>
+        </div>
+        <div id="activeUserList" class="active-user-list">
+            <!-- Danh sách bong bóng avatar vẽ bằng JS -->
+          </div>
+      </div>
+      <!-- Backdrop lớp nền mờ khi mở Drawer trên Mobile -->
+      <div id="activeStatusBackdrop" class="active-status-backdrop"></div>
+      <!-- Nút nổi dạng bong bóng mép phải màn hình trên Mobile để bấm trượt ra -->
+      <button id="openActiveStatusFloatingBtn" type="button" class="active-status-floating-btn is-hidden" title="Xem ai đang online">
+        <span class="online-pulse"></span>
+        <span id="floatingUserCount">0</span>
+      </button>
       <section id="dashboard" class="view is-active">
         <div class="section-head">
           <div>
