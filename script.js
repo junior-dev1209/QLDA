@@ -2947,6 +2947,10 @@ function canManageArchive() {
 function canAccessView(viewId) {
   if (!currentAccount()) return false;
   if (!moduleIsAvailableToAccount(viewId)) return false;
+  
+  // 🌟 THÊM DÒNG NÀY: Mở quyền xem "Tổng quan" cho Admin, Ban giám đốc, Trưởng phòng, Phó phòng & Trưởng bộ phận
+  if (viewId === "dashboard") return canViewAllData() || hasDepartmentManagementAccess() || isSectionHead();
+
   if (viewId === "bulletin") return true;
   if (viewId === "archive") return true;
   if (viewId === "accounts") return canManageAccounts() || canEditOwnAccount();
@@ -2956,6 +2960,10 @@ function canAccessView(viewId) {
   if (viewId === "history") return !isEmployee();
   if (canViewAllData()) return true;
   return ["evaluations", "rules"].includes(viewId);
+}
+function firstAccessibleView() {
+  const preferred = ["dashboard", "bulletin", "archive", "people", "tasks", "department-evaluations", "evaluations", "history", "accounts", "rules"];
+  return preferred.find((viewId) => canAccessView(viewId)) || "accounts";
 }
 
 function firstAccessibleView() {
