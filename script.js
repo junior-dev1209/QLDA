@@ -1,4 +1,3 @@
-// const DANG_BAO_TRI = true;
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
