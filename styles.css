@@ -7960,3 +7960,15 @@ tr.is-disabled-account {
 #mobileMenuPopup.is-active {
   display: block !important;
 }
+/* Đảm bảo Popup Mobile luôn đè lên trên cùng */
+.mobile-menu-popup {
+  display: none;
+  position: fixed;
+  z-index: 99999 !important;
+}
+
+/* Hiển thị khi bật class is-active hoặc mobile-menu-open */
+.mobile-menu-popup.is-active,
+body.mobile-menu-open .mobile-menu-popup {
+  display: block !important;
+}
