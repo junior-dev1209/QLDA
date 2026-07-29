@@ -9628,10 +9628,37 @@ div.task-filter {
   }
 }
 /* =========================================================
-   🚫 XÓA HẲN CỤM NÚT CUỘN TRANG LÊN / XUỐNG
+   ✨ KHÔI PHỤC VÒNG TRÒN NỀN CHO NÚT THU GỌN (−)
    ========================================================= */
-.view-scroll-actions,
-.task-scroll-actions,
-.scroll-jump-button {
-  display: none !important;
+.active-status-toggle-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 26px !important;
+  height: 26px !important;
+  min-width: 26px !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 50% !important;
+  background: #f1f5f9 !important;      /* 🟢 Giữ cố định vòng tròn nền màu xám xanh nhẹ */
+  color: #475569 !important;           /* Màu dấu trừ xám Slate đậm rõ nét */
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease-in-out !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+}
+
+/* Hiệu ứng khi rê chuột: Vòng tròn đổi sang màu đậm hơn tí + Phóng nhẹ */
+.active-status-toggle-btn:hover {
+  background: #e2e8f0 !important;        /* Nền xám nhấn nhẹ */
+  color: #0f2d3a !important;             /* Dấu trừ đổi màu xanh đậm */
+  transform: scale(1.08) !important;     /* Phóng to tròn mượt */
+}
+
+/* Hiệu ứng khi bấm chuột */
+.active-status-toggle-btn:active {
+  background: #cbd5e1 !important;
+  transform: scale(0.95) !important;
 }
