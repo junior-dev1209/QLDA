@@ -1112,13 +1112,12 @@ async function deleteFromSupabase(tableName, id) {
   }
 }
 
-// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE (ĐÃ FIX LỖI ÉP KIỂU SỐ 22P02)
+// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE (ĐÃ FIX ÉP KIỂU DỮ LIỆU AN TOÀN 100%)
 async function syncCollectionToSupabase(tableName, items) {
   const supabase = window.supabaseClient;
   if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
 
   try {
-    // Danh sách các cột hợp lệ của bảng tasks trên Supabase
     const ALLOWED_TASK_KEYS = [
       "id", "kind", "title", "projectName", "ownerId", "collaboratorIds",
       "collaboratorId", "category", "workType", "recurrence",
@@ -1128,12 +1127,13 @@ async function syncCollectionToSupabase(tableName, items) {
       "completionReviewStatus", "completionReviewNote", "createdAt", "updatedAt"
     ];
 
-    // 🟢 CÁC CỘT KIỂU SỐ (NUMERIC) TRÊN DATABASE
     const NUMERIC_KEYS = ["progress", "qualityPercent"];
+    const DATE_KEYS = ["startDate", "due", "createdAt", "updatedAt"];
+    const ARRAY_KEYS = ["collaboratorIds", "attachments"];
 
     const cleanItems = items.map(item => {
       const copy = { ...item };
-      delete copy.dataUrl; 
+      delete copy.dataUrl; // Xóa dữ liệu file base64 thừa nếu có
 
       if (tableName === "tasks") {
         const sanitizedTask = {};
@@ -1141,13 +1141,24 @@ async function syncCollectionToSupabase(tableName, items) {
           if (copy[key] !== undefined) {
             let val = copy[key];
 
-            // 🌟 TRIỆT HẠ LỖI 22P02: Nếu cột kiểu số bị dính chuỗi rỗng "" -> Ép thành null
+            // 1. Ép kiểu Số: Nếu rỗng "" hoặc NaN -> chuyển thành null
             if (NUMERIC_KEYS.includes(key)) {
-              if (val === "" || val === null || val === undefined || isNaN(val)) {
-                val = null;
-              } else {
-                val = Number(val);
+              val = (val === "" || val === null || val === undefined || isNaN(val)) ? null : Number(val);
+            } 
+            // 2. Ép kiểu Ngày: Nếu rỗng "" -> chuyển thành null
+            else if (DATE_KEYS.includes(key)) {
+              val = (val === "" || val === null) ? null : String(val);
+            } 
+            // 3. Ép kiểu Mảng (JSONB): Đảm bảo luôn là Array
+            else if (ARRAY_KEYS.includes(key)) {
+              if (typeof val === "string") {
+                try { val = JSON.parse(val); } catch(e) { val = []; }
               }
+              if (!Array.isArray(val)) val = [];
+            }
+            // 4. Nếu chuỗi rỗng bình thường -> giữ nguyên hoặc chuyển null nếu cần
+            else if (val === "") {
+              val = null;
             }
 
             sanitizedTask[key] = val;
@@ -1163,7 +1174,8 @@ async function syncCollectionToSupabase(tableName, items) {
       .upsert(cleanItems, { onConflict: 'id' });
 
     if (error) {
-      console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error);
+      // 🌟 In chi tiết thông báo lỗi từ Supabase ra Console để dễ kiểm tra
+      console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error.message || error);
     }
   } catch (err) {
     console.error(`❌ Lỗi kết nối Supabase bảng [${tableName}]:`, err);
