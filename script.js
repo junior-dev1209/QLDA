@@ -5795,13 +5795,19 @@ function renderDepartmentEffectivenessChart() {
 function renderHistoryTargetOptions() {
   const type = byId("historyType").value || "department";
   const current = byId("historyTarget").value;
-  const options =
-    type === "department"
-      ? visibleDepartmentsForHistory().map((department) => ({ value: department.id, label: department.name }))
-      : visiblePeopleForHistory().map((person) => ({
-          value: person.id,
-          label: `${person.name} - ${departmentById(person.departmentId)?.name || "Chưa rõ phòng"}`,
-        }));
+  
+  // 🌟 Thêm lựa chọn Tất cả các phòng / Toàn hệ thống cho Admin
+  const deptOptions = [
+    { value: "all", label: "Toàn hệ thống" },
+    ...visibleDepartmentsForHistory().map((department) => ({ value: department.id, label: department.name }))
+  ];
+  
+  const personOptions = visiblePeopleForHistory().map((person) => ({
+    value: person.id,
+    label: `${person.name} - ${departmentById(person.departmentId)?.name || "Chưa rõ phòng"}`,
+  }));
+
+  const options = type === "department" ? deptOptions : personOptions;
   const selected = options.some((option) => option.value === current) ? current : options[0]?.value;
   fillSelect(byId("historyTarget"), options.length ? options : [{ value: "", label: "Chưa có dữ liệu" }], selected);
 }
@@ -5827,18 +5833,20 @@ function historyItemSortValue(item) {
 function activityMatchesHistory(activity, type, targetId) {
   if (!activity || !targetId) return false;
   if (type === "department") {
-    // 🌟 1. Bổ sung jsonImport để hiển thị nhật ký khi lọc theo Phòng ban
-    if (activity.targetType === "bulletin" || activity.targetType === "jsonImport") return true;
+    // 🌟 Chọn "Tất cả các phòng" -> Hiển thị toàn bộ dòng thời gian
+    if (targetId === "all") return true;
+
+    // 🌟 Chọn 1 phòng cụ thể -> CHỈ hiện nhật ký thuộc phòng đó
     if (activity.departmentId === targetId) return true;
     if (activity.personId && personById(activity.personId)?.departmentId === targetId) return true;
     if (activity.targetType === "department" && activity.targetId === targetId) return true;
     return false;
   }
+  
   const person = personById(targetId);
   return (
     activity.personId === targetId ||
     (activity.targetType === "person" && activity.targetId === targetId) ||
-    activity.targetType === "jsonImport" || // 🌟 2. Bổ sung jsonImport khi lọc theo Cá nhân
     (activity.targetType === "departmentEvaluation" && activity.departmentId && activity.departmentId === person?.departmentId)
   );
 }
@@ -6182,10 +6190,20 @@ function renderHistoryTimeline(items) {
               item.targetType && item.targetId
                 ? ` data-history-target-type="${escapeHtml(item.targetType)}" data-history-target-id="${escapeHtml(item.targetId)}" data-history-person-id="${escapeHtml(item.personId || "")}" data-history-department-id="${escapeHtml(item.departmentId || "")}" data-history-title="${escapeHtml(item.title || "")}"`
                 : "";
+
+            // 🌟 TỰ ĐỘNG XÁC ĐỊNH TÊN PHÒNG BAN CHO TỪNG DÒNG LỊCH SỬ
+            const deptId = item.departmentId || (item.personId ? personById(item.personId)?.departmentId : "");
+            const deptObj = deptId ? departmentById(deptId) : null;
+            const deptBadgeText = deptObj ? deptObj.name : "Hệ thống / Toàn Ban";
+
             return `
             <article class="history-item${targetAttrs ? " history-link" : ""}"${targetAttrs} ${targetAttrs ? 'role="button" tabindex="0"' : ""}>
               <div class="history-item-head">
-                <span class="badge ${item.badgeClass || ""}">${escapeHtml(item.type)}</span>
+                <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                  <span class="badge ${item.badgeClass || ""}">${escapeHtml(item.type)}</span>
+                  <!-- 🟢 THẺ HIỂN THỊ TÊN PHÒNG BAN NỔI BẬT -->
+                  <span class="badge" style="background: #e2e8f0; color: #0f2d3a; font-weight: 600;">${escapeHtml(deptBadgeText)}</span>
+                </div>
                 <div class="history-item-audit">
                   <time>${escapeHtml(item.timestamp ? formatDateTime(item.timestamp) : formatPeriod(item.period) || "Không có kỳ")}</time>
                   <span class="history-item-account">${escapeHtml(historyItemActorLabel(item))}</span>
