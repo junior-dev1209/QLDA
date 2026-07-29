@@ -46,9 +46,10 @@
   <header class="topbar">
     <div>
       <p class="unit">
-        <span class="unit-main">BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG</span>
-        <span class="unit-sub">XÃ PHÚC THỊNH</span>
+        <span>BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG</span>
+        <span>XÃ PHÚC THỊNH</span>
       </p>
+      <h1>Quản Trị Nhân Sự</h1>
     </div>
     <div class="top-actions">
       <div class="user-chip">
@@ -630,7 +631,6 @@
             <button id="resetTaskForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
-        <!-- 🌟 ĐÃ TỐI ƯU THANH BỘ LỌC CÔNG VIỆC VÀ BỘ LỌC NGÀY THẲNG HÀNG -->
         <div class="filter-row task-filter">
           <input id="taskSearch" placeholder="Tìm công việc, người giao hoặc người được giao">
           <select id="taskProjectFilter" aria-label="Lọc công việc theo tên dự án">
@@ -643,15 +643,13 @@
             <option>Hoàn thành</option>
             <option>Quá hạn</option>
           </select>
-          
-          <!-- Cụm chọn ngày được gộp nằm ngang phẳng đẹp -->
-          <div class="date-range-group">
-            <span class="date-label">Từ</span>
-            <input id="taskDateFrom" type="date" class="filter-date" aria-label="Lọc công việc từ ngày">
-            <span class="date-label">Đến</span>
-            <input id="taskDateTo" type="date" class="filter-date" aria-label="Lọc công việc đến ngày">
-            <button id="clearTaskTimeFilter" class="ghost btn-clear-date" type="button">Bỏ lọc</button>
-          </div>
+          <label class="task-date-filter">Từ ngày
+            <input id="taskDateFrom" type="date" aria-label="Lọc công việc từ ngày">
+          </label>
+          <label class="task-date-filter">Đến ngày
+            <input id="taskDateTo" type="date" aria-label="Lọc công việc đến ngày">
+          </label>
+          <button id="clearTaskTimeFilter" class="ghost" type="button">Bỏ lọc ngày</button>
         </div>
         <div id="taskBoard" class="task-board"></div>
         <div class="task-scroll-actions" aria-label="Điều hướng nhanh trang công việc">
