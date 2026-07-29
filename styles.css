@@ -8101,7 +8101,6 @@ body.mobile-menu-open .mobile-menu-popup {
   .active-status-container {
     display: flex;
     flex-direction: column;
-    height: 100%;
     gap: 16px;
   }
 
@@ -9254,5 +9253,385 @@ div.task-filter {
 #accounts:not(.is-active),
 #rules:not(.is-active),
 .view:not(.is-active) {
+  display: none !important;
+}
+/* =========================================================
+   🗜️ TỐI ƯU THU GỌN KHUNG CẤU HÌNH PHÂN QUYỀN HỆ THỐNG (PC)
+   ========================================================= */
+@media (min-width: 769px) {
+  /* 1. Thu hẹp đệm khung ngoài */
+  .admin-module-panel {
+    padding: 10px 14px !important;
+    gap: 10px !important;
+  }
+
+  .module-access-head {
+    padding-bottom: 6px !important;
+  }
+
+  /* 2. Khoảng cách giữa các ô module thu hẹp lại */
+  .module-access-list {
+    gap: 8px !important;
+  }
+
+  /* 3. Thu nhỏ đệm bên trong từng ô Module */
+  .module-toggle-card {
+    padding: 8px 10px !important;
+    gap: 6px !important;
+    border-radius: 6px !important;
+  }
+
+  /* Thu nhỏ checkbox chính "Bật mục" */
+  .module-global-toggle {
+    font-size: 10px !important;
+    gap: 1px !important;
+  }
+
+  .module-global-toggle input[type="checkbox"],
+  .module-toggle-card input[type="checkbox"] {
+    width: 15px !important;
+    min-height: 15px !important;
+    height: 15px !important;
+  }
+
+  /* Thu nhỏ tiêu đề & chữ mô tả module */
+  .module-toggle-text strong {
+    font-size: 13px !important;
+    line-height: 1.2 !important;
+  }
+
+  .module-toggle-text small {
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+  }
+
+  /* Thu nhỏ Nhãn trạng thái (5/5 nhóm đang bật) */
+  .module-toggle-status {
+    padding: 2px 6px !important;
+    font-size: 10.5px !important;
+    border-radius: 4px !important;
+  }
+
+  /* 4. Thu nhỏ danh sách 5 vai trò (Ban giám đốc, Trưởng phòng...) */
+  .module-role-grid {
+    gap: 4px 8px !important;
+    padding-top: 6px !important;
+  }
+
+  .module-role-toggle {
+    font-size: 11.5px !important;
+    gap: 4px !important;
+  }
+
+  .module-role-toggle input[type="checkbox"] {
+    width: 13px !important;
+    height: 13px !important;
+    min-height: 13px !important;
+  }
+
+  /* 5. Co gọn phần Cấu hình Theme bên dưới */
+  .system-theme-panel {
+    padding-top: 10px !important;
+    gap: 8px !important;
+  }
+
+  .system-theme-form select,
+  .system-theme-form input {
+    height: 32px !important;
+    min-height: 32px !important;
+    font-size: 12.5px !important;
+    padding: 3px 8px !important;
+  }
+
+  .system-theme-form .form-actions button {
+    height: 32px !important;
+    min-height: 32px !important;
+    padding: 0 16px !important;
+    font-size: 12.5px !important;
+    font-weight: 700 !important;
+  }
+}
+/* Khóa giấu màn hình Cài đặt khi không kích hoạt */
+#settings:not(.is-active) {
+  display: none !important;
+}
+
+#settings.view.is-active {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+  width: 100% !important;
+}
+
+@media (max-width: 768px) {
+  /* 1. Sửa lỗi cộng dồn padding: Reset lề các khung ngoài về 0 */
+  body, 
+  .layout, 
+  #settings.view.is-active {
+    padding-bottom: 0 !important;
+  }
+
+  /* Chỉ đặt lề đáy 75px ở khung chứa nội dung (Thanh menu 60px + 15px lề vừa vặn) */
+  .content, 
+  .view {
+    padding-bottom: 75px !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 2. Đưa nút bong bóng "● Online" lên góc trên bên phải để không đè vào ô chữ */
+  #openActiveStatusFloatingBtn,
+  .active-status-floating-btn {
+    position: fixed !important;
+    top: 70px !important;
+    right: 12px !important;
+    bottom: auto !important;
+    transform: none !important;
+    z-index: 99999 !important;
+    padding: 5px 10px !important;
+    font-size: 11px !important;
+    border-radius: 20px !important;
+    background: rgba(255, 255, 255, 0.95) !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12) !important;
+  }
+
+  /* 3. Cố định chiều cao và phông nền thanh Bottom Nav phẳng đẹp */
+  .mobile-bottom-nav {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    height: 60px !important;
+    padding-bottom: env(safe-area-inset-bottom) !important;
+    background: #ffffff !important;
+    border-top: 1px solid #e2e8f0 !important;
+    z-index: 999999 !important;
+  }
+}
+/* =========================================================
+   🔥 ĐẮC TRỊ TRIỆT ĐỂ LỖI MOBILE: DÀN BỘ LỌC CÔNG VIỆC CHUẨN 100%
+   ========================================================= */
+@media (max-width: 768px) {
+  /* 1. Khung chứa bộ lọc: Dùng Grid 2 cột & Ép chiều cao tự dãn không bao giờ bị đè */
+  .filter-row.task-filter,
+  div.task-filter,
+  #tasks .task-filter {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important; /* Chia 2 cột đều */
+    gap: 8px !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    margin: 0 0 16px 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+  }
+
+  /* HÀNG 1: Ô tìm kiếm trải full 100% (chiếm cả 2 cột) */
+  #taskSearch,
+  .task-filter #taskSearch {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    height: 36px !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* HÀNG 2: Ô chọn Dự án (Cột 1) & Ô Trạng thái (Cột 2) song song */
+  #taskProjectFilter,
+  .task-filter #taskProjectFilter {
+    grid-column: 1 !important;
+    width: 100% !important;
+    height: 36px !important;
+    margin: 0 !important;
+    font-size: 12px !important;
+    box-sizing: border-box !important;
+  }
+
+  #taskStatusFilter,
+  .task-filter #taskStatusFilter {
+    grid-column: 2 !important;
+    width: 100% !important;
+    height: 36px !important;
+    margin: 0 !important;
+    font-size: 12px !important;
+    box-sizing: border-box !important;
+  }
+
+  /* HÀNG 3 & 4: Cụm chọn Từ ngày - Đến ngày & Nút Bỏ lọc */
+  .task-filter .date-range-group {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    height: auto !important;
+    margin: 0 !important;
+  }
+
+  /* Ẩn chữ "Từ", "Đến" rườm rà trên mobile */
+  .task-filter .date-range-group .date-label {
+    display: none !important;
+  }
+
+  /* Ô chọn Từ ngày & Đến ngày nằm song song 50% - 50% */
+  #taskDateFrom,
+  #taskDateTo,
+  .task-filter input[type="date"] {
+    flex: 1 1 calc(50% - 4px) !important;
+    width: calc(50% - 4px) !important;
+    height: 36px !important;
+    padding: 0 6px !important;
+    font-size: 12px !important;
+    box-sizing: border-box !important;
+    margin: 0 !important;
+  }
+
+  /* Nút Bỏ lọc nằm ở dòng dưới rộng 100% cực kỳ dễ bấm */
+  #clearTaskTimeFilter,
+  .task-filter #clearTaskTimeFilter,
+  .task-filter .btn-clear-date {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    height: 36px !important;
+    font-size: 12.5px !important;
+    font-weight: 700 !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Bảng danh sách công việc ở dưới bị đẩy xuống lề an toàn */
+  #taskBoard {
+    margin-top: 12px !important;
+    clear: both !important;
+  }
+}
+/* =========================================================
+   🗜️ THU HẸP KHOẢNG TRẮNG GIỮA BỘ LỌC VÀ BẢNG CÔNG VIỆC (MOBILE)
+   ========================================================= */
+@media (max-width: 768px) {
+  /* 1. Ép lề dưới của khung bộ lọc xuống còn 6px */
+  .filter-row.task-filter,
+  div.task-filter,
+  #tasks .task-filter {
+    margin-bottom: 6px !important;
+  }
+
+  /* 2. Triệt hạ margin thừa ở nút Bỏ lọc */
+  #clearTaskTimeFilter,
+  .task-filter #clearTaskTimeFilter,
+  .task-filter .btn-clear-date {
+    margin-bottom: 0 !important;
+  }
+
+  /* 3. Đưa bảng công việc lên sát ngay bên dưới bộ lọc */
+  #taskBoard {
+    margin-top: 0 !important;
+  }
+}
+/* =========================================================
+   🟢 FIX HOÀN HẢO BẢNG ONLINE & NÚT BONG BÓNG MỞ LẠI TRÊN MOBILE
+   ========================================================= */
+@media (max-width: 768px) {
+
+  /* 1. NÚT BONG BÓNG FLOATING: Luôn hiện ở góc trên bên phải khi đóng bảng */
+  #openActiveStatusFloatingBtn,
+  .active-status-floating-btn {
+    position: fixed !important;
+    top: 75px !important;                 /* Nằm ngay dưới thanh tiêu đề topbar */
+    right: 12px !important;
+    z-index: 99999 !important;
+    display: flex !important;             /* Ép hiện nút bong bóng */
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 6px !important;
+    padding: 6px 12px !important;
+    background: #ffffff !important;
+    border: 1.5px solid #10b981 !important;/* Viền xanh lá nổi bật */
+    border-radius: 20px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    cursor: pointer !important;
+  }
+
+  /* Khi nút bong bóng có class .is-hidden (lúc đang mở bảng) thì mới ẩn */
+  #openActiveStatusFloatingBtn.is-hidden,
+  .active-status-floating-btn.is-hidden {
+    display: none !important;
+  }
+
+  /* 2. KHUNG TRƯỢT XEM DANH SÁCH ONLINE KHI MỞ */
+  #activeStatusBar,
+  .active-status-bar {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 60px !important;                /* Không đè thanh Menu đáy */
+    width: 260px !important;                /* Rộng 260px vừa vặn màn hình */
+    max-width: 80vw !important;
+    background: #ffffff !important;
+    z-index: 100000 !important;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.2) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    border-left: 1px solid #cbd5e1 !important;
+  }
+
+  /* Khi bảng trượt có class .is-hidden (lúc bấm nút X tắt đi) thì ẩn hẳn */
+  #activeStatusBar.is-hidden,
+  .active-status-bar.is-hidden {
+    display: none !important;
+  }
+
+  /* 3. HIỂN THỊ DANH SÁCH TÀI KHOẢN ONLINE BÊN TRONG BẢNG TRƯỢT */
+  #activeUserList,
+  .active-status-bar #activeUserList,
+  .active-status-bar .active-user-list {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+    padding: 12px !important;
+    overflow-y: auto !important;            /* Cuộn danh sách nếu đông người */
+    flex: 1 !important;
+  }
+
+  /* Thẻ hiển thị thông tin từng người online */
+  #activeUserList > div,
+  .active-user-card,
+  .active-user-item {
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    padding: 8px 10px !important;
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+  }
+
+  .active-user-card strong,
+  .active-user-item strong {
+    font-size: 12.5px !important;
+    color: #0f2d3a !important;
+    display: block !important;
+  }
+
+  .active-user-card span,
+  .active-user-item span {
+    font-size: 11px !important;
+    color: #64748b !important;
+    display: block !important;
+  }
+
+  /* Lớp mờ nền đen khi mở bảng */
+  #activeStatusBackdrop.is-hidden {
+    display: none !important;
+  }
+}
+/* =========================================================
+   🚫 XÓA HẲN CỤM NÚT CUỘN TRANG LÊN / XUỐNG
+   ========================================================= */
+.view-scroll-actions,
+.task-scroll-actions,
+.scroll-jump-button {
   display: none !important;
 }
