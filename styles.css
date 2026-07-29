@@ -8735,30 +8735,506 @@ button[data-scroll-page="bottom"],
   }
 }
 /* Thu hẹp chiều rộng khung Đang Online từ 280px xuống 200px */
+/* =========================================================
+   1. THU GỌN THANH ONLINE BÊN PHẢI (PC)
+   ========================================================= */
 @media (min-width: 769px) {
-    #activeStatusBar {
-        width: 200px !important;
-        max-width: 200px !important;
-        padding: 6px 8px !important;
-    }
+  #activeStatusBar {
+    width: 200px !important;
+    max-width: 200px !important;
+    padding: 8px !important;
+  }
 }
 
-/* Thu nhỏ khoảng cách và kích thước danh sách người dùng bên trong */
 #activeStatusBar > div {
-    gap: 6px !important;
+  gap: 6px !important;
 }
 
-/* Thu nhỏ Avatar (vòng tròn chữ K) */
 #activeStatusBar [class*="avatar"], 
 #activeStatusBar div[style*="width: 40px"],
 #activeStatusBar div[style*="width: 36px"] {
-    width: 28px !important;
-    height: 28px !important;
-    font-size: 12px !important;
-    line-height: 28px !important;
+  width: 28px !important;
+  height: 28px !important;
+  font-size: 12px !important;
+  line-height: 28px !important;
 }
 
-/* Thu nhỏ cỡ chữ tên và chức danh */
 #activeStatusBar div {
+  font-size: 12px !important;
+}
+
+
+/* =========================================================
+   2. FIX CHUẨN THANH BỘ LỌC CÔNG VIỆC & BỘ LỌC NGÀY (PC & MOBILE)
+   ========================================================= */
+.task-filter {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  flex-wrap: wrap !important; /* Tự động xuống hàng mượt mà nếu màn hình hẹp */
+  margin-bottom: 14px !important;
+}
+
+/* Đưa tất cả các ô nhập, ô chọn, nút bấm về chiều cao 36px đồng nhất */
+.task-filter input,
+.task-filter select,
+.task-filter button,
+.task-filter .filter-date {
+  height: 36px !important;
+  min-height: 36px !important;
+  font-size: 13px !important;
+  border-radius: 6px !important;
+  box-sizing: border-box !important;
+}
+
+/* Ô tìm kiếm co giãn linh hoạt */
+.task-filter #taskSearch {
+  flex: 1 1 180px !important;
+  min-width: 140px !important;
+}
+
+/* Cụm chọn Từ ngày - Đến ngày nằm ngang phẳng đẹp */
+.date-range-group {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 36px !important;
+}
+
+.date-range-group .date-label {
+  font-size: 13px !important;
+  color: #475569 !important;
+  white-space: nowrap !important;
+  font-weight: 600 !important;
+}
+
+.date-range-group input[type="date"] {
+  border: 1px solid #cbd5e1 !important;
+  padding: 0 8px !important;
+  background: #ffffff !important;
+  width: auto !important;
+}
+
+/* Nút Bỏ lọc căn phẳng đẹp */
+#clearTaskTimeFilter,
+.btn-clear-date {
+  height: 36px !important;
+  padding: 0 12px !important;
+  border: 1px solid #cbd5e1 !important;
+  background-color: #ffffff !important;
+  color: #0284c7 !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  white-space: nowrap !important;
+  margin: 0 !important;
+}
+
+#clearTaskTimeFilter:hover {
+  background-color: #f0f9ff !important;
+  border-color: #0284c7 !important;
+}
+/* =========================================================
+   🔥 FIX CẤP CỨU: TÁCH ĐỘC LẬP FORM & ÉP BỘ LỌC CÔNG VIỆC TRẢI NGANG 100%
+   ========================================================= */
+
+/* 1. Ép toàn bộ view Công việc xếp dọc từ trên xuống dưới */
+#tasks.view {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+  width: 100% !important;
+}
+
+/* 2. Khung Form nhập liệu chiếm trọn 100% chiều rộng */
+#taskForm {
+  width: 100% !important;
+  box-sizing: border-box !important;
+  margin: 0 0 10px 0 !important;
+}
+
+/* 3. Thanh bộ lọc tách biệt hẳn 1 hàng ngang chuẩn, trải rộng 100% */
+.filter-row.task-filter,
+div.task-filter {
+  width: 100% !important;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  padding: 0 !important;
+  margin: 6px 0 12px 0 !important;
+  box-sizing: border-box !important;
+  clear: both !important;
+}
+
+/* 4. Dàn 3 ô: Tìm kiếm - Dự án - Trạng thái thẳng hàng nối tiếp nhau */
+.task-filter #taskSearch {
+  flex: 2 1 240px !important;
+  min-width: 160px !important;
+  height: 36px !important;
+  margin: 0 !important;
+}
+
+.task-filter #taskProjectFilter {
+  flex: 1.2 1 180px !important;
+  min-width: 140px !important;
+  height: 36px !important;
+  margin: 0 !important;
+}
+
+.task-filter #taskStatusFilter {
+  flex: 1 1 160px !important;
+  min-width: 130px !important;
+  height: 36px !important;
+  margin: 0 !important;
+}
+
+/* 5. Khối chọn Từ ngày - Đến ngày & Nút Bỏ lọc đính ở cuối hàng bên phải */
+.task-filter .date-range-group,
+.task-filter .task-date-filter {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex: 0 0 auto !important;
+  height: 36px !important;
+  margin: 0 !important;
+}
+
+.task-filter input[type="date"] {
+  height: 36px !important;
+  padding: 0 8px !important;
+  box-sizing: border-box !important;
+}
+
+.task-filter #clearTaskTimeFilter,
+.task-filter .btn-clear-date {
+  height: 36px !important;
+  padding: 0 12px !important;
+  white-space: nowrap !important;
+  flex: 0 0 auto !important;
+  margin: 0 !important;
+}
+
+/* 6. Bảng danh sách công việc ở dưới rộng rãi */
+#taskBoard {
+  width: 100% !important;
+  clear: both !important;
+}
+/* =========================================================
+   ✨ FIX CÂN BẰNG HOÀN HẢO THANH HEADER (TOPBAR & NÚT BẤM)
+   ========================================================= */
+@media (min-width: 769px) {
+  /* 1. Thanh Topbar căn thẳng tâm trục dọc */
+  .topbar {
+    display: flex !important;
+    align-items: center !important; /* Căn tâm giữa theo chiều dọc */
+    justify-content: space-between !important;
+    padding: 10px 24px !important;
+    min-height: 60px !important;
+  }
+
+  /* 2. Cụm nút bấm bên phải nằm trên 1 hàng phẳng đét */
+  .top-actions {
+    display: flex !important;
+    align-items: center !important; /* Căn tâm giữa các nút */
+    gap: 8px !important;            /* Khoảng cách đều giữa các nút */
+  }
+
+  /* 3. ÉP THẺ TÀI KHOẢN VÀ TẤT CẢ NÚT BẤM CÓ CÙNG CHIỀU CAO 38PX */
+  .top-actions .user-chip,
+  .top-actions button,
+  .top-actions .file-button {
+    height: 38px !important;
+    min-height: 38px !important;
+    box-sizing: border-box !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin: 0 !important;
+  }
+
+  /* 4. Thu gọn thẻ Tài Khoản (Kỹ Thuật Viên) cho bằng phẳng với nút */
+  .top-actions .user-chip {
+    padding: 4px 12px !important;
+    min-width: auto !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    align-items: flex-start !important;
+    border-radius: 8px !important;
+    background: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
+  }
+
+  .top-actions .user-chip strong {
+    font-size: 13px !important;
+    line-height: 1.15 !important;
+    color: #0f2d3a !important;
+  }
+
+  .top-actions .user-chip span {
+    font-size: 11px !important;
+    line-height: 1 !important;
+    margin-top: 1px !important;
+    color: #64748b !important;
+  }
+
+  /* 5. Đồng nhất phông chữ và lề nút bấm */
+  .top-actions button,
+  .top-actions .file-button {
+    padding: 0 14px !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    border-radius: 8px !important;
+    white-space: nowrap !important;
+    line-height: 1 !important;
+  }
+}
+/* =========================================================
+   ✨ CĂN GIỮA DÒNG "Xã Phúc Thịnh" SO VỚI TÊN BAN QUẢN LÝ
+   ========================================================= */
+@media (min-width: 769px) {
+  /* Khung chứa nhóm tiêu đề: Ép căn giữa các dòng con so với nhau */
+  .topbar .unit {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;    /* Căn giữa dòng 2 so với dòng 1 */
+    text-align: center !important;
+    gap: 3px !important;
+    margin: 0 0 4px 0 !important;
+    width: fit-content !important;     /* Khung tự co vừa khít dòng chữ dài nhất */
+  }
+
+  /* Dòng 1: BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG */
+  .topbar .unit .unit-main,
+  .topbar .unit span:first-child {
+    display: block !important;
+    font-size: 15px !important;
+    font-weight: 800 !important;
+    color: #0b4a61 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.3px !important;
+    line-height: 1.2 !important;
+    text-align: center !important;
+  }
+
+  /* Dòng 2: Xã Phúc Thịnh (Căn giữa đét) */
+  .topbar .unit .unit-sub,
+  .topbar .unit span:last-child {
+    display: block !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    color: #176b87 !important;
+    line-height: 1.2 !important;
+    text-transform: none !important;
+    text-align: center !important;
+  }
+}
+/* =========================================================
+   🗜️ THU NHỎ & TỐI ƯU GỌN GÀNG FORM CÔNG VIỆC (#taskForm)
+   ========================================================= */
+@media (min-width: 769px) {
+  /* 1. Thu hẹp lề trong và khoảng cách đứng giữa các hàng */
+  #taskForm {
+    padding: 10px 14px !important;
+    gap: 6px 10px !important;
+    border-radius: 8px !important;
+  }
+
+  /* 2. Thu nhỏ cỡ chữ nhãn (Label) & dính sát vào ô nhập */
+  #taskForm > label,
+  #taskForm .task-field-label {
     font-size: 12px !important;
+    font-weight: 700 !important;
+    gap: 2px !important;
+    color: #1e293b !important;
+  }
+
+  /* 3. Hạ chiều cao tất cả các ô nhập (input, select, picker) từ 36px xuống 30px */
+  #taskForm input,
+  #taskForm select,
+  #taskForm .collaborator-picker-toggle {
+    min-height: 30px !important;
+    height: 30px !important;
+    padding: 3px 8px !important;
+    font-size: 12.5px !important;
+    border-radius: 6px !important;
+  }
+
+  /* 4. Co gọn khung Tải lên hồ sơ liên quan */
+  #taskForm .task-upload-field {
+    padding: 5px 8px !important;
+    gap: 3px !important;
+  }
+
+  #taskForm .compact-upload-title {
+    font-size: 11.5px !important;
+  }
+
+  #taskForm .compact-file-button {
+    min-height: 26px !important;
+    height: 26px !important;
+    padding: 2px 8px !important;
+    font-size: 11.5px !important;
+  }
+
+  #taskForm .field-note {
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+  }
+
+  /* 5. Co ngắn chiều cao ô Nội dung công việc / Báo cáo tiến độ */
+  #taskForm textarea {
+    min-height: 48px !important;
+    height: 52px !important;
+    padding: 5px 8px !important;
+    font-size: 12.5px !important;
+    resize: vertical !important;
+  }
+
+  /* 6. Thu nhỏ nút "Lưu công việc" & "Làm mới" */
+  #taskForm .form-actions {
+    padding-top: 2px !important;
+    gap: 6px !important;
+  }
+
+  #taskForm .form-actions button {
+    min-height: 30px !important;
+    height: 30px !important;
+    padding: 4px 14px !important;
+    font-size: 12.5px !important;
+    font-weight: 700 !important;
+  }
+}
+/* =========================================================
+   🎯 PHÂN TẦNG CỐ ĐỊNH CHO BẢNG TIN (TIÊU ĐỀ - NỘI DUNG - MEDIA - NÚT)
+   ========================================================= */
+@media (min-width: 769px) {
+  /* 1. Lưới 4 cột trải rộng */
+  #bulletinList {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 14px !important;
+  }
+
+  /* 2. Tổng chiều cao thẻ cố định 360px vuông vắn */
+  .bulletin-card {
+    display: flex !important;
+    flex-direction: column !important;
+    height: 360px !important;
+    max-height: 360px !important;
+    padding: 12px 14px !important;
+    box-sizing: border-box !important;
+    background: #ffffff !important;
+    border-radius: 10px !important;
+    border: 1px solid #e2e8f0 !important;
+    overflow: hidden !important;
+  }
+
+  /* --- TẦNG 1: Loaị tin, ghim & ngày đăng (30px) --- */
+  .bulletin-card .bulletin-card-head,
+  .bulletin-card .bulletin-meta {
+    height: 30px !important;
+    min-height: 30px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    margin-bottom: 4px !important;
+    overflow: hidden !important;
+  }
+
+  /* --- TẦNG 2: TIÊU ĐỀ (Tối đa 2 dòng - 42px) --- */
+  .bulletin-card h3,
+  .bulletin-card h4,
+  .bulletin-card .bulletin-title {
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    line-height: 1.35 !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important; /* Cắt tối đa 2 dòng */
+    -webkit-box-orient: vertical !important;
+    overflow: hidden !important;
+    margin: 0 0 4px 0 !important;
+    color: #0f2d3a !important;
+  }
+
+  /* --- TẦNG 3: NỘI DUNG TÓM TẮT (Tối đa 2 dòng - 36px) --- */
+  .bulletin-card .bulletin-excerpt,
+  .bulletin-card .bulletin-summary,
+  .bulletin-card .bulletin-desc,
+  .bulletin-card p {
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important; /* Cắt tối đa 2 dòng */
+    -webkit-box-orient: vertical !important;
+    overflow: hidden !important;
+    font-size: 12px !important;
+    line-height: 1.4 !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    margin: 0 0 6px 0 !important;
+    color: #64748b !important;
+  }
+
+  /* --- TẦNG 4: XEM TRƯỚC MEDIA / XEM TRƯỚC FILE (110px) --- */
+  .bulletin-card .bulletin-media-grid,
+  .bulletin-card .bulletin-media-item {
+    height: 110px !important;
+    min-height: 110px !important;
+    max-height: 110px !important;
+    margin: 0 0 6px 0 !important;
+    background: #f8fafc !important;
+    border-radius: 6px !important;
+    overflow: hidden !important;
+  }
+
+  .bulletin-card img,
+  .bulletin-card video,
+  .bulletin-card .bulletin-media-preview img {
+    height: 110px !important;
+    width: 100% !important;
+    object-fit: cover !important;
+  }
+
+  /* Định dạng khung Audio nếu tin bài là File âm thanh */
+  .bulletin-card audio {
+    height: 36px !important;
+    width: 100% !important;
+    margin-top: 36px !important;
+  }
+
+  /* Khung xem trước File PDF */
+  .bulletin-card .bulletin-media-item.is-pdf {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 8px !important;
+    box-sizing: border-box !important;
+  }
+
+  /* --- TẦNG 5: NÚT BẤM SỬA / XÓA (36px - Cố định ở đáy) --- */
+  .bulletin-card .bulletin-footer,
+  .bulletin-card .row-actions,
+  .bulletin-card .card-buttons {
+    height: 36px !important;
+    min-height: 36px !important;
+    margin-top: auto !important; /* Đẩy cố định xuống chân thẻ */
+    padding-top: 6px !important;
+    border-top: 1px solid #f1f5f9 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+  }
+
+  .bulletin-card .row-actions button,
+  .bulletin-card .card-buttons button {
+    height: 28px !important;
+    padding: 0 12px !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+  }
 }
