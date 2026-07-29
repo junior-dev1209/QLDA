@@ -1112,12 +1112,13 @@ async function deleteFromSupabase(tableName, id) {
   }
 }
 
+// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE (ĐÃ FIX LỖI ÉP KIỂU SỐ 22P02)
 async function syncCollectionToSupabase(tableName, items) {
   const supabase = window.supabaseClient;
   if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
 
   try {
-    // 🟢 DANH SÁCH CÁC CỘT HỢP LỆ CỦA BẢNG TASKS TRÊN SUPABASE
+    // Danh sách các cột hợp lệ của bảng tasks trên Supabase
     const ALLOWED_TASK_KEYS = [
       "id", "kind", "title", "projectName", "ownerId", "collaboratorIds",
       "collaboratorId", "category", "workType", "recurrence",
@@ -1127,21 +1128,36 @@ async function syncCollectionToSupabase(tableName, items) {
       "completionReviewStatus", "completionReviewNote", "createdAt", "updatedAt"
     ];
 
+    // 🟢 CÁC CỘT KIỂU SỐ (NUMERIC) TRÊN DATABASE
+    const NUMERIC_KEYS = ["progress", "qualityPercent"];
+
     const cleanItems = items.map(item => {
       const copy = { ...item };
-      delete copy.dataUrl; // Xóa dữ liệu file base64 thừa nếu có
-      // Nếu là bảng tasks, chỉ giữ lại đúng các trường có cột trên Supabase
+      delete copy.dataUrl; 
+
       if (tableName === "tasks") {
         const sanitizedTask = {};
         ALLOWED_TASK_KEYS.forEach(key => {
           if (copy[key] !== undefined) {
-            sanitizedTask[key] = copy[key];
+            let val = copy[key];
+
+            // 🌟 TRIỆT HẠ LỖI 22P02: Nếu cột kiểu số bị dính chuỗi rỗng "" -> Ép thành null
+            if (NUMERIC_KEYS.includes(key)) {
+              if (val === "" || val === null || val === undefined || isNaN(val)) {
+                val = null;
+              } else {
+                val = Number(val);
+              }
+            }
+
+            sanitizedTask[key] = val;
           }
         });
         return sanitizedTask;
       }
       return copy;
     });
+
     const { error } = await supabase
       .from(tableName)
       .upsert(cleanItems, { onConflict: 'id' });
