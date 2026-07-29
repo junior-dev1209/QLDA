@@ -2168,7 +2168,7 @@ function renderActiveStatusBar() {
     .join("");
 }
 
-// 🌟 CẬP NHẬT TRẠNG THÁI ONLINE & GIÁM SÁT TÀI KHOẢN QUA SUPABASE
+// 🟢 HÀM CẬP NHẬT TRẠNG THÁI ONLINE (MỞ CHO TẤT CẢ TÀI KHOẢN ĐÃ ĐĂNG NHẬP)
 async function requestAccountPresence() {
   const account = currentAccount();
   const supabase = window.supabaseClient;
@@ -2177,46 +2177,42 @@ async function requestAccountPresence() {
   const now = new Date().toISOString();
 
   try {
-    // 1. Gửi tín hiệu "Heartbeat" cập nhật thời gian hoạt động của tài khoản hiện tại
+    // 1. Gửi tín hiệu Heartbeat báo tài khoản hiện tại đang hoạt động
     await supabase
       .from("accounts")
       .update({ last_seen_at: now })
       .eq("id", account.id);
 
-    // 2. Nếu là Admin -> Lấy danh sách tài khoản đang Online (hoạt động trong 2 phút gần nhất)
-    if (isAdmin()) {
-      const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-      const startOfToday = new Date(new Date().setHours(0,0,0,0)).toISOString();
+    // 2. Lấy danh sách tài khoản đang Online (hoạt động trong 2 phút gần nhất) - MỞ TOÀN BỘ
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const startOfToday = new Date(new Date().setHours(0,0,0,0)).toISOString();
 
-      // Lấy danh sách đang online
-      const { data: onlineList } = await supabase
-        .from("accounts")
-        .select("*")
-        .gte("last_seen_at", twoMinutesAgo);
+    const { data: onlineList } = await supabase
+      .from("accounts")
+      .select("*")
+      .gte("last_seen_at", twoMinutesAgo);
 
-      // Lấy số lượng tài khoản đã truy cập trong ngày
-      const { data: todayList } = await supabase
-        .from("accounts")
-        .select("id")
-        .gte("last_seen_at", startOfToday);
+    const { data: todayList } = await supabase
+      .from("accounts")
+      .select("id")
+      .gte("last_seen_at", startOfToday);
 
-      if (onlineList) {
-        accountPresence.payload = {
-          onlineCount: onlineList.length,
-          todayUniqueAccounts: todayList ? todayList.length : onlineList.length,
-          monthUniqueAccounts: state.accounts.length,
-          generatedAt: now,
-          onlineWindowSeconds: 120,
-          onlineAccounts: onlineList.map(acc => ({
-            displayName: acc.displayName || acc.display_name || acc.username,
-            username: acc.username,
-            role: acc.role,
-            departmentId: acc.departmentId || acc.department_id,
-            lastSeenAt: acc.last_seen_at || acc.lastSeenAt
-          }))
-        };
-        renderAccountPresence();
-      }
+    if (onlineList) {
+      accountPresence.payload = {
+        onlineCount: onlineList.length,
+        todayUniqueAccounts: todayList ? todayList.length : onlineList.length,
+        monthUniqueAccounts: (state.accounts || []).length,
+        generatedAt: now,
+        onlineWindowSeconds: 120,
+        onlineAccounts: onlineList.map(acc => ({
+          displayName: acc.displayName || acc.display_name || acc.username,
+          username: acc.username,
+          role: acc.role,
+          departmentId: acc.departmentId || acc.department_id,
+          lastSeenAt: acc.last_seen_at || acc.lastSeenAt
+        }))
+      };
+      renderAccountPresence();
     }
   } catch (err) {
     console.warn("⚠️ Chưa thể cập nhật trạng thái trực tuyến:", err);
@@ -12383,6 +12379,33 @@ document.addEventListener("DOMContentLoaded", () => {
     floatBtn.addEventListener("click", () => {
       if (bar) {
         bar.classList.remove("is-collapsed");
+        floatBtn.classList.add("is-hidden");
+      }
+    });
+  }
+});
+
+// 🟢 BỘ ĐIỀU KHIỂN ĐÓNG / MỞ THANH ONLINE (ĐỒNG BỘ NÓNG VỚI CSS)
+document.addEventListener("DOMContentLoaded", () => {
+  const bar = byId("activeStatusBar");
+  const toggleBtn = byId("toggleActiveStatusBtn");
+  const floatBtn = byId("openActiveStatusFloatingBtn");
+
+  // Bấm nút "-" hoặc "✕" trên đầu thanh Online -> Thu gọn/Ẩn
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      if (bar) {
+        bar.classList.add("is-hidden");
+        if (floatBtn) floatBtn.classList.remove("is-hidden");
+      }
+    });
+  }
+
+  // Bấm vào Nút bong bóng nổi -> Mở lại thanh Online
+  if (floatBtn) {
+    floatBtn.addEventListener("click", () => {
+      if (bar) {
+        bar.classList.remove("is-hidden");
         floatBtn.classList.add("is-hidden");
       }
     });
