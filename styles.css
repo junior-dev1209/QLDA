@@ -8710,8 +8710,6 @@ button[data-scroll-page="bottom"],
     border-radius: 20px !important;
     transform: translateY(-50%) !important; /* Ép tâm nút nằm CHUẨN ĐÉT ở chính giữa */
 }
-  }
-
   /* 3. Đưa Nút cuộn trang (↓ ↑) về góc dưới bên phải gọn gàng, xóa bỏ dải nền trắng dài */
   .task-scroll-actions,
   .view-scroll-actions {
@@ -8735,4 +8733,32 @@ button[data-scroll-page="bottom"],
     width: 36px !important;
     height: 36px !important;
   }
+}
+/* Thu hẹp chiều rộng khung Đang Online từ 280px xuống 200px */
+@media (min-width: 769px) {
+    #activeStatusBar {
+        width: 200px !important;
+        max-width: 200px !important;
+        padding: 6px 8px !important;
+    }
+}
+
+/* Thu nhỏ khoảng cách và kích thước danh sách người dùng bên trong */
+#activeStatusBar > div {
+    gap: 6px !important;
+}
+
+/* Thu nhỏ Avatar (vòng tròn chữ K) */
+#activeStatusBar [class*="avatar"], 
+#activeStatusBar div[style*="width: 40px"],
+#activeStatusBar div[style*="width: 36px"] {
+    width: 28px !important;
+    height: 28px !important;
+    font-size: 12px !important;
+    line-height: 28px !important;
+}
+
+/* Thu nhỏ cỡ chữ tên và chức danh */
+#activeStatusBar div {
+    font-size: 12px !important;
 }
