@@ -1111,8 +1111,7 @@ async function deleteFromSupabase(tableName, id) {
     console.error(`❌ Lỗi kết nối xóa Supabase [${tableName}]:`, err);
   }
 }
-
-// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE (ĐÃ TÍCH HỢP TỰ ĐỘNG LỌC TRÙNG ID)
+// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE (ĐÃ TÍCH HỢP TỰ ĐỘNG KHỬ TRÙNG ID TUYỆT ĐỐI)
 async function syncCollectionToSupabase(tableName, items) {
   const supabase = window.supabaseClient;
   if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
@@ -1162,10 +1161,14 @@ async function syncCollectionToSupabase(tableName, items) {
       return copy;
     });
 
-    // 🟢 TRIỆT HẠ LỖI "ON CONFLICT": Lọc sạch các phần tử bị trùng ID trong mảng trước khi gửi
-    const uniqueItems = Array.from(
-      new Map(cleanItems.filter(item => item && item.id).map(item => [item.id, item])).values()
-    );
+    // 🟢 TRIỆT HẠ LỖI ON CONFLICT: Lọc sạch trùng ID trước khi gửi lên Supabase
+    const uniqueMap = new Map();
+    cleanItems.forEach(item => {
+      if (item && item.id) {
+        uniqueMap.set(String(item.id), item);
+      }
+    });
+    const uniqueItems = Array.from(uniqueMap.values());
 
     if (!uniqueItems.length) return;
 
@@ -1850,6 +1853,9 @@ function loadState() {
 }
 
 function persistState() {
+  if (Array.isArray(state.accounts)) {
+    state.accounts = Array.from(new Map(state.accounts.map(acc => [acc.id, acc])).values());
+  }
   const serialized = JSON.stringify(state);
   try {
     localStorage.setItem(STORAGE_KEY, serialized);
