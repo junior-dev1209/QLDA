@@ -2199,7 +2199,7 @@ window.PHUC_THINH_IMPORTED_PEOPLE = [
         "name": "Hoàng Thị Thùy Dung",
         "gender": "Nữ",
         "departmentId": "ke-hoach",
-        "roleId": "chuyen-vien-ke-hoach",
+        "roleId": "ke-toan-truong",
         "contract": "Biên chế",
         "qualification": "Thạc sĩ - Thạc sỹ Quản trị kinh doanh, cử nhân kế toán",
         "contractTerm": "HĐLV không xác định thời hạn",
