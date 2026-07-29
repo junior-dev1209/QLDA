@@ -1112,23 +1112,43 @@ async function deleteFromSupabase(tableName, id) {
   }
 }
 
-// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE
 async function syncCollectionToSupabase(tableName, items) {
   const supabase = window.supabaseClient;
   if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
 
   try {
+    // 🟢 DANH SÁCH CÁC CỘT HỢP LỆ CỦA BẢNG TASKS TRÊN SUPABASE
+    const ALLOWED_TASK_KEYS = [
+      "id", "kind", "title", "projectName", "ownerId", "collaboratorIds",
+      "collaboratorId", "category", "workType", "recurrence",
+      "recurrenceSeriesId", "recurrenceAnchorDue", "recurrenceAnchorValue",
+      "startDate", "due", "dueTime", "status", "progress", "qualityPercent",
+      "responseStatus", "responseNote", "note", "attachments",
+      "completionReviewStatus", "completionReviewNote", "createdAt", "updatedAt"
+    ];
+
     const cleanItems = items.map(item => {
       const copy = { ...item };
-      delete copy.dataUrl; 
+      delete copy.dataUrl; // Xóa dữ liệu file base64 thừa nếu có
+      // Nếu là bảng tasks, chỉ giữ lại đúng các trường có cột trên Supabase
+      if (tableName === "tasks") {
+        const sanitizedTask = {};
+        ALLOWED_TASK_KEYS.forEach(key => {
+          if (copy[key] !== undefined) {
+            sanitizedTask[key] = copy[key];
+          }
+        });
+        return sanitizedTask;
+      }
       return copy;
     });
-
     const { error } = await supabase
       .from(tableName)
       .upsert(cleanItems, { onConflict: 'id' });
 
-    if (error) console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error.message);
+    if (error) {
+      console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error);
+    }
   } catch (err) {
     console.error(`❌ Lỗi kết nối Supabase bảng [${tableName}]:`, err);
   }
