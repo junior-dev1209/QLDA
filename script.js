@@ -1112,7 +1112,7 @@ async function deleteFromSupabase(tableName, id) {
   }
 }
 
-// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE (ĐÃ FIX ÉP KIỂU DỮ LIỆU AN TOÀN 100%)
+// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE (ĐÃ TÍCH HỢP TỰ ĐỘNG LỌC TRÙNG ID)
 async function syncCollectionToSupabase(tableName, items) {
   const supabase = window.supabaseClient;
   if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
@@ -1141,23 +1141,16 @@ async function syncCollectionToSupabase(tableName, items) {
           if (copy[key] !== undefined) {
             let val = copy[key];
 
-            // 1. Ép kiểu Số: Nếu rỗng "" hoặc NaN -> chuyển thành null
             if (NUMERIC_KEYS.includes(key)) {
               val = (val === "" || val === null || val === undefined || isNaN(val)) ? null : Number(val);
-            } 
-            // 2. Ép kiểu Ngày: Nếu rỗng "" -> chuyển thành null
-            else if (DATE_KEYS.includes(key)) {
+            } else if (DATE_KEYS.includes(key)) {
               val = (val === "" || val === null) ? null : String(val);
-            } 
-            // 3. Ép kiểu Mảng (JSONB): Đảm bảo luôn là Array
-            else if (ARRAY_KEYS.includes(key)) {
+            } else if (ARRAY_KEYS.includes(key)) {
               if (typeof val === "string") {
                 try { val = JSON.parse(val); } catch(e) { val = []; }
               }
               if (!Array.isArray(val)) val = [];
-            }
-            // 4. Nếu chuỗi rỗng bình thường -> giữ nguyên hoặc chuyển null nếu cần
-            else if (val === "") {
+            } else if (val === "") {
               val = null;
             }
 
@@ -1169,12 +1162,18 @@ async function syncCollectionToSupabase(tableName, items) {
       return copy;
     });
 
+    // 🟢 TRIỆT HẠ LỖI "ON CONFLICT": Lọc sạch các phần tử bị trùng ID trong mảng trước khi gửi
+    const uniqueItems = Array.from(
+      new Map(cleanItems.filter(item => item && item.id).map(item => [item.id, item])).values()
+    );
+
+    if (!uniqueItems.length) return;
+
     const { error } = await supabase
       .from(tableName)
-      .upsert(cleanItems, { onConflict: 'id' });
+      .upsert(uniqueItems, { onConflict: 'id' });
 
     if (error) {
-      // 🌟 In chi tiết thông báo lỗi từ Supabase ra Console để dễ kiểm tra
       console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error.message || error);
     }
   } catch (err) {
