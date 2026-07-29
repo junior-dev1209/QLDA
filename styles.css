@@ -9238,3 +9238,21 @@ div.task-filter {
     font-weight: 600 !important;
   }
 }
+/* =========================================================
+   🔒 KHÓA TẤT CẢ CÁC MÀN HÌNH NẾU KHÔNG CÓ CLASS IS-ACTIVE
+   ========================================================= */
+
+/* Dùng ID cụ thể để ép độ ưu tiên tuyệt đối, giấu sạch 100% các tab ẩn */
+#dashboard:not(.is-active),
+#bulletin:not(.is-active),
+#archive:not(.is-active),
+#people:not(.is-active),
+#tasks:not(.is-active),
+#department-evaluations:not(.is-active),
+#evaluations:not(.is-active),
+#history:not(.is-active),
+#accounts:not(.is-active),
+#rules:not(.is-active),
+.view:not(.is-active) {
+  display: none !important;
+}
