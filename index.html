@@ -105,6 +105,7 @@
         <button class="nav-item" data-view="history" type="button" title="Lịch sử"><span class="nav-icon" aria-hidden="true">◷</span><span class="nav-label">Lịch sử</span></button>
         <button class="nav-item" data-view="accounts" type="button" title="Tài khoản"><span class="nav-icon" aria-hidden="true">◫</span><span class="nav-label">Tài khoản</span></button>
         <button class="nav-item" data-view="rules" type="button" title="Quy chế"><span class="nav-icon" aria-hidden="true">§</span><span class="nav-label">Quy chế</span></button>
+        <button class="nav-item" data-view="settings" type="button" title="Cấu Hình Hệ Thống"><span class="nav-icon">⚙</span><span class="nav-label">Cấu Hình Hệ Thống</span></button>
       </nav>
       <section class="period-box">
         <label for="activePeriod">Kỳ đánh giá</label>
@@ -113,7 +114,7 @@
     </aside>
 
     <section class="content">
-      <!-- 🟢 THANH TRẠNG THÁI HOẠT ĐỘNG (PC: Thu nhỏ / Mobile: Trượt bên phải) -->
+       <!-- 🟢 THANH TRẠNG THÁI HOẠT ĐỘNG (ĐÃ FIX CHUẨN HTML) -->
       <div id="activeStatusBar" class="active-status-bar is-hidden">
         <div class="active-status-container">
           <div class="active-status-head">
@@ -121,24 +122,20 @@
               <span class="online-pulse"></span>
               <strong>Đang online (<span id="activeUserCount">0</span>)</strong>
             </div>
-            <!-- Nút thu nhỏ trên PC / Nút đóng ✕ trên Mobile -->
             <button id="toggleActiveStatusBtn" type="button" class="active-status-toggle-btn" title="Thu gọn / Đóng">
               <span class="desktop-only-inline">−</span>
               <span class="mobile-only-inline">✕</span>
             </button>
           </div>
         </div>
-        <div id="activeUserList" class="active-user-list">
-            <!-- Danh sách bong bóng avatar vẽ bằng JS -->
-          </div>
+        <div id="activeUserList" class="active-user-list"></div>
       </div>
-      <!-- Backdrop lớp nền mờ khi mở Drawer trên Mobile -->
       <div id="activeStatusBackdrop" class="active-status-backdrop"></div>
-      <!-- Nút nổi dạng bong bóng mép phải màn hình trên Mobile để bấm trượt ra -->
       <button id="openActiveStatusFloatingBtn" type="button" class="active-status-floating-btn is-hidden" title="Xem ai đang online">
         <span class="online-pulse"></span>
         <span id="floatingUserCount">0</span>
       </button>
+      <!-- 1. TỔNG QUAN -->
       <section id="dashboard" class="view is-active">
         <div class="section-head">
           <div>
@@ -204,7 +201,7 @@
         </div>
       </section>
 
-      <!-- 🌟 TAB BẢNG TIN ĐÃ SỬA CẤU TRÚC HTML FORM NẰM NGANG VÀ DANH SÁCH 4 Ô DƯỚI -->
+      <!-- 2. BẢNG TIN -->
       <section id="bulletin" class="view">
         <div class="section-head">
           <div>
@@ -215,12 +212,10 @@
         </div>
 
         <div class="bulletin-layout-stacked">
-          <!-- 1. FORM ĐĂNG BÀI NẰM NGANG FULL CHIỀU RỘNG Ở TRÊN -->
           <section id="bulletinAdminPanel" class="block bulletin-admin-only">
             <h3>Đăng tải tin bài</h3>
             <form id="bulletinForm" class="bulletin-form-grid">
               <input type="hidden" id="bulletinId">
-              
               <label class="col-span-4" data-custom-field-key="title">Tiêu đề
                 <input type="text" id="bulletinTitle" required placeholder="Nhập tiêu đề tin bài, thông báo...">
               </label>
@@ -287,7 +282,6 @@
             </form>
           </section>
 
-          <!-- 2. DANH SÁCH BẢNG TIN NẰM BÊN DƯỚI (LƯỚI Ô VUÔNG) -->
           <section class="bulletin-board">
             <div class="filter-row bulletin-filter">
               <input type="text" id="bulletinSearch" placeholder="Tìm kiếm theo tiêu đề, nội dung...">
@@ -303,13 +297,14 @@
             <div id="bulletinList" class="bulletin-list empty-state">Đang tải bảng tin...</div>
           </section>
         </div>
-        
+
         <div class="view-scroll-actions" aria-label="Điều hướng nhanh trang Bảng tin">
-          <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
-          <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
+          <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang">&uarr;</button>
+          <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang">&darr;</button>
         </div>
       </section>
 
+      <!-- 3. LƯU TRỮ -->
       <section id="archive" class="view">
         <div class="section-head">
           <div>
@@ -373,9 +368,9 @@
                 <span class="compact-upload-title">Tải lên hồ sơ liên quan</span>
                 <div class="compact-upload-row">
                   <label class="file-button compact-file-button">Chọn tệp
-                    <input id="archiveFiles" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar,image/*,video/*,audio/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+                    <input id="archiveFiles" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar,image/*,video/*,audio/*">
                   </label>
-                  <span class="field-note">Hỗ trợ PDF, Word, Excel, ảnh, video, âm thanh và tệp nén. Mỗi tệp tối đa 30MB, một hồ sơ tối đa 300MB.</span>
+                  <span class="field-note">Hỗ trợ PDF, Word, Excel, ảnh, video, âm thanh và tệp nén. Mỗi tệp tối đa 30MB.</span>
                 </div>
               </div>
               <div id="archiveFileList" class="attachment-list archive-file-draft wide">
@@ -399,12 +394,9 @@
             <div id="archiveList" class="archive-list empty-state">Chưa có hồ sơ lưu trữ.</div>
           </section>
         </div>
-        <div class="view-scroll-actions" aria-label="Điều hướng nhanh trang Lưu trữ">
-          <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
-          <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
-        </div>
       </section>
 
+      <!-- 4. NHÂN SỰ -->
       <section id="people" class="view">
         <div class="section-head">
           <div>
@@ -501,12 +493,9 @@
             <tbody id="peopleTable"></tbody>
           </table>
         </div>
-        <div class="view-scroll-actions" aria-label="Điều hướng nhanh trang Nhân sự">
-          <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
-          <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
-        </div>
       </section>
 
+      <!-- 5. CÔNG VIỆC -->
       <section id="tasks" class="view">
         <div class="section-head">
           <div>
@@ -554,8 +543,8 @@
                 <span id="taskCollaboratorSummary">Chọn người phối hợp</span>
               </button>
               <div id="taskCollaboratorPanel" class="collaborator-picker-panel is-hidden">
-                <input id="taskCollaboratorSearch" type="search" autocomplete="off" placeholder="Gõ tên người phối hợp..." aria-label="Tìm người phối hợp">
-                <div id="taskCollaborators" class="checkbox-list task-collaborator-list" role="group" aria-label="Người phối hợp"></div>
+                <input id="taskCollaboratorSearch" type="search" autocomplete="off" placeholder="Gõ tên người phối hợp...">
+                <div id="taskCollaborators" class="checkbox-list task-collaborator-list" role="group"></div>
                 <p id="taskCollaboratorSearchEmpty" class="collaborator-search-empty is-hidden">Không tìm thấy người phối hợp phù hợp.</p>
               </div>
             </div>
@@ -630,7 +619,7 @@
             <button id="resetTaskForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
-        <!-- 🌟 ĐÃ TỐI ƯU THANH BỘ LỌC CÔNG VIỆC VÀ BỘ LỌC NGÀY THẲNG HÀNG -->
+
         <div class="filter-row task-filter">
           <input id="taskSearch" placeholder="Tìm công việc, người giao hoặc người được giao">
           <select id="taskProjectFilter" aria-label="Lọc công việc theo tên dự án">
@@ -644,7 +633,6 @@
             <option>Quá hạn</option>
           </select>
           
-          <!-- Cụm chọn ngày được gộp nằm ngang phẳng đẹp -->
           <div class="date-range-group">
             <span class="date-label">Từ</span>
             <input id="taskDateFrom" type="date" class="filter-date" aria-label="Lọc công việc từ ngày">
@@ -654,12 +642,9 @@
           </div>
         </div>
         <div id="taskBoard" class="task-board"></div>
-        <div class="task-scroll-actions" aria-label="Điều hướng nhanh trang công việc">
-          <button id="scrollTasksToTop" class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
-          <button id="scrollTasksToBottom" class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
-        </div>
       </section>
 
+      <!-- 6. KPI PHÒNG -->
       <section id="department-evaluations" class="view">
         <div class="section-head">
           <div>
@@ -754,6 +739,7 @@
         </div>
       </section>
 
+      <!-- 7. KPI CÁ NHÂN -->
       <section id="evaluations" class="view">
         <div class="section-head">
           <div>
@@ -849,6 +835,7 @@
         </div>
       </section>
 
+      <!-- 8. LỊCH SỬ -->
       <section id="history" class="view">
         <div class="section-head">
           <div>
@@ -882,6 +869,7 @@
         </section>
       </section>
 
+      <!-- 9. TÀI KHOẢN (Đã làm sạch sẽ độc lập) -->
       <section id="accounts" class="view">
         <div class="section-head">
           <div>
@@ -889,50 +877,7 @@
             <h2>Tài khoản sử dụng</h2>
           </div>
         </div>
-        <section id="moduleAccessPanel" class="block admin-module-panel is-hidden">
-          <div class="section-head module-access-head">
-            <div>
-              <p class="eyebrow">Cấu hình hệ thống</p>
-              <h3>Hiển thị mục lớn theo nhóm quyền</h3>
-            </div>
-            <p class="section-note">Admin luôn có quyền quản trị toàn bộ hệ thống.</p>
-          </div>
-          <div id="moduleAccessList" class="module-access-list"></div>
-          <section id="systemThemePanel" class="system-theme-panel is-hidden">
-            <div class="section-head system-theme-head">
-              <div>
-                <p class="eyebrow">Giao diện toàn hệ thống</p>
-                <h3>Theme ngày lễ và dịp kỷ niệm</h3>
-              </div>
-              <div id="systemThemePreview" class="system-theme-preview" aria-label="Xem trước màu theme"></div>
-            </div>
-            <form id="systemThemeForm" class="system-theme-form">
-              <label>Chủ đề
-                <select id="systemThemePreset"></select>
-              </label>
-              <label class="theme-custom-field">Tên dịp kỷ niệm
-                <input id="systemThemeCustomName" maxlength="80" placeholder="Ví dụ: Kỷ niệm thành lập Ban">
-              </label>
-              <div class="theme-color-fields theme-custom-field">
-                <label>Màu chủ đạo
-                  <input id="systemThemePrimary" type="color" value="#176b87">
-                </label>
-                <label>Màu đậm
-                  <input id="systemThemePrimaryDark" type="color" value="#0b4a61">
-                </label>
-                <label>Màu nhấn
-                  <input id="systemThemeAccent" type="color" value="#b7791f">
-                </label>
-                <label>Màu nền
-                  <input id="systemThemeBackground" type="color" value="#f4f7fb">
-                </label>
-              </div>
-              <div class="form-actions">
-                <button type="submit">Áp dụng theme</button>
-              </div>
-            </form>
-          </section>
-        </section>
+
         <section id="accountPresencePanel" class="block account-presence-panel is-hidden">
           <div class="section-head account-presence-head">
             <div>
@@ -958,6 +903,7 @@
           </div>
           <div id="accountPresenceList" class="account-presence-list"></div>
         </section>
+
         <form id="accountForm" class="form-grid">
           <input type="hidden" id="accountId">
           <label>Tên hiển thị
@@ -987,16 +933,17 @@
           </label>
           <div class="form-actions wide">
             <button type="submit">Lưu tài khoản</button>
-            <!-- 🌟 ĐÃ BỔ SUNG NÚT XÓA TÀI KHOẢN ẨN SẴN Ở ĐÂY -->
             <button id="deleteAccountBtn" class="ghost danger-action is-hidden" type="button" style="color: #e53e3e; border-color: #fed7d7; background: #fff5f5;">Xóa tài khoản</button>
             <button id="resetAccountForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
+
         <div id="accountAdminQuickTools" class="account-admin-quick-tools is-hidden">
           <label class="account-search-field">Tìm kiếm nhanh
             <input id="accountSearch" type="search" autocomplete="off" placeholder="Tên hiển thị, tên đăng nhập, nhân sự, phòng...">
           </label>
         </div>
+
         <div class="table-wrap">
           <table>
             <thead>
@@ -1008,15 +955,12 @@
                 <th></th>
               </tr>
             </thead>
-          <tbody id="accountTable"></tbody>
+            <tbody id="accountTable"></tbody>
           </table>
-        </div>
-        <div id="accountScrollActions" class="view-scroll-actions is-hidden" aria-label="Điều hướng nhanh trang Tài khoản">
-          <button class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
-          <button class="scroll-jump-button" data-scroll-page="bottom" type="button" title="Xuống cuối trang" aria-label="Xuống cuối trang">&darr;</button>
         </div>
       </section>
 
+      <!-- 10. QUY CHẾ -->
       <section id="rules" class="view">
         <div class="section-head">
           <div>
@@ -1050,6 +994,62 @@
         <section class="block">
           <h3>Bộ tiêu chí KPI đang áp dụng</h3>
           <div id="rulesCriteria" class="rules-criteria"></div>
+        </section>
+      </section>
+
+      <!-- 11. CÀI ĐẶT HỆ THỐNG (Màn hình độc lập riêng biệt) -->
+      <section id="settings" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Hệ thống</p>
+            <h2>Cấu hình & Cài đặt hệ thống</h2>
+          </div>
+        </div>
+
+        <section id="moduleAccessPanel" class="block admin-module-panel">
+          <div class="section-head module-access-head">
+            <div>
+              <p class="eyebrow">Cấu hình hệ thống</p>
+              <h3>Hiển thị mục lớn theo nhóm quyền</h3>
+            </div>
+            <p class="section-note">Admin luôn có quyền quản trị toàn bộ hệ thống.</p>
+          </div>
+          <div id="moduleAccessList" class="module-access-list"></div>
+        </section>
+
+        <section id="systemThemePanel" class="block system-theme-panel" style="margin-top: 14px;">
+          <div class="section-head system-theme-head">
+            <div>
+              <p class="eyebrow">Giao diện toàn hệ thống</p>
+              <h3>Theme ngày lễ và dịp kỷ niệm</h3>
+            </div>
+            <div id="systemThemePreview" class="system-theme-preview" aria-label="Xem trước màu theme"></div>
+          </div>
+          <form id="systemThemeForm" class="system-theme-form">
+            <label>Chủ đề
+              <select id="systemThemePreset"></select>
+            </label>
+            <label class="theme-custom-field">Tên dịp kỷ niệm
+              <input id="systemThemeCustomName" maxlength="80" placeholder="Ví dụ: Kỷ niệm thành lập Ban">
+            </label>
+            <div class="theme-color-fields theme-custom-field">
+              <label>Màu chủ đạo
+                <input id="systemThemePrimary" type="color" value="#176b87">
+              </label>
+              <label>Màu đậm
+                <input id="systemThemePrimaryDark" type="color" value="#0b4a61">
+              </label>
+              <label>Màu nhấn
+                <input id="systemThemeAccent" type="color" value="#b7791f">
+              </label>
+              <label>Màu nền
+                <input id="systemThemeBackground" type="color" value="#f4f7fb">
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit">Áp dụng theme</button>
+            </div>
+          </form>
         </section>
       </section>
     </section>
@@ -1110,7 +1110,7 @@
   </section>
 
   <section id="taskInboxDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card task-inbox-modal" role="dialog" aria-modal="true" aria-labelledby="taskInboxTitle">
+    <div class="modal-card task-inbox-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p class="eyebrow">Giao việc</p>
@@ -1203,7 +1203,7 @@
   </section>
 
   <section id="taskStatusDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card kpi-task-detail-modal task-status-detail-modal" role="dialog" aria-modal="true" aria-labelledby="taskStatusDetailTitle">
+    <div class="modal-card kpi-task-detail-modal task-status-detail-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p class="eyebrow">Danh sách công việc</p>
@@ -1218,7 +1218,7 @@
   </section>
 
   <section id="taskCompletionReviewDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card task-completion-review-modal" role="dialog" aria-modal="true" aria-labelledby="taskCompletionReviewTitle">
+    <div class="modal-card task-completion-review-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p class="eyebrow">Đánh giá hoàn thành</p>
@@ -1248,7 +1248,7 @@
   </section>
 
   <section id="taskDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="taskDetailTitle">
+    <div class="modal-card task-detail-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p id="taskDetailSubtitle" class="eyebrow">Chi tiết công việc</p>
@@ -1256,14 +1256,14 @@
         </div>
         <button id="closeTaskDetail" class="ghost" type="button">Đóng</button>
       </div>
-      <div id="taskDetailActions" class="task-detail-actions" aria-label="Điều khiển công việc"></div>
+      <div id="taskDetailActions" class="task-detail-actions"></div>
       <div id="taskDetailMeta" class="task-detail-meta"></div>
       <div id="taskDetailContent" class="task-detail-content"></div>
     </div>
   </section>
 
   <section id="bulletinDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card bulletin-detail-modal" role="dialog" aria-modal="true" aria-labelledby="bulletinDetailTitle">
+    <div class="modal-card bulletin-detail-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p id="bulletinDetailMeta" class="eyebrow">Bảng tin</p>
@@ -1278,7 +1278,7 @@
   </section>
 
   <section id="archiveDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card archive-detail-modal" role="dialog" aria-modal="true" aria-labelledby="archiveDetailTitle">
+    <div class="modal-card archive-detail-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p id="archiveDetailMeta" class="eyebrow">Lưu Trữ</p>
@@ -1293,7 +1293,7 @@
   </section>
 
   <section id="kpiTaskDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card kpi-task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="kpiTaskDetailTitle">
+    <div class="modal-card kpi-task-detail-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p class="eyebrow">Chi tiết KPI</p>
@@ -1308,7 +1308,7 @@
   </section>
 
   <section id="fieldCustomizeDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card customization-modal" role="dialog" aria-modal="true" aria-labelledby="fieldCustomizeTitle">
+    <div class="modal-card customization-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p class="eyebrow">Tùy biến ô thông tin</p>
@@ -1361,7 +1361,7 @@
   </section>
 
   <section id="customFieldDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card customization-modal" role="dialog" aria-modal="true" aria-labelledby="customFieldDialogTitle">
+    <div class="modal-card customization-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p class="eyebrow">Thêm ô thông tin</p>
@@ -1402,7 +1402,7 @@
   </section>
 
   <section id="popupCustomizeDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card customization-modal" role="dialog" aria-modal="true" aria-labelledby="popupCustomizeTitle">
+    <div class="modal-card customization-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p class="eyebrow">Tùy biến popup</p>
@@ -1422,14 +1422,14 @@
       </form>
     </div>
   </section>
+
   <template id="emptyRowTemplate">
     <tr><td colspan="8" class="empty-cell">Chưa có dữ liệu.</td></tr>
   </template>
 
-  <!-- 🌟 TÚI CHỨA CHUÔNG THÔNG BÁO -->
   <div id="phucThinhToastContainer"></div>
 
-  <!-- 📱 THANH ĐIỀU HƯỚNG ĐÁY MÀN HÌNH (MOBILE ONLY) -->
+  <!-- 📱 MOBILE NAV -->
   <nav class="mobile-bottom-nav mobile-only">
     <button type="button" class="bottom-nav-item is-active" data-view="dashboard">
       <span class="nav-icon">▦</span>
@@ -1453,9 +1453,7 @@
     </button>
   </nav>
 
-  <!-- 📱 POPUP MENU MOBILE CHUẨN GIAO DIỆN FACEBOOK -->
   <div id="mobileMenuPopup" class="mobile-menu-popup mobile-only">
-    <!-- 1. CÁ NHÂN -->
     <div class="mobile-profile-card">
       <div class="mobile-profile-avatar">👤</div>
       <div class="mobile-profile-info">
@@ -1464,41 +1462,36 @@
       </div>
       <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
     </div>
-
-    <!-- 2. LÍST MENU -->
     <div class="mobile-menu-list">
       <button type="button" class="mobile-menu-item" data-view="archive">
         <div class="mobile-icon-box">▧</div>
         <span class="mobile-menu-text">Lưu Trữ</span>
       </button>
-
       <button type="button" class="mobile-menu-item" data-view="department-evaluations">
         <div class="mobile-icon-box">▥</div>
         <span class="mobile-menu-text">KPI phòng</span>
       </button>
-
       <button type="button" class="mobile-menu-item" data-view="evaluations">
         <div class="mobile-icon-box">◇</div>
         <span class="mobile-menu-text">KPI cá nhân</span>
       </button>
-
       <button type="button" class="mobile-menu-item" data-view="history">
         <div class="mobile-icon-box">◷</div>
         <span class="mobile-menu-text">Lịch sử</span>
       </button>
-
       <button type="button" class="mobile-menu-item" data-view="accounts">
         <div class="mobile-icon-box">◫</div>
         <span class="mobile-menu-text">Tài khoản</span>
       </button>
-
       <button type="button" class="mobile-menu-item" data-view="rules">
         <div class="mobile-icon-box">§</div>
         <span class="mobile-menu-text">Quy chế</span>
       </button>
+      <button type="button" class="mobile-menu-item" data-view="settings">
+        <div class="mobile-icon-box">⚙</div>
+        <span class="mobile-menu-text">Cấu Hình Hệ Thống</span>
+      </button>
     </div>
-
-    <!-- 3. ĐĂNG XUẤT -->
     <div class="mobile-menu-footer">
       <button type="button" id="mobileLogoutBtn" class="mobile-logout-button">
         <span>🚪</span> Đăng xuất
@@ -1506,9 +1499,8 @@
     </div>
   </div>
 
-  <!-- 📱 POPUP CHI TIẾT HỒ SƠ NHÂN SỰ -->
   <section id="personDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <div class="modal-card person-detail-modal" role="dialog" aria-modal="true" aria-labelledby="personDetailName">
+    <div class="modal-card person-detail-modal" role="dialog" aria-modal="true">
       <div class="person-detail-header">
         <div class="person-detail-identity">
           <p class="eyebrow">Hồ sơ chi tiết</p>
@@ -1518,14 +1510,13 @@
         <div class="person-detail-actions">
           <button id="editPersonDetail" type="button">Sửa hồ sơ</button>
           <button id="deletePersonDetail" class="ghost danger-action" type="button">Xóa</button>
-          <button id="closePersonDetail" class="ghost person-detail-close" type="button" aria-label="Đóng hồ sơ chi tiết" title="Đóng">×</button>
+          <button id="closePersonDetail" class="ghost person-detail-close" type="button" title="Đóng">×</button>
         </div>
       </div>
       <div id="personDetailContent" class="person-detail-grid"></div>
     </div>
   </section>
 
-  <!-- 🌟 CÁC FILE SCRIPT HỆ THỐNG -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="supabase-config.js"></script>
   <script src="people-data.js"></script>
