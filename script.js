@@ -5827,7 +5827,8 @@ function historyItemSortValue(item) {
 function activityMatchesHistory(activity, type, targetId) {
   if (!activity || !targetId) return false;
   if (type === "department") {
-    if (activity.targetType === "bulletin") return true;
+    // 🌟 1. Bổ sung jsonImport để hiển thị nhật ký khi lọc theo Phòng ban
+    if (activity.targetType === "bulletin" || activity.targetType === "jsonImport") return true;
     if (activity.departmentId === targetId) return true;
     if (activity.personId && personById(activity.personId)?.departmentId === targetId) return true;
     if (activity.targetType === "department" && activity.targetId === targetId) return true;
@@ -5837,6 +5838,7 @@ function activityMatchesHistory(activity, type, targetId) {
   return (
     activity.personId === targetId ||
     (activity.targetType === "person" && activity.targetId === targetId) ||
+    activity.targetType === "jsonImport" || // 🌟 2. Bổ sung jsonImport khi lọc theo Cá nhân
     (activity.targetType === "departmentEvaluation" && activity.departmentId && activity.departmentId === person?.departmentId)
   );
 }
@@ -11699,6 +11701,15 @@ async function importSeparatedJsonData(files) {
   const timestamp = new Date().toISOString();
   bundles.forEach((bundle) => mergeImportBundle(nextState, bundle, timestamp));
   Object.assign(state, nextState);
+  logActivity({
+  action: "Nhập JSON",
+  module: "Hệ thống",
+  targetType: "jsonImport",
+  targetId: "json-import",
+  period: state.activePeriod,
+  title: "Nhập dữ liệu JSON hệ thống",
+  details: `Đã nạp/gộp thành công ${files.length} tệp: ${files.map((f) => f.name).join(", ")}`,
+});
   migrateDepartmentTermLabels({ persist: false });
   syncPersonnelAccounts();
   const localPersist = persistState();
