@@ -2031,8 +2031,9 @@ async function sharedJsonRequest(action, options = {}) {
   return { response, payload };
 }
 
+// 🟢 1. SỬA HÀM KIỂM TRA: BẬT GIÁM SÁT NGAY KHI CÓ KẾT NỐI SUPABASE
 function accountPresenceAvailable() {
-  return usingSupabaseSync() && sharedSync.session && sharedSync.available === true;
+  return Boolean(window.supabaseClient && currentAccount());
 }
 
 function accountPresenceRelativeTime(timestamp) {
@@ -2168,54 +2169,102 @@ function renderActiveStatusBar() {
     .join("");
 }
 
-// 🟢 HÀM CẬP NHẬT TRẠNG THÁI ONLINE (MỞ CHO TẤT CẢ TÀI KHOẢN ĐÃ ĐĂNG NHẬP)
+// 📊 1. HÀM TỰ ĐỘNG GHI LƯỢT TRUY CẬP (MỖI TÀI KHOẢN GHI 1 LẦN/GIỜ TRÁNH TRÁC RÁC)
+async function logAccountAccessSession(account) {
+  const supabase = window.supabaseClient;
+  if (!account || !supabase) return;
+
+  const lastLogKey = `phuc-thinh-access-logged-${account.id}`;
+  const lastLogTime = Number(localStorage.getItem(lastLogKey) || 0);
+  const now = Date.now();
+
+  // 1 tiếng (3.600.000 ms) ghi nhận 1 lượt truy cập
+  if (now - lastLogTime > 3600000) {
+    try {
+      await supabase.from("access_logs").insert([{
+        account_id: account.id,
+        username: account.username,
+        display_name: account.displayName || account.username,
+        role: account.role,
+        department_id: account.departmentId,
+        access_type: "active_session"
+      }]);
+      localStorage.setItem(lastLogKey, String(now));
+    } catch (e) {
+      console.warn("⚠️ Chưa thể lưu access_logs:", e);
+    }
+  }
+}
+
+// 🟢 2. CẬP NHẬT SỐ LIỆU GIÁM SÁT THỰC TẾ ĐỔ VÀO KHUNG GIAO DIỆN
 async function requestAccountPresence() {
   const account = currentAccount();
   const supabase = window.supabaseClient;
   if (!account || !supabase) return;
 
-  const now = new Date().toISOString();
+  // Ghi log lượt truy cập của tài khoản hiện tại
+  if (typeof logAccountAccessSession === "function") {
+    logAccountAccessSession(account);
+  }
+
+  const now = new Date();
+  const nowIso = now.toISOString();
 
   try {
-    // 1. Gửi tín hiệu Heartbeat báo tài khoản hiện tại đang hoạt động
+    // 1. Cập nhật mốc thời gian hoạt động gần nhất (last_seen_at)
     await supabase
       .from("accounts")
-      .update({ last_seen_at: now })
+      .update({ last_seen_at: nowIso })
       .eq("id", account.id);
 
-    // 2. Lấy danh sách tài khoản đang Online (hoạt động trong 2 phút gần nhất) - MỞ TOÀN BỘ
+    // 2. Chuẩn bị các mốc thời gian
     const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    const startOfToday = new Date(new Date().setHours(0,0,0,0)).toISOString();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-    const { data: onlineList } = await supabase
-      .from("accounts")
-      .select("*")
-      .gte("last_seen_at", twoMinutesAgo);
+    // 3. Truy vấn đồng thời các chỉ số từ Supabase Cloud
+    const [
+      { data: onlineList },
+      { data: todayLogs },
+      { data: monthLogs }
+    ] = await Promise.all([
+      // Đang trực tuyến (2 phút gần nhất)
+      supabase.from("accounts").select("*").gte("last_seen_at", twoMinutesAgo),
+      // Đăng nhập hôm nay (truy vấn từ access_logs)
+      supabase.from("access_logs").select("account_id").gte("accessed_at", startOfToday),
+      // Đăng nhập tháng này (truy vấn từ access_logs)
+      supabase.from("access_logs").select("account_id").gte("accessed_at", startOfMonth)
+    ]);
 
-    const { data: todayList } = await supabase
-      .from("accounts")
-      .select("id")
-      .gte("last_seen_at", startOfToday);
+    // Tính số lượng tài khoản duy nhất (Unique Accounts)
+    const todayUniqueCount = todayLogs && todayLogs.length 
+      ? new Set(todayLogs.map(l => l.account_id)).size 
+      : (onlineList ? onlineList.length : 0);
 
-    if (onlineList) {
-      accountPresence.payload = {
-        onlineCount: onlineList.length,
-        todayUniqueAccounts: todayList ? todayList.length : onlineList.length,
-        monthUniqueAccounts: (state.accounts || []).length,
-        generatedAt: now,
-        onlineWindowSeconds: 120,
-        onlineAccounts: onlineList.map(acc => ({
-          displayName: acc.displayName || acc.display_name || acc.username,
-          username: acc.username,
-          role: acc.role,
-          departmentId: acc.departmentId || acc.department_id,
-          lastSeenAt: acc.last_seen_at || acc.lastSeenAt
-        }))
-      };
-      renderAccountPresence();
-    }
+    const monthUniqueCount = monthLogs && monthLogs.length 
+      ? new Set(monthLogs.map(l => l.account_id)).size 
+      : todayUniqueCount;
+
+    // 4. Đổ toàn bộ dữ liệu vào cấu trúc Payload để vẽ lên màn hình
+    accountPresence.payload = {
+      onlineCount: onlineList ? onlineList.length : 0,
+      todayUniqueAccounts: todayUniqueCount,
+      monthUniqueAccounts: monthUniqueCount,
+      generatedAt: nowIso,
+      onlineWindowSeconds: 120,
+      onlineAccounts: (onlineList || []).map(acc => ({
+        displayName: acc.displayName || acc.display_name || acc.username,
+        username: acc.username,
+        role: acc.role,
+        departmentId: acc.departmentId || acc.department_id,
+        lastSeenAt: acc.last_seen_at || acc.lastSeenAt
+      }))
+    };
+
+    // Gọi hàm render để cập nhật lên khung HTML
+    renderAccountPresence();
   } catch (err) {
-    console.warn("⚠️ Chưa thể cập nhật trạng thái trực tuyến:", err);
+    console.warn("⚠️ Chưa thể cập nhật dữ liệu giám sát tài khoản:", err);
   }
 }
 
@@ -12440,3 +12489,77 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 });
+// 📊 HÀM TRUY VẤN SỐ LIỆU THỐNG KÊ TRUY CẬP PHỤC VỤ BÁO CÁO (TRÍCH XUẤT TỪ ACCESS_LOGS)
+async function getAccessReportMetrics(days = 30) {
+  const supabase = window.supabaseClient;
+  if (!supabase) {
+    alert("Chưa kết nối Supabase Cloud!");
+    return null;
+  }
+
+  const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  // 1. Truy vấn dữ liệu trong khoảng thời gian chọn (mặc định 30 ngày)
+  const { data: logs, error } = await supabase
+    .from("access_logs")
+    .select("*")
+    .gte("accessed_at", startDate);
+
+  if (error || !logs) {
+    console.error("❌ Lỗi đọc access_logs:", error);
+    return null;
+  }
+
+  // 2. Tính toán các chỉ số
+  const totalAccessCount = logs.length;
+  const uniqueUsers = new Set(logs.map(l => l.account_id)).size;
+  const totalUsers = (state.accounts || []).length;
+  const systemUsageRate = totalUsers ? Math.round((uniqueUsers / totalUsers) * 100) : 0;
+
+  // 3. Phân rã theo từng Phòng Ban
+  const deptStats = {};
+  departments.forEach(d => { 
+    deptStats[d.id] = { name: d.name, count: 0, users: new Set() }; 
+  });
+
+  logs.forEach(l => {
+    if (deptStats[l.department_id]) {
+      deptStats[l.department_id].count += 1;
+      deptStats[l.department_id].users.add(l.account_id);
+    }
+  });
+
+  return {
+    periodDays: days,
+    totalAccessCount,
+    uniqueUsers,
+    totalUsers,
+    systemUsageRate: `${systemUsageRate}%`,
+    departmentBreakdown: Object.values(deptStats).map(d => ({
+      departmentName: d.name,
+      accessCount: d.count,
+      activeUserCount: d.users.size
+    }))
+  };
+}
+
+// 🟢 HÀM HIỂN THỊ THÔNG BÁO BÁO CÁO TÓM TẮT CHO ADMIN
+async function showAccessReportPopup(days = 30) {
+  const data = await getAccessReportMetrics(days);
+  if (!data) return;
+
+  let deptText = data.departmentBreakdown
+    .map(d => `• ${d.departmentName}: ${d.accessCount} lượt (${d.activeUserCount} cán bộ)`)
+    .join("\n");
+
+  const reportText = 
+    `📊 BÁO CÁO HIỆU QUẢ SỬ DỤNG HỆ THỐNG (${days} NGÀY GẦN NHẤT)\n` +
+    `--------------------------------------------------\n` +
+    `• Tổng số lượt truy cập: ${data.totalAccessCount} lượt\n` +
+    `• Số cán bộ đã sử dụng: ${data.uniqueUsers}/${data.totalUsers} người\n` +
+    `• Tỷ lệ phủ hệ thống: ${data.systemUsageRate}\n\n` +
+    `🏢 PHÂN TÍCH THEO PHÒNG BAN:\n` +
+    `${deptText}`;
+
+  alert(reportText);
+}
