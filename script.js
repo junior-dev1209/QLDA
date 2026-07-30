@@ -2051,71 +2051,52 @@ function accountPresenceRelativeTime(timestamp) {
   return `${minutes} phút trước`;
 }
 
-/* =========================================================================
-   🟢 HÀM GIÁM SÁT TÀI KHOẢN & VẼ THANH TRẠNG THÁI HOẠT ĐỘNG (FACEBOOK STYLE)
-   ========================================================================= */
-
+// =========================================================================
+// 🟢 MỞ RỘNG QUYỀN XEM THANH ĐANG ONLINE CHO TẤT CẢ TÀI KHOẢN (PC & MOBILE)
+// =========================================================================
 function renderAccountPresence() {
   const panel = byId("accountPresencePanel");
-  if (!panel) return;
   const canMonitor = isAdmin() || isDirector() || hasDepartmentManagementAccess();
-  panel.classList.toggle("is-hidden", !canMonitor);
-  if (!canMonitor) return;
 
-  const status = byId("accountPresenceStatus");
-  const onlineCount = byId("accountPresenceOnlineCount");
-  const todayCount = byId("accountPresenceTodayCount");
-  const monthCount = byId("accountPresenceMonthCount");
-  const list = byId("accountPresenceList");
-  if (!status || !onlineCount || !todayCount || !monthCount || !list) return;
+  // 1. Chỉ Quản lý/Admin mới xem được Khung Thống Kê Giám Sát (trong tab Tài Khoản)
+  if (panel) {
+    panel.classList.toggle("is-hidden", !canMonitor);
+    if (canMonitor && accountPresence.payload) {
+      const status = byId("accountPresenceStatus");
+      const onlineCount = byId("accountPresenceOnlineCount");
+      const todayCount = byId("accountPresenceTodayCount");
+      const monthCount = byId("accountPresenceMonthCount");
+      const list = byId("accountPresenceList");
 
-  if (!accountPresenceAvailable()) {
-    onlineCount.textContent = "-";
-    todayCount.textContent = "-";
-    monthCount.textContent = "-";
-    status.textContent = usingSupabaseSync()
-      ? "Đang kết nối máy chủ để cập nhật trạng thái trực tuyến."
-      : "Giám sát trực tuyến yêu cầu cấu hình Supabase Cloud.";
-    list.innerHTML = '<p class="muted">Chưa có dữ liệu giám sát trực tuyến.</p>';
-    renderActiveStatusBar(); // 🟢 Cập nhật thanh Facebook
-    return;
+      if (status && onlineCount && todayCount && monthCount && list) {
+        const payload = accountPresence.payload;
+        onlineCount.textContent = String(payload.onlineCount || 0);
+        todayCount.textContent = String(payload.todayUniqueAccounts || 0);
+        monthCount.textContent = String(payload.monthUniqueAccounts || 0);
+        status.textContent = `Cập nhật lúc ${formatDateTime(payload.generatedAt)} · Hoạt động trong ${Math.round(Number(payload.onlineWindowSeconds || 120) / 60)} phút gần nhất.`;
+        const onlineAccounts = Array.isArray(payload.onlineAccounts) ? payload.onlineAccounts : [];
+        list.innerHTML = onlineAccounts.length
+          ? onlineAccounts
+              .map((account) => {
+                const department = departmentById(account.departmentId)?.name || "Không phân phòng";
+                return `
+                  <article class="account-presence-row">
+                    <span class="account-presence-dot" aria-hidden="true"></span>
+                    <div class="account-presence-person">
+                      <strong>${escapeHtml(account.displayName || account.username || "Tài khoản")}</strong>
+                      <span>${escapeHtml(accountRoleLabels[account.role] || account.role || "Tài khoản")} · ${escapeHtml(department)}</span>
+                    </div>
+                    <time datetime="${escapeHtml(account.lastSeenAt || "")}">${escapeHtml(accountPresenceRelativeTime(account.lastSeenAt))}</time>
+                  </article>
+                `;
+              })
+              .join("")
+          : '<p class="muted">Không có tài khoản nào đang hoạt động trong thời gian giám sát.</p>';
+      }
+    }
   }
 
-  const payload = accountPresence.payload;
-  if (!payload) {
-    onlineCount.textContent = "...";
-    todayCount.textContent = "...";
-    monthCount.textContent = "...";
-    status.textContent = accountPresence.error || "Đang cập nhật trạng thái trực tuyến...";
-    list.innerHTML = '<p class="muted">Đang tải danh sách tài khoản trực tuyến...</p>';
-    renderActiveStatusBar(); // 🟢 Cập nhật thanh Facebook
-    return;
-  }
-
-  onlineCount.textContent = String(payload.onlineCount || 0);
-  todayCount.textContent = String(payload.todayUniqueAccounts || 0);
-  monthCount.textContent = String(payload.monthUniqueAccounts || 0);
-  status.textContent = `Cập nhật lúc ${formatDateTime(payload.generatedAt)} · Hoạt động trong ${Math.round(Number(payload.onlineWindowSeconds || 120) / 60)} phút gần nhất.`;
-  const onlineAccounts = Array.isArray(payload.onlineAccounts) ? payload.onlineAccounts : [];
-  list.innerHTML = onlineAccounts.length
-    ? onlineAccounts
-        .map((account) => {
-          const department = departmentById(account.departmentId)?.name || "Không phân phòng";
-          return `
-            <article class="account-presence-row">
-              <span class="account-presence-dot" aria-hidden="true"></span>
-              <div class="account-presence-person">
-                <strong>${escapeHtml(account.displayName || account.username || "Tài khoản")}</strong>
-                <span>${escapeHtml(accountRoleLabels[account.role] || account.role || "Tài khoản")} · ${escapeHtml(department)}</span>
-              </div>
-              <time datetime="${escapeHtml(account.lastSeenAt || "")}">${escapeHtml(accountPresenceRelativeTime(account.lastSeenAt))}</time>
-            </article>
-          `;
-        })
-        .join("")
-    : '<p class="muted">Không có tài khoản nào đang hoạt động trong thời gian giám sát.</p>';
-
-  // 🟢 THÊM DÒNG NÀY ĐỂ TỰ ĐỘNG CẬP NHẬT THANH BONG BÓNG ONLINE FACEBOOK
+  // 2. 🟢 HIỂN THỊ CỘT ONLINE BÊN MÉP PHẢI CHO TẤT CẢ TÀI KHOẢN (KỂ CẢ NHÂN VIÊN & TRƯỞNG BỘ PHẬN)
   renderActiveStatusBar();
 }
 
@@ -3237,7 +3218,7 @@ function visibleDepartmentsForDepartmentEvaluations() {
 }
 
 function canAssignTasks() {
-  return canViewAllData() || hasDepartmentManagementAccess();
+  return canViewAllData() || hasDepartmentManagementAccess() || isSectionHead();
 }
 
 function isAssignableByDepartmentLeader(person) {
@@ -3677,20 +3658,52 @@ function updateTaskCollaboratorSummary() {
   summary.textContent = selectedIds.length ? `Đã chọn ${selectedIds.length} người phối hợp` : "Chọn người phối hợp";
 }
 
+// 🟢 HÀM LỌC NGƯỜI PHỐI HỢP (ẨN TUYỆT ĐỐI BẰNG IMPORTANT)
 function filterTaskCollaboratorOptions() {
   const container = byId("taskCollaborators");
   const searchInput = byId("taskCollaboratorSearch");
   const emptyState = byId("taskCollaboratorSearchEmpty");
   if (!container || !searchInput) return;
-  const query = normalizeSearchText(searchInput.value);
+
+  const query = normalizeSearchText(searchInput.value.trim());
   let visibleCount = 0;
-  container.querySelectorAll(".checkbox-option").forEach((option) => {
-    const visible = !query || normalizeSearchText(option.textContent).includes(query);
-    option.classList.toggle("is-hidden", !visible);
-    if (visible) visibleCount += 1;
+
+  // Quét qua tất cả các lựa chọn nhân sự trong danh sách
+  const options = container.querySelectorAll(".checkbox-option, label");
+  options.forEach((option) => {
+    const text = normalizeSearchText(option.textContent || option.innerText || "");
+    const visible = !query || text.includes(query);
+
+    if (visible) {
+      option.style.removeProperty("display");
+      option.classList.remove("is-hidden");
+      visibleCount += 1;
+    } else {
+      // Dùng setProperty với "important" để đè bẹp hoàn toàn CSS cũ
+      option.style.setProperty("display", "none", "important");
+      option.classList.add("is-hidden");
+    }
   });
-  emptyState?.classList.toggle("is-hidden", !query || visibleCount > 0);
+
+  // Hiển thị dòng thông báo nếu không tìm thấy ai
+  if (emptyState) {
+    const showEmpty = Boolean(query) && visibleCount === 0;
+    if (showEmpty) {
+      emptyState.style.setProperty("display", "block", "important");
+      emptyState.classList.remove("is-hidden");
+    } else {
+      emptyState.style.setProperty("display", "none", "important");
+      emptyState.classList.add("is-hidden");
+    }
+  }
 }
+
+// 🟢 BẮT SỰ KIỆN TOÀN CỤC: ĐẢM BẢO GÕ CHỮ VÀO Ô TÌM KIẾM LÀ LỌC TỨC THÌ 100%
+document.addEventListener("input", (event) => {
+  if (event.target && event.target.id === "taskCollaboratorSearch") {
+    filterTaskCollaboratorOptions();
+  }
+});
 
 function resetTaskCollaboratorSearch() {
   const input = byId("taskCollaboratorSearch");
@@ -4444,6 +4457,12 @@ function assignedTasksForInbox() {
 }
 
 function renderTaskInbox() {
+  const panel = document.querySelector(".task-inbox-panel");
+  if (panel) {
+    panel.classList.toggle("is-hidden", !canAssignTasks());
+  }
+  if (!canAssignTasks()) return;
+
   const assignedTasks = assignedTasksForInbox();
   const pendingCount = assignedTasks.filter((task) => !isTaskFinishedStatus(task.computedStatus)).length;
   byId("taskInboxBadge").textContent = String(pendingCount);
@@ -8375,7 +8394,6 @@ function renderAccountTable() {
             <span class="row-actions">
               ${canEdit ? `<button class="ghost" data-edit-account="${account.id}" type="button">Sửa</button>` : ""}
               ${canDelete ? `<button class="ghost" data-delete-account="${account.id}" type="button">Xóa</button>` : ""}
-              ${isSelf && !canDelete ? "<span class=\"muted\">Đang dùng</span>" : ""}
             </span>
           </td>
         </tr>
@@ -8468,15 +8486,28 @@ function applyAccessControls() {
   document.querySelectorAll(".admin-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isDirector());
   });
+
+  // 🟢 ẨN NÚT GIAO VIỆC NẾU KHÔNG CÓ QUYỀN GIAO VIỆC (NHÂN VIÊN)
+  const taskInboxPanel = document.querySelector(".task-inbox-panel");
+  if (taskInboxPanel) {
+    taskInboxPanel.classList.toggle("is-hidden", !canAssignTasks());
+  }
+
+  // 🟢 CHỈ CHO PHÉP ADMIN MỚI HIỆN NÚT "IN BÁO CÁO"
   document.querySelectorAll(".summary-action").forEach((element) => {
-    element.classList.toggle("is-hidden", !canViewAllData());
+    element.classList.toggle("is-hidden", !isAdmin());
   });
+
+  // CHỈ ADMIN MỚI HIỆN "NHẬP / XUẤT JSON"
   document.querySelectorAll(".json-data-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isAdmin());
   });
+
+  // CHỈ ADMIN MỚI HIỆN "TÙY BIẾN"
   document.querySelectorAll(".customization-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isAdmin());
   });
+
   if (!isAdmin() && customizeMode) setCustomizeMode(false);
   document.querySelectorAll(".bulletin-admin-only").forEach((element) => {
     element.classList.toggle("is-hidden", !canManageBulletins());
@@ -8490,6 +8521,11 @@ function applyAccessControls() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("is-hidden", !canAccessView(button.dataset.view));
   });
+
+  // 📱 THÊM VÀO ĐÂY: Render lại thanh Bottom Nav & Menu Popup riêng cho Mobile theo vai trò
+  if (typeof renderMobileNavigation === "function") {
+    renderMobileNavigation();
+  }
 
   // 🌟 ƯU TIÊN 1: Mở lại Tab đang xem dở trước khi F5
   const savedView = localStorage.getItem("phuc-thinh-active-view");
@@ -8664,6 +8700,7 @@ function updateTaskFormLock(task = null) {
   const statusUpdateLocked = isTaskStatusUpdateLocked(existingTask) && !adminOverride;
   const canEditQuality = !!existingTask && (adminOverride || canAssessTaskQuality(existingTask));
   const isReportOnly = !!existingTask && !canEditDetails && canUpdateTaskProgress(existingTask) && !reportLockedByQuality;
+  
   byId("taskKind").value = kind;
   byId("taskKind").disabled = !!existingTask || !canAssignTasks();
   byId("taskOwnerLabelText").textContent = kind === TASK_KIND_ASSIGNED ? "Người được giao" : "Người thực hiện";
@@ -8674,45 +8711,94 @@ function updateTaskFormLock(task = null) {
       : kind === TASK_KIND_ASSIGNED
         ? "Nội dung yêu cầu, rủi ro, phối hợp, hồ sơ liên quan..."
         : "Nội dung công việc, tiến độ thực hiện, rủi ro, phối hợp, hồ sơ liên quan...";
+        
   document.querySelectorAll(".assignment-only").forEach((element) => {
     element.classList.toggle("is-hidden", kind !== TASK_KIND_ASSIGNED);
   });
   document.querySelectorAll(".regular-only").forEach((element) => {
     element.classList.toggle("is-hidden", kind !== TASK_KIND_REGULAR);
   });
+  
   byId("taskAssignerLabel").value = existingTask?.assignedByName || existingTask?.createdBy || (kind === TASK_KIND_ASSIGNED && canAssignTasks() ? currentActorInfo().name : "");
+  
   byId("taskForm")
-    .querySelectorAll("#taskTitle, #taskProjectName, #taskOwner, #taskCategory, #taskWorkType, #taskRecurrence, #taskStartDate, #taskDue, #taskDueTime")
+    .querySelectorAll("#taskTitle, #taskProjectName, #taskCategory, #taskWorkType, #taskRecurrence, #taskStartDate, #taskDue, #taskDueTime")
     .forEach((input) => {
       input.disabled = !canEditDetails;
     });
-  byId("taskNote").disabled = reportLockedByQuality || (!canEditDetails && !canUpdateReport);
-  byId("taskCollaborators")
-    .querySelectorAll('input[type="checkbox"]')
-    .forEach((input) => {
-      input.disabled = !canEditDetails;
-    });
-  byId("taskCollaborators").classList.toggle("is-disabled", !canEditDetails);
+
+  // =========================================================================
+  // 🌟 KHÓA/MỞ QUYỀN CHO TÀI KHOẢN NHÂN VIÊN VÀ CẤP QUẢN LÝ
+  // =========================================================================
+  const isPureEmployee = currentAccount()?.role === "employee";
   const collaboratorPicker = byId("taskCollaboratorPicker");
-  if (collaboratorPicker) {
-    collaboratorPicker.classList.toggle("is-disabled", !canEditDetails);
-    collaboratorPicker.setAttribute("aria-disabled", String(!canEditDetails));
-    if (!canEditDetails) setTaskCollaboratorPickerOpen(false);
+
+  if (isPureEmployee) {
+    // 1. Nhân viên: Mặc định Người thực hiện là CHÍNH MÌNH & KHÓA
+    if (currentPerson() && !existingTask) {
+      byId("taskOwner").value = currentPerson().id;
+      const triggerText = byId("taskOwnerTriggerText");
+      if (triggerText) {
+        triggerText.textContent = `${currentPerson().name} - ${roleById(currentPerson().roleId)?.name || ""}`;
+      }
+    }
+    byId("taskOwner").disabled = true;
+    const ownerTrigger = byId("taskOwnerTrigger");
+    if (ownerTrigger) {
+      ownerTrigger.disabled = true;
+      ownerTrigger.style.pointerEvents = "none";
+      ownerTrigger.style.opacity = "0.65";
+      ownerTrigger.style.cursor = "not-allowed";
+    }
+
+    // 2. Nhân viên: KHÓA HOÀN TOÀN tính năng Người phối hợp
+    if (collaboratorPicker) {
+      collaboratorPicker.classList.add("is-disabled");
+      collaboratorPicker.setAttribute("aria-disabled", "true");
+      setTaskCollaboratorPickerOpen(false);
+    }
+    byId("taskCollaborators").querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      input.disabled = true;
+    });
+    byId("taskCollaborators").classList.add("is-disabled");
+
+  } else {
+    // 3. Trưởng phòng, Phó phòng, Trưởng bộ phận, Ban giám đốc, Admin: MỞ KHÓA
+    byId("taskOwner").disabled = !canEditDetails;
+    const ownerTrigger = byId("taskOwnerTrigger");
+    if (ownerTrigger) {
+      ownerTrigger.disabled = !canEditDetails;
+      ownerTrigger.style.pointerEvents = canEditDetails ? "auto" : "none";
+      ownerTrigger.style.opacity = canEditDetails ? "1" : "0.65";
+      ownerTrigger.style.cursor = canEditDetails ? "pointer" : "not-allowed";
+    }
+
+    byId("taskCollaborators").querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      input.disabled = !canEditDetails;
+    });
+    byId("taskCollaborators").classList.toggle("is-disabled", !canEditDetails);
+    if (collaboratorPicker) {
+      collaboratorPicker.classList.toggle("is-disabled", !canEditDetails);
+      collaboratorPicker.setAttribute("aria-disabled", String(!canEditDetails));
+      if (!canEditDetails) setTaskCollaboratorPickerOpen(false);
+    }
   }
+
+  byId("taskNote").disabled = reportLockedByQuality || (!canEditDetails && !canUpdateReport);
+  
   if (statusUpdateLocked) {
     byId("taskStartDate").disabled = true;
     byId("taskDue").disabled = true;
     byId("taskDueTime").disabled = true;
   }
-  if (isEmployee() && kind === TASK_KIND_REGULAR) {
-    byId("taskOwner").disabled = true;
-  }
+
   byId("taskStatus").disabled = !canUpdateReport || statusUpdateLocked;
   byId("taskForm")
     .querySelectorAll("#taskProgress, #taskAttachments")
     .forEach((input) => {
       input.disabled = !canUpdateReport;
     });
+
   const qualityInput = byId("taskQualityPercent");
   if (!taskCompletionIsApproved(existingTask) && !adminOverride) {
     qualityInput.value = "";
@@ -8723,8 +8809,10 @@ function updateTaskFormLock(task = null) {
       ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
       : "Nhập tỷ lệ chất lượng sau khi công việc được đánh giá Đạt. Điểm thực hiện KPI = tỷ lệ này / 100."
     : "Chỉ mở sau khi Trưởng phòng/Phó phòng đánh giá công việc Đạt.";
+
   byId("taskResponseStatus").disabled = !(kind === TASK_KIND_ASSIGNED && existingTask && !reportLockedByQuality && (adminOverride || canReportTask(existingTask)));
   byId("taskResponseNote").disabled = !(kind === TASK_KIND_ASSIGNED && existingTask && !reportLockedByQuality && canUpdateReport);
+
   if (reportLockedByQuality) {
     const progressMeta = byId("taskProgressMeta");
     if (progressMeta) {
@@ -10938,13 +11026,24 @@ byId("taskOwner").addEventListener("change", () => {
   updateTaskCategoryOptions();
   updateTaskFormLock();
 });
+
 byId("taskCollaborators").addEventListener("change", updateTaskCollaboratorSummary);
-byId("taskCollaboratorSearch").addEventListener("input", debounce(filterTaskCollaboratorOptions, 150));
-byId("taskCollaboratorSearch").addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  setTaskCollaboratorPickerOpen(false);
-  byId("taskCollaboratorToggle")?.focus();
-});
+
+// 🟢 BỘ TÌM KIẾM NGƯỜI PHỐI HỢP MỚI
+const collaboratorSearchElem = byId("taskCollaboratorSearch");
+if (collaboratorSearchElem) {
+  collaboratorSearchElem.addEventListener("input", filterTaskCollaboratorOptions);
+  collaboratorSearchElem.addEventListener("keyup", filterTaskCollaboratorOptions);
+  collaboratorSearchElem.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault(); // Chống lưu nhầm form
+    } else if (event.key === "Escape") {
+      setTaskCollaboratorPickerOpen(false);
+      byId("taskCollaboratorToggle")?.focus();
+    }
+  });
+}
+
 byId("taskCollaboratorToggle").addEventListener("click", () => {
   setTaskCollaboratorPickerOpen(!isTaskCollaboratorPickerOpen());
 });
@@ -12567,4 +12666,335 @@ async function showAccessReportPopup(days = 30) {
     `${deptText}`;
 
   alert(reportText);
+}
+
+function initSearchableTaskOwner() {
+  const selectElem = byId("taskOwner");
+  if (!selectElem || byId("taskOwnerPickerWrapper")) return;
+
+  const wrapper = document.createElement("div");
+  wrapper.id = "taskOwnerPickerWrapper";
+  wrapper.className = "task-owner-picker-container";
+
+  wrapper.innerHTML = `
+    <button type="button" class="task-owner-trigger" id="taskOwnerTrigger">
+      <span id="taskOwnerTriggerText">Chọn nhân sự</span>
+      <small>▼</small>
+    </button>
+    <div class="task-owner-panel is-hidden" id="taskOwnerPanel">
+      <input type="text" id="taskOwnerSearch" class="form-control" placeholder="Gõ tên người thực hiện..." style="width:100%; height:32px; padding:4px 8px; font-size:13px; border:1px solid #cbd5e1; border-radius:4px;">
+      <div id="taskOwnerOptions"></div>
+    </div>
+  `;
+
+  selectElem.parentNode.insertBefore(wrapper, selectElem);
+  selectElem.style.display = "none";
+
+  const trigger = byId("taskOwnerTrigger");
+  const triggerText = byId("taskOwnerTriggerText");
+  const panel = byId("taskOwnerPanel");
+  const searchInput = byId("taskOwnerSearch");
+  const optionsContainer = byId("taskOwnerOptions");
+
+  function renderOptions() {
+    const people = visiblePeopleForTasks();
+    const currentVal = selectElem.value;
+    const query = normalizeSearchText(searchInput.value.trim());
+
+    const selectedPerson = people.find(p => p.id === currentVal);
+    triggerText.textContent = selectedPerson ? `${selectedPerson.name} - ${roleById(selectedPerson.roleId)?.name || ""}` : "Chọn nhân sự";
+
+    let visibleCount = 0;
+    optionsContainer.innerHTML = people.map(p => {
+      const roleName = roleById(p.roleId)?.name || "";
+      const label = `${p.name} - ${roleName}`;
+      const normText = normalizeSearchText(label);
+      const isMatch = !query || normText.includes(query);
+      
+      if (isMatch) visibleCount++;
+
+      return `
+        <div class="task-owner-option ${p.id === currentVal ? "is-selected" : ""}" 
+             data-owner-id="${escapeHtml(p.id)}" 
+             style="display: ${isMatch ? "flex" : "none"}">
+          ${escapeHtml(label)}
+        </div>
+      `;
+    }).join("");
+  }
+
+  trigger.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // 🌟 CHẶN MỞ POPUP NẾU TÀI KHOẢN LÀ NHÂN VIÊN HOẶC Ô BỊ KHÓA
+    if (selectElem.disabled || trigger.disabled || currentAccount()?.role === "employee") {
+      return;
+    }
+
+    const isHidden = panel.classList.contains("is-hidden");
+    panel.classList.toggle("is-hidden", !isHidden);
+    if (isHidden) {
+      renderOptions();
+      setTimeout(() => searchInput.focus(), 50);
+    }
+  });
+
+  searchInput.addEventListener("input", renderOptions);
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") e.preventDefault();
+  });
+
+  optionsContainer.addEventListener("click", (e) => {
+    const item = e.target.closest("[data-owner-id]");
+    if (!item) return;
+    const ownerId = item.dataset.ownerId;
+    selectElem.value = ownerId;
+    selectElem.dispatchEvent(new Event("change"));
+    panel.classList.add("is-hidden");
+    renderOptions();
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!wrapper.contains(e.target)) {
+      panel.classList.add("is-hidden");
+    }
+  });
+
+  const observer = new MutationObserver(renderOptions);
+  observer.observe(selectElem, { childList: true, attributes: true });
+}
+
+// Kích hoạt khi trang tải xong
+document.addEventListener("DOMContentLoaded", () => {
+  setTimeout(initSearchableTaskOwner, 300);
+});
+// =========================================================
+// 🟢 LỌC TÌM KIẾM NGƯỜI THỰC HIỆN TỨC THÌ (GÕ CHỮ ĐẾN ĐÂU LỌC TỚI ĐÓ)
+// =========================================================
+function filterTaskOwnerOptions() {
+  const container = byId("taskOwnerOptions");
+  const searchInput = byId("taskOwnerSearch");
+  if (!container || !searchInput) return;
+
+  // Lấy từ khóa người dùng gõ (chuẩn hóa tiếng Việt có dấu/không dấu)
+  const rawQuery = searchInput.value.trim();
+  const query = typeof normalizeSearchText === "function" 
+    ? normalizeSearchText(rawQuery) 
+    : rawQuery.toLowerCase();
+
+  const options = container.querySelectorAll(".task-owner-option");
+  let visibleCount = 0;
+
+  options.forEach((option) => {
+    const rawText = option.textContent || option.innerText || "";
+    const text = typeof normalizeSearchText === "function" 
+      ? normalizeSearchText(rawText) 
+      : rawText.toLowerCase();
+
+    const visible = !query || text.includes(query);
+
+    if (visible) {
+      option.style.setProperty("display", "flex", "important");
+      option.classList.remove("is-hidden");
+      visibleCount++;
+    } else {
+      option.style.setProperty("display", "none", "important");
+      option.classList.add("is-hidden");
+    }
+  });
+
+  // Hiển thị dòng thông báo nếu không tìm thấy ai
+  let emptyElem = byId("taskOwnerSearchEmpty");
+  if (!emptyElem) {
+    emptyElem = document.createElement("div");
+    emptyElem.id = "taskOwnerSearchEmpty";
+    emptyElem.className = "muted";
+    emptyElem.style.cssText = "padding: 8px 12px; font-size: 12.5px; color: #64748b;";
+    emptyElem.textContent = "Không tìm thấy nhân sự phù hợp";
+    container.appendChild(emptyElem);
+  }
+
+  const showEmpty = Boolean(query) && visibleCount === 0;
+  emptyElem.style.setProperty("display", showEmpty ? "block" : "none", "important");
+}
+
+// 🟢 LẮNG NGHE SỰ KIỆN GÕ PHÍM TOÀN CỤC CHO Ô TÌM KIẾM NGƯỜI THỰC HIỆN
+document.addEventListener("input", (event) => {
+  if (event.target && event.target.id === "taskOwnerSearch") {
+    filterTaskOwnerOptions();
+  }
+});
+
+document.addEventListener("keyup", (event) => {
+  if (event.target && event.target.id === "taskOwnerSearch") {
+    filterTaskOwnerOptions();
+  }
+});
+// =========================================================================
+// 📱 BỘ ĐIỀU KHIỂN ĐỒNG BỘ NAV & MENU MOBILE RIÊNG CHO TÀI KHOẢN NHÂN VIÊN
+// =========================================================================
+
+function toggleMobileMenu(show) {
+  const popup = document.getElementById("mobileMenuPopup");
+  if (!popup) return;
+  const isActive = show !== undefined ? show : !popup.classList.contains("is-active");
+
+  if (isActive) {
+    const mainUserLabel = document.getElementById("currentUserLabel");
+    const mainUserMeta = document.getElementById("currentUserMeta");
+    const mobileUserLabel = document.getElementById("mobileUserLabel");
+    const mobileUserMeta = document.getElementById("mobileUserMeta");
+
+    if (mainUserLabel && mobileUserLabel) mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
+    if (mainUserMeta && mobileUserMeta) mobileUserMeta.textContent = mainUserMeta.textContent || "";
+  }
+  popup.classList.toggle("is-active", isActive);
+  document.body.classList.toggle("mobile-menu-open", isActive);
+}
+
+// =========================================================================
+// 📱 BỘ ĐIỀU KHIỂN ĐỒNG BỘ NAV & MENU MOBILE (LOẠI BỎ LẶP MỤC LƯU TRỮ)
+// =========================================================================
+
+function renderMobileNavigation() {
+  const isEmp = isEmployee(); // Kiểm tra có phải tài khoản nhân viên không
+
+  // 1. TỐI ƯU THANH ĐÁY (BOTTOM NAV)
+  const bottomNav = document.querySelector(".mobile-bottom-nav");
+  if (bottomNav) {
+    if (isEmp) {
+      // Dành riêng cho Nhân viên: Bảng tin · Công việc · Lưu Trữ · KPI cá nhân · Menu
+      bottomNav.innerHTML = `
+        <button type="button" class="bottom-nav-item" data-view="bulletin">
+          <span class="nav-icon">▤</span>
+          <span>Bảng tin</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="tasks">
+          <span class="nav-icon">☑</span>
+          <span>Công việc</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="archive">
+          <span class="nav-icon">▧</span>
+          <span>Lưu Trữ</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="evaluations">
+          <span class="nav-icon">◇</span>
+          <span>KPI cá nhân</span>
+        </button>
+        <button type="button" class="bottom-nav-item" id="openMobileMenuBtn">
+          <span class="nav-icon">☰</span>
+          <span>Menu</span>
+        </button>
+      `;
+    } else {
+      // Dành cho Quản lý / Admin
+      bottomNav.innerHTML = `
+        <button type="button" class="bottom-nav-item" data-view="dashboard">
+          <span class="nav-icon">▦</span>
+          <span>Tổng quan</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="bulletin">
+          <span class="nav-icon">▤</span>
+          <span>Bảng tin</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="tasks">
+          <span class="nav-icon">☑</span>
+          <span>Công việc</span>
+        </button>
+        <button type="button" class="bottom-nav-item" data-view="people">
+          <span class="nav-icon">◉</span>
+          <span>Nhân sự</span>
+        </button>
+        <button type="button" class="bottom-nav-item" id="openMobileMenuBtn">
+          <span class="nav-icon">☰</span>
+          <span>Menu</span>
+        </button>
+      `;
+    }
+
+    // Gắn lại sự kiện click chuyển tab cho Bottom Nav
+    bottomNav.querySelectorAll("[data-view]").forEach((btn) => {
+      btn.onclick = function (e) {
+        e.preventDefault();
+        const viewId = this.getAttribute("data-view");
+        if (viewId && typeof switchView === "function") switchView(viewId);
+      };
+    });
+
+    const openBtn = document.getElementById("openMobileMenuBtn");
+    if (openBtn) {
+      openBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleMobileMenu();
+      };
+    }
+  }
+
+  // 2. TỐI ƯU DANH SÁCH MENU POPUP (ĐÃ BỎ LƯU TRỮ VÌ ĐÃ CÓ Ở THANH ĐÁY)
+  const menuList = document.querySelector("#mobileMenuPopup .mobile-menu-list");
+  if (menuList) {
+    if (isEmp) {
+      // Nhân viên chỉ giữ: Tài khoản · Quy chế
+      menuList.innerHTML = `
+        <button type="button" class="mobile-menu-item" data-view="accounts">
+          <div class="mobile-icon-box">◫</div>
+          <span class="mobile-menu-text">Tài khoản</span>
+        </button>
+        <button type="button" class="mobile-menu-item" data-view="rules">
+          <div class="mobile-icon-box">§</div>
+          <span class="mobile-menu-text">Quy chế</span>
+        </button>
+      `;
+    } else {
+      // Quản lý / Admin
+      menuList.innerHTML = `
+        <button type="button" class="mobile-menu-item" data-view="archive">
+          <div class="mobile-icon-box">▧</div>
+          <span class="mobile-menu-text">Lưu Trữ</span>
+        </button>
+        <button type="button" class="mobile-menu-item" data-view="department-evaluations">
+          <div class="mobile-icon-box">▥</div>
+          <span class="mobile-menu-text">KPI phòng</span>
+        </button>
+        <button type="button" class="mobile-menu-item" data-view="evaluations">
+          <div class="mobile-icon-box">◇</div>
+          <span class="mobile-menu-text">KPI cá nhân</span>
+        </button>
+        <button type="button" class="mobile-menu-item" data-view="history">
+          <div class="mobile-icon-box">◷</div>
+          <span class="mobile-menu-text">Lịch sử</span>
+        </button>
+        <button type="button" class="mobile-menu-item" data-view="accounts">
+          <div class="mobile-icon-box">◫</div>
+          <span class="mobile-menu-text">Tài khoản</span>
+        </button>
+        <button type="button" class="mobile-menu-item" data-view="rules">
+          <div class="mobile-icon-box">§</div>
+          <span class="mobile-menu-text">Quy chế</span>
+        </button>
+        <button type="button" class="mobile-menu-item" data-view="settings">
+          <div class="mobile-icon-box">⚙</div>
+          <span class="mobile-menu-text">Cấu Hình Hệ Thống</span>
+        </button>
+      `;
+    }
+
+    // Gắn sự kiện click chuyển tab cho Popup Menu
+    menuList.querySelectorAll("[data-view]").forEach((btn) => {
+      btn.onclick = function (e) {
+        e.preventDefault();
+        const viewId = this.getAttribute("data-view");
+        if (viewId && typeof switchView === "function") switchView(viewId);
+        toggleMobileMenu(false);
+      };
+    });
+  }
+
+  // 3. Highlight nút đang chọn ở thanh đáy
+  const activeView = typeof activeViewId === "function" ? activeViewId() : "";
+  document.querySelectorAll(".mobile-bottom-nav .bottom-nav-item").forEach((nav) => {
+    nav.classList.toggle("is-active", nav.getAttribute("data-view") === activeView);
+  });
 }
