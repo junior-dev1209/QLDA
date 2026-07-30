@@ -24,6 +24,60 @@
   </style>
 </head>
 <body>
+  <!-- 🟢 POPUP CÀI ĐẶT TÀI KHOẢN CÁ NHÂN (ĐỔI MẬT KHẨU & LỊCH SỬ TRUY CẬP) -->
+  <section id="userSettingsDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card user-settings-modal" role="dialog" aria-modal="true">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Tài khoản cá nhân</p>
+          <h2>Cài đặt tài khoản</h2>
+        </div>
+        <button id="closeUserSettings" class="ghost" type="button">Đóng</button>
+      </div>
+
+      <!-- 1. KHỐI ĐỔI MẬT KHẨU -->
+      <section class="block settings-section">
+        <h3>🔑 Đổi mật khẩu</h3>
+        <form id="changePasswordForm" class="form-grid change-password-grid">
+          <label class="wide">Mật khẩu hiện tại
+            <input id="currentPasswordInput" type="password" required placeholder="Nhập mật khẩu hiện tại">
+          </label>
+          <label>Mật khẩu mới
+            <input id="newPasswordInput" type="password" required minlength="6" placeholder="Tối thiểu 6 ký tự">
+          </label>
+          <label>Xác nhận mật khẩu mới
+            <input id="confirmPasswordInput" type="password" required placeholder="Nhập lại mật khẩu mới">
+          </label>
+          <p id="changePasswordError" class="form-error wide" role="alert" style="margin: 0;"></p>
+          <p id="changePasswordSuccess" class="form-success wide" role="alert" style="margin: 0; display: none;"></p>
+          <div class="form-actions wide">
+            <button type="submit">Cập nhật mật khẩu</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- 2. KHỐI LỊCH SỬ TRUY CẬP & ĐĂNG NHẬP -->
+      <section class="block settings-section">
+        <h3>🕒 Lịch sử truy cập & đăng nhập</h3>
+        <p class="section-note" style="margin-bottom: 8px;">Nhật ký 20 lần hoạt động gần nhất của tài khoản này.</p>
+        <div class="table-wrap user-access-history-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Thời gian</th>
+                <th>Loại hoạt động</th>
+                <th>Trạng thái</th>
+              </tr>
+            </thead>
+            <tbody id="userAccessHistoryTableBody">
+              <tr><td colspan="3" class="empty-cell">Đang tải lịch sử...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+
   <section id="loginScreen" class="login-screen">
     <div class="login-card">
       <form id="loginForm" class="login-form">
@@ -51,19 +105,80 @@
         <span class="unit-sub">XÃ PHÚC THỊNH</span>
       </p>
     </div>
+
+    <!-- 3. GÓC PHẢI: THÔNG TIN TÀI KHOẢN & DROPDOWN MENU -->
     <div class="top-actions">
-      <div class="user-chip">
-        <strong id="currentUserLabel">Chưa đăng nhập</strong>
-        <span id="currentUserMeta"></span>
+      <input id="activePeriod" type="month" style="display: none !important;">
+      
+      <!-- Nút kích hoạt Menu Tài khoản -->
+      <div class="user-dropdown-wrapper">
+        <button type="button" id="userDropdownTrigger" class="user-chip-btn" aria-haspopup="true" aria-expanded="false">
+          <div id="currentUserAvatarMini" class="user-avatar-mini">ĐH</div>
+          <div class="user-chip-info">
+            <strong id="currentUserLabel">Chưa đăng nhập</strong>
+            <span id="currentUserMeta"></span>
+          </div>
+          <span class="user-chip-arrow">▾</span>
+        </button>
+
+        <!-- DROPDOWN POPUP TÀI KHOẢN -->
+        <div id="accountDropdownMenu" class="account-dropdown-menu is-hidden">
+          <!-- Header Avatar & Tên -->
+          <div class="dropdown-user-header">
+            <div id="dropdownAvatarLarge" class="dropdown-avatar-large">ĐH</div>
+            <strong id="dropdownDisplayName">Người dùng</strong>
+            <p class="dropdown-subtext">Trang cá nhân của bạn</p>
+          </div>
+
+          <div class="dropdown-divider"></div>
+
+          <!-- Danh sách chức năng -->
+          <ul class="dropdown-menu-list">
+            <li>
+              <button type="button" class="dropdown-menu-item" id="menuBtnSettings">
+                <span class="menu-item-icon icon-settings">⚙️</span>
+                <span class="menu-item-text">Cài đặt</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="dropdown-menu-item" id="menuBtnEditProfile">
+                <span class="menu-item-icon icon-edit">👤</span>
+                <span class="menu-item-text">Chỉnh sửa thông tin</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="dropdown-menu-item" id="menuBtnLanguage">
+                <span class="menu-item-icon icon-lang">🇻🇳</span>
+                <span class="menu-item-text">Ngôn ngữ</span>
+                <span id="currentLangText" class="menu-item-extra">Tiếng Việt ▾</span>
+              </button>
+            </li>
+            <li>
+              <a href="https://zalo.me/0703611114" target="_blank" rel="noopener" class="dropdown-menu-item">
+                <span class="menu-item-icon icon-support">💬</span>
+                <div class="menu-item-stack">
+                  <span class="menu-item-text">Hỗ trợ kỹ thuật</span>
+                  <small class="menu-item-sub">Zalo/Hotline: 070.36.1111.4</small>
+                </div>
+                <span class="menu-item-arrow">›</span>
+              </a>
+            </li>
+          </ul>
+
+          <div class="dropdown-divider"></div>
+
+          <!-- Đăng xuất -->
+          <div class="dropdown-footer">
+            <button type="button" class="dropdown-menu-item logout-item" id="menuBtnLogout">
+              <span class="menu-item-icon icon-logout">🚪</span>
+              <span class="menu-item-text">Đăng xuất</span>
+            </button>
+            <div class="dropdown-version-tag">KPI Phúc Thịnh phiên bản 1.1.14</div>
+          </div>
+        </div>
       </div>
-      <button id="toggleCustomizeMode" class="ghost customization-action" type="button">Tùy biến</button>
-      <button id="printReport" class="ghost summary-action" type="button">In báo cáo</button>
-      <button id="exportData" class="ghost json-data-action" type="button">Xuất JSON</button>
-      <label class="file-button json-data-action">
-        Nhập JSON
-        <input id="importData" type="file" accept="application/json" multiple>
-      </label>
-      <button id="logoutButton" class="ghost" type="button">Đăng xuất</button>
+
+      <button id="logoutButton" class="is-hidden" type="button" style="display:none !important;"></button>
     </div>
   </header>
 
@@ -115,27 +230,30 @@
     </aside>
 
     <section class="content">
-       <!-- 🟢 THANH TRẠNG THÁI HOẠT ĐỘNG (ĐÃ FIX CHUẨN HTML) -->
-      <div id="activeStatusBar" class="active-status-bar is-hidden">
-        <div class="active-status-container">
-          <div class="active-status-head">
-            <div class="active-status-title">
-              <span class="online-pulse"></span>
-              <strong>Đang online (<span id="activeUserCount">0</span>)</strong>
-            </div>
-            <button id="toggleActiveStatusBtn" type="button" class="active-status-toggle-btn" title="Thu gọn / Đóng">
-              <span class="desktop-only-inline">−</span>
-              <span class="mobile-only-inline">-</span>
-            </button>
+      <aside id="activeStatusBar" class="fb-contacts-sidebar">
+        <!-- Header tiêu đề & Nút thao tác góc phải -->
+        <div class="fb-contacts-header">
+          <h3>Đang Online</h3>
+          <div class="fb-contacts-actions">
+            <button type="button" id="toggleContactSearchBtn" class="fb-icon-btn" title="Tìm kiếm">🔍</button>
+            <button type="button" id="toggleActiveStatusBtn" class="fb-icon-btn" title="Tùy chọn / Thu gọn">• • •</button>
           </div>
         </div>
-        <div id="activeUserList" class="active-user-list"></div>
-      </div>
+
+        <!-- Ô tìm kiếm ẩn/hiện nhanh khi bấm kính lúp -->
+        <div id="contactSearchBox" class="fb-contact-search-box is-hidden">
+          <input type="text" id="contactSearchInput" placeholder="Tìm người liên hệ...">
+        </div>
+
+        <!-- Danh sách tài khoản đang online -->
+        <div id="activeUserList" class="fb-contacts-list"></div>
+      </aside>
       <div id="activeStatusBackdrop" class="active-status-backdrop"></div>
-      <button id="openActiveStatusFloatingBtn" type="button" class="active-status-floating-btn is-hidden" title="Xem ai đang online">
+      <button id="openActiveStatusFloatingBtn" type="button" class="active-status-floating-btn is-hidden" title="Mở danh sách người liên hệ">
         <span class="online-pulse"></span>
         <span id="floatingUserCount">0</span>
       </button>
+
       <!-- 1. TỔNG QUAN -->
       <section id="dashboard" class="view is-active">
         <div class="section-head">
@@ -298,7 +416,6 @@
             <div id="bulletinList" class="bulletin-list empty-state">Đang tải bảng tin...</div>
           </section>
         </div>
-
       </section>
 
       <!-- 3. LƯU TRỮ -->
@@ -866,15 +983,16 @@
         </section>
       </section>
 
-      <!-- 9. TÀI KHOẢN (Đã làm sạch sẽ độc lập) -->
+      <!-- 🟢 9. TÀI KHOẢN (TRANG MÀN HÌNH ĐỘC LẬP - CHỈ XUẤT HIỆN Ở GIAO DIỆN ADMIN) -->
       <section id="accounts" class="view">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Phân quyền</p>
+            <p class="eyebrow">Phân quyền & Người dùng</p>
             <h2>Tài khoản sử dụng</h2>
           </div>
         </div>
 
+        <!-- Giám sát tài khoản trực tuyến -->
         <section id="accountPresencePanel" class="block account-presence-panel is-hidden">
           <div class="section-head account-presence-head">
             <div>
@@ -901,6 +1019,7 @@
           <div id="accountPresenceList" class="account-presence-list"></div>
         </section>
 
+        <!-- Form tạo / cập nhật tài khoản -->
         <form id="accountForm" class="form-grid">
           <input type="hidden" id="accountId">
           <label>Tên hiển thị
@@ -935,12 +1054,14 @@
           </div>
         </form>
 
+        <!-- Tìm kiếm nhanh tài khoản -->
         <div id="accountAdminQuickTools" class="account-admin-quick-tools is-hidden">
           <label class="account-search-field">Tìm kiếm nhanh
             <input id="accountSearch" type="search" autocomplete="off" placeholder="Tên hiển thị, tên đăng nhập, nhân sự, phòng...">
           </label>
         </div>
 
+        <!-- Bảng danh sách tài khoản -->
         <div class="table-wrap">
           <table>
             <thead>
@@ -1003,17 +1124,27 @@
           </div>
         </div>
 
-        <section id="moduleAccessPanel" class="block admin-module-panel">
-          <div class="section-head module-access-head">
+        <!-- 1. Bộ công cụ dữ liệu & Tùy biến -->
+        <section class="block settings-tools-panel">
+          <div class="section-head">
             <div>
-              <p class="eyebrow">Cấu hình hệ thống</p>
-              <h3>Hiển thị mục lớn theo nhóm quyền</h3>
+              <p class="eyebrow">Thao tác nâng cao</p>
+              <h3>Công cụ dữ liệu & Tùy biến giao diện</h3>
             </div>
-            <p class="section-note">Admin luôn có quyền quản trị toàn bộ hệ thống.</p>
           </div>
-          <div id="moduleAccessList" class="module-access-list"></div>
+          <p class="section-note" style="margin-bottom: 12px;">Quản lý dữ liệu hệ thống, xuất/nhập báo cáo và kích hoạt chế độ chỉnh sửa giao diện.</p>
+          <div class="settings-tools-grid">
+            <button id="toggleCustomizeMode" class="ghost customization-action" type="button">🎨 Tùy biến</button>
+            <button id="printReport" class="ghost summary-action" type="button">🖨️ In báo cáo</button>
+            <button id="exportData" class="ghost json-data-action" type="button">📤 Xuất JSON</button>
+            <label class="file-button json-data-action" style="margin: 0; cursor: pointer;">
+              📥 Nhập JSON
+              <input id="importData" type="file" accept="application/json" multiple>
+            </label>
+          </div>
         </section>
 
+        <!-- 2. Chủ đề Theme giao diện -->
         <section id="systemThemePanel" class="block system-theme-panel" style="margin-top: 14px;">
           <div class="section-head system-theme-head">
             <div>
@@ -1048,6 +1179,99 @@
             </div>
           </form>
         </section>
+
+        <!-- 3. Bảng Phân quyền nhóm -->
+        <section id="moduleAccessPanel" class="block admin-module-panel" style="margin-top: 14px;">
+          <div class="section-head module-access-head">
+            <div>
+              <p class="eyebrow">Cấu hình hệ thống</p>
+              <h3>Hiển thị mục lớn theo nhóm quyền</h3>
+            </div>
+            <p class="section-note">Admin luôn có quyền quản trị toàn bộ hệ thống.</p>
+          </div>
+          <div id="moduleAccessList" class="module-access-list"></div>
+        </section>
+      </section>
+
+      <!-- 12. TRANG CÁ NHÂN -->
+      <section id="profile" class="view">
+        <div class="fb-profile-container">
+          <div class="fb-profile-header block">
+            <div class="fb-cover-photo" id="profileCoverPhoto">
+              <button type="button" class="fb-btn-update-cover">
+                <span>📷</span> Cập nhật ảnh bìa
+              </button>
+            </div>
+
+            <div class="fb-header-info">
+              <div class="fb-avatar-wrapper">
+                <div id="profileAvatarBox" class="fb-avatar-box">ĐH</div>
+                <button type="button" class="fb-btn-change-avatar" title="Thay ảnh đại diện">
+                  📷 <span>Thay ảnh</span>
+                </button>
+              </div>
+
+              <h2 id="profileDisplayName">Đào Ngọc Huân</h2>
+              <p id="profileBio" class="fb-user-bio">
+                <span id="profileBioText">Mô tả ngắn về bản thân bạn.</span>
+                <button type="button" id="profileAddBioBtn" class="fb-link-btn">Thêm mô tả</button>
+              </p>
+            </div>
+
+            <div class="fb-nav-tabs">
+              <button type="button" class="fb-tab-item is-active" data-profile-tab="timeline">Dòng thời gian</button>
+              <button type="button" class="fb-tab-item" data-profile-tab="intro">Giới thiệu</button>
+              <button type="button" class="fb-tab-item" data-profile-tab="friends">Bạn bè</button>
+              <button type="button" class="fb-tab-item" data-profile-tab="following">Theo dõi</button>
+              <button type="button" class="fb-tab-item" data-profile-tab="photos">Ảnh</button>
+              <button type="button" class="fb-tab-item" data-profile-tab="kpi">Ghi nhận</button>
+              <button type="button" class="fb-tab-item fb-tab-more">•••</button>
+            </div>
+          </div>
+
+          <div class="fb-profile-body">
+            <div class="fb-profile-left">
+              <div class="block fb-question-card">
+                <p>❓ Hãy trả lời những thắc mắc về bạn</p>
+              </div>
+
+              <div class="block fb-intro-card">
+                <h3>Giới thiệu</h3>
+                <ul id="profileIntroList" class="fb-intro-list">
+                  <li>🏛️ <span id="introUnit">Xã Phúc Thịnh</span></li>
+                  <li>💼 <span id="introRole">Ban quản lý Dự án đầu tư - hạ tầng xã Phúc Thịnh</span></li>
+                  <li>📱 <span id="introPhone">+84904880113</span></li>
+                  <li>🎂 <span id="introBirth">01/06/1986</span></li>
+                  <li>🔗 <a id="introLink" href="#" target="_blank" rel="noopener">https://hanoiwork.hanoi.gov.vn/...</a></li>
+                  <li>📍 <span id="introAddress">Sống tại Hà Nội</span></li>
+                </ul>
+                <button type="button" id="profileEditInfoBtn" class="fb-btn-edit-info">
+                  ✏️ Chỉnh sửa thông tin
+                </button>
+              </div>
+            </div>
+
+            <div class="fb-profile-right">
+              <div class="block fb-create-post-card">
+                <div class="fb-create-post-top">
+                  <div id="profilePostAvatar" class="fb-mini-avatar">ĐH</div>
+                  <input type="text" id="profilePostInput" placeholder="Bạn muốn chia sẻ điều gì?" readonly>
+                </div>
+                <div class="fb-create-post-actions">
+                  <button type="button" class="fb-post-action-btn">🖼️ Ảnh/Video</button>
+                  <button type="button" class="fb-post-action-btn">🏅 Ghi nhận</button>
+                  <button type="button" class="fb-post-action-btn">📊 Bình chọn</button>
+                  <button type="button" class="fb-post-action-btn">😊</button>
+                </div>
+              </div>
+
+              <div class="block fb-feed-empty-state">
+                <div class="fb-empty-icon">📄</div>
+                <p>Chưa có bài đăng</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
     </section>
   </main>
