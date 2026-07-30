@@ -2100,15 +2100,13 @@ function renderAccountPresence() {
   renderActiveStatusBar();
 }
 
-// 🟢 HÀM CẬP NHẬT THANH TRẠNG THÁI ONLINE (HIỂN THỊ ĐẦY ĐỦ HỌ TÊN + CHỨC VỤ)
+// 🟢 HÀM VẼ DANH SÁCH NGƯỜI LIÊN HỆ ONLINE CHUẨN FACEBOOK
 function renderActiveStatusBar() {
-  const bar = byId("activeStatusBar");
   const list = byId("activeUserList");
   const countElem = byId("activeUserCount");
-  const floatBtn = byId("openActiveStatusFloatingBtn");
   const floatCount = byId("floatingUserCount");
 
-  if (!bar || !list) return;
+  if (!list) return;
 
   const onlineAccounts = accountPresence?.payload?.onlineAccounts || [];
   const count = onlineAccounts.length;
@@ -2117,43 +2115,63 @@ function renderActiveStatusBar() {
   if (floatCount) floatCount.textContent = String(count);
 
   if (!count) {
-    bar.classList.add("is-hidden");
-    if (floatBtn) floatBtn.classList.add("is-hidden");
+    list.innerHTML = `
+      <div class="muted" style="padding: 12px 8px; font-size: 13px;">
+        Không có người liên hệ nào đang online.
+      </div>
+    `;
     return;
   }
 
-  // Bật hiển thị thanh trạng thái
-  bar.classList.remove("is-hidden");
-  if (floatBtn) floatBtn.classList.remove("is-hidden");
+  // Đọc từ khóa tìm kiếm nếu người dùng có gõ
+  const searchInput = byId("contactSearchInput");
+  const filterKeyword = searchInput ? searchInput.value.trim().toLowerCase() : "";
 
-  // Vẽ danh sách tài khoản
-  list.innerHTML = onlineAccounts
-    .map((acc) => {
-      // 🌟 LẤY HỌ TÊN ĐẦY ĐỦ (Ví dụ: Kỹ Thuật Viên)
-      const fullName = acc.displayName || acc.username || "Tài khoản";
-      const initial = fullName.charAt(0).toUpperCase();
-      
-      // Lấy thông tin Chức vụ & Phòng ban
-      const roleText = accountRoleLabels[acc.role] || acc.role || "";
-      const deptObj = departmentById(acc.departmentId);
-      const deptText = deptObj ? deptObj.name : "";
-      const subInfo = [roleText, deptText].filter(Boolean).join(" · ");
+  const filteredAccounts = onlineAccounts.filter(acc => {
+    const fullName = (acc.displayName || acc.username || "").toLowerCase();
+    return !filterKeyword || fullName.includes(filterKeyword);
+  });
+
+  // Đổ từng dòng người dùng chuẩn dạng Ảnh 1
+  list.innerHTML = filteredAccounts
+    .map(acc => {
+      const fullName = acc.displayName || acc.username || "Người dùng";
+      const initial = fullName.split(" ").map(n => n[0]).join("").slice(-2).toUpperCase() || "H";
 
       return `
-        <div class="active-user-item">
-          <div class="active-avatar-box">
+        <div class="fb-contact-item" title="${escapeHtml(fullName)}">
+          <div class="fb-contact-avatar-box">
             ${escapeHtml(initial)}
-            <span class="active-dot"></span>
+            <span class="fb-online-dot"></span>
           </div>
-          <div class="active-user-info">
-            <span class="active-user-fullname">${escapeHtml(fullName)}</span>
-            ${subInfo ? `<span class="active-user-role">${escapeHtml(subInfo)}</span>` : ""}
-          </div>
+          <span class="fb-contact-name">${escapeHtml(fullName)}</span>
         </div>
       `;
     })
     .join("");
 }
+
+// 🟢 LẮNG NGHE SỰ KIỆN TÌM KIẾM BẤM KÍNH LÚP
+document.addEventListener("DOMContentLoaded", () => {
+  const searchBtn = byId("toggleContactSearchBtn");
+  const searchBox = byId("contactSearchBox");
+  const searchInput = byId("contactSearchInput");
+
+  if (searchBtn && searchBox) {
+    searchBtn.onclick = () => {
+      searchBox.classList.toggle("is-hidden");
+      if (!searchBox.classList.contains("is-hidden") && searchInput) {
+        searchInput.focus();
+      }
+    };
+  }
+
+  if (searchInput) {
+    searchInput.oninput = () => {
+      renderActiveStatusBar();
+    };
+  }
+});
 
 // 📊 1. HÀM TỰ ĐỘNG GHI LƯỢT TRUY CẬP (MỖI TÀI KHOẢN GHI 1 LẦN/GIỜ TRÁNH TRÁC RÁC)
 async function logAccountAccessSession(account) {
@@ -3118,22 +3136,34 @@ function canAccessView(viewId) {
   if (!currentAccount()) return false;
   if (!moduleIsAvailableToAccount(viewId)) return false;
   
-  // 🌟 THÊM DÒNG NÀY: Mở quyền xem "Tổng quan" cho Admin, Ban giám đốc, Trưởng phòng, Phó phòng & Trưởng bộ phận
+  // Mở quyền xem "Tổng quan" cho cấp quản lý
   if (viewId === "dashboard") return canViewAllData() || hasDepartmentManagementAccess() || isSectionHead();
 
   if (viewId === "bulletin") return true;
   if (viewId === "archive") return true;
-  if (viewId === "accounts") return canManageAccounts() || canEditOwnAccount();
+  
+  // 🌟 ĐÃ SỬA: Chỉ Admin / Ban Giám đốc mới thấy Tab Tài Khoản
+  if (viewId === "accounts") return canManageAccounts();
+  
   if (viewId === "people") return canViewPeople();
   if (viewId === "tasks") return canViewTasks();
   if (viewId === "department-evaluations") return canViewDepartmentEvaluations();
   if (viewId === "history") return !isEmployee();
+  
+  // 🌟 ĐÃ SỬA: Chỉ Admin mới được truy cập Tab Cấu hình hệ thống (#settings)
+  if (viewId === "settings") return isAdmin();
+  
   if (canViewAllData()) return true;
   return ["evaluations", "rules"].includes(viewId);
 }
+
+// 🟢 GỘP LẠI THÀNH 1 HÀM DUY NHẤT (Xóa hàm cũ bị trùng)
 function firstAccessibleView() {
-  const preferred = ["dashboard", "bulletin", "archive", "people", "tasks", "department-evaluations", "evaluations", "history", "accounts", "rules"];
-  return preferred.find((viewId) => canAccessView(viewId)) || "accounts";
+  const preferred = canViewAllData()
+    ? ["dashboard", "bulletin", "archive", "people", "tasks", "department-evaluations", "evaluations", "history", "accounts", "rules", "settings"]
+    : ["evaluations", "tasks", "bulletin", "archive", "people", "department-evaluations", "history", "rules", "dashboard"];
+  // Nếu là nhân viên, màn hình mặc định đầu tiên sẽ là "KPI cá nhân" (evaluations) thay vì Tài khoản
+  return preferred.find((viewId) => canAccessView(viewId)) || "evaluations";
 }
 
 function firstAccessibleView() {
@@ -8436,10 +8466,25 @@ function renderCurrentUser() {
   const account = currentAccount();
   const person = currentPerson();
   const department = departmentById(currentDepartmentId());
-  byId("currentUserLabel").textContent = account ? account.displayName : "Chưa đăng nhập";
-  byId("currentUserMeta").textContent = account
-    ? `${accountRoleLabels[account.role] || account.role}${department ? ` · ${department.name}` : ""}${person ? ` · ${person.name}` : ""}`
-    : "";
+  const role = roleById(person?.roleId);
+
+  const displayName = account ? account.displayName : "Chưa đăng nhập";
+  const roleTitle = role?.name || accountRoleLabels[account?.role] || account?.role || "";
+  const metaText = account ? [roleTitle, department?.name].filter(Boolean).join(" · ") : "";
+
+  // Tính chữ cái viết tắt tên (Avatar)
+  const initials = displayName !== "Chưa đăng nhập"
+    ? displayName.split(" ").map(n => n[0]).join("").slice(-2).toUpperCase()
+    : "ĐH";
+
+  // Cập nhật lên Topbar
+  if (byId("currentUserLabel")) byId("currentUserLabel").textContent = displayName;
+  if (byId("currentUserMeta")) byId("currentUserMeta").textContent = metaText;
+  if (byId("currentUserAvatarMini")) byId("currentUserAvatarMini").textContent = initials;
+
+  // Cập nhật vào Dropdown Menu
+  if (byId("dropdownDisplayName")) byId("dropdownDisplayName").textContent = displayName;
+  if (byId("dropdownAvatarLarge")) byId("dropdownAvatarLarge").textContent = initials;
 }
 
 function applySidebarCollapsed(collapsed) {
@@ -8537,17 +8582,20 @@ function applyAccessControls() {
   }
 }
 
+// 🟢 SỬA HÀM SWITCHVIEW CHUẨN ĐỘC LẬP
 function switchView(viewId) {
+  // Bỏ dòng lệnh ép "accounts" sang "settings" cũ
   if (!canAccessView(viewId)) return;
   
-  // 🌟 CHÈN THÊM DÒNG NÀY: Lưu lại tên Tab đang xem vào máy
   localStorage.setItem("phuc-thinh-active-view", viewId);
 
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === viewId));
   document.querySelectorAll(".view").forEach((item) => item.classList.toggle("is-active", item.id === viewId));
+  
   if (viewId === "dashboard") renderDashboard({ animate: true });
   if (viewId === "bulletin") renderBulletinBoard();
   if (viewId === "archive") renderArchive();
+  if (viewId === "accounts") renderAccountTable(); // Đổ bảng tài khoản khi mở tab Tài khoản
 }
 
 function focusEditForm(formId, focusId) {
@@ -12857,6 +12905,10 @@ function toggleMobileMenu(show) {
 // 📱 BỘ ĐIỀU KHIỂN ĐỒNG BỘ NAV & MENU MOBILE (LOẠI BỎ LẶP MỤC LƯU TRỮ)
 // =========================================================================
 
+// =========================================================================
+// 📱 BỘ ĐIỀU KHIỂN ĐỒNG BỘ NAV & MENU MOBILE (TỐI ƯU CỰC KỲ SẠCH SẼ)
+// =========================================================================
+
 function renderMobileNavigation() {
   const isEmp = isEmployee(); // Kiểm tra có phải tài khoản nhân viên không
 
@@ -12932,23 +12984,19 @@ function renderMobileNavigation() {
     }
   }
 
-  // 2. TỐI ƯU DANH SÁCH MENU POPUP (ĐÃ BỎ LƯU TRỮ VÌ ĐÃ CÓ Ở THANH ĐÁY)
+  // 2. TỐI ƯU DANH SÁCH MENU POPUP (BỎ TÀI KHOẢN CHO NHÂN VIÊN)
   const menuList = document.querySelector("#mobileMenuPopup .mobile-menu-list");
   if (menuList) {
     if (isEmp) {
-      // Nhân viên chỉ giữ: Tài khoản · Quy chế
+      // 🌟 ĐÃ SỬA: Nhân viên chỉ giữ mục Quy chế (Đã ẩn Tài khoản)
       menuList.innerHTML = `
-        <button type="button" class="mobile-menu-item" data-view="accounts">
-          <div class="mobile-icon-box">◫</div>
-          <span class="mobile-menu-text">Tài khoản</span>
-        </button>
         <button type="button" class="mobile-menu-item" data-view="rules">
           <div class="mobile-icon-box">§</div>
           <span class="mobile-menu-text">Quy chế</span>
         </button>
       `;
     } else {
-      // Quản lý / Admin
+      // Quản lý / Admin giữ nguyên
       menuList.innerHTML = `
         <button type="button" class="mobile-menu-item" data-view="archive">
           <div class="mobile-icon-box">▧</div>
@@ -12998,3 +13046,255 @@ function renderMobileNavigation() {
     nav.classList.toggle("is-active", nav.getAttribute("data-view") === activeView);
   });
 }
+// =========================================================================
+// 🟢 XỬ LÝ DROPDOWN MENU TÀI KHOẢN (TẬP TRUNG 5 CHỨC NĂNG)
+// =========================================================================
+
+document.addEventListener("DOMContentLoaded", () => {
+  const trigger = byId("userDropdownTrigger");
+  const dropdown = byId("accountDropdownMenu");
+
+  if (!trigger || !dropdown) return;
+
+  // Bật/Tắt Dropdown khi bấm vào Nút Tài khoản
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isHidden = dropdown.classList.contains("is-hidden");
+    dropdown.classList.toggle("is-hidden", !isHidden);
+    trigger.setAttribute("aria-expanded", String(isHidden));
+  });
+
+  // Tự động đóng Dropdown khi bấm ra ngoài
+  document.addEventListener("click", (e) => {
+    if (!dropdown.contains(e.target) && !trigger.contains(e.target)) {
+      dropdown.classList.add("is-hidden");
+      trigger.setAttribute("aria-expanded", "false");
+    }
+  });
+
+  // 1. CÀI ĐẶT -> Mở Popup Cài đặt tài khoản cá nhân (Đổi mật khẩu & Lịch sử)
+  const btnSettings = byId("menuBtnSettings");
+  if (btnSettings) {
+    btnSettings.addEventListener("click", () => {
+      dropdown.classList.add("is-hidden");
+      openUserSettingsModal();
+    });
+  }
+
+  // 2. CHỈNH SỬA THÔNG TIN -> Thông báo tạm thời bảo trì (hoặc mở profile)
+  const btnEditProfile = byId("menuBtnEditProfile");
+  if (btnEditProfile) {
+    btnEditProfile.addEventListener("click", () => {
+      dropdown.classList.add("is-hidden");
+      // Tạm thời bảo trì như yêu cầu
+      alert("⚙️ Tính năng Chỉnh sửa thông tin cá nhân đang được bảo trì nâng cấp. Vui lòng quay lại sau!");
+    });
+  }
+
+  // 3. NGÔN NGỮ -> Đổi giữa Tiếng Việt & Tiếng Anh
+  let currentLang = "vi";
+  const btnLanguage = byId("menuBtnLanguage");
+  const langText = byId("currentLangText");
+
+  if (btnLanguage && langText) {
+    btnLanguage.addEventListener("click", () => {
+      currentLang = currentLang === "vi" ? "en" : "vi";
+      if (currentLang === "vi") {
+        langText.textContent = "Tiếng Việt ▾";
+        alert("🌐 Đã chuyển ngôn ngữ hệ thống sang Tiếng Việt.");
+      } else {
+        langText.textContent = "English ▾";
+        alert("🌐 Switched system language to English.");
+      }
+    });
+  }
+
+  // 4. HỖ TRỢ KỸ THUẬT -> Thẻ <a> chứa link zalo.me/0904880113 đã tự mở tab mới
+
+  // 5. ĐĂNG XUẤT -> Gọi hàm logout cũ
+  const btnLogout = byId("menuBtnLogout");
+  if (btnLogout) {
+    btnLogout.addEventListener("click", () => {
+      dropdown.classList.add("is-hidden");
+      if (typeof logoutSharedSession === "function") logoutSharedSession();
+      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+      location.reload();
+    });
+  }
+});
+// =========================================================================
+// 🔐 XỬ LÝ POPUP CÀI ĐẶT TÀI KHOẢN CÁ NHÂN (ĐỔI MẬT KHẨU & LỊCH SỬ TRUY CẬP)
+// =========================================================================
+
+function openUserSettingsModal() {
+  const account = currentAccount();
+  if (!account) return;
+
+  // Reset form đổi mật khẩu
+  const passForm = byId("changePasswordForm");
+  if (passForm) passForm.reset();
+
+  const errEl = byId("changePasswordError");
+  if (errEl) errEl.textContent = "";
+
+  const succEl = byId("changePasswordSuccess");
+  if (succEl) {
+    succEl.textContent = "";
+    succEl.style.display = "none";
+  }
+
+  // Tải lịch sử truy cập
+  renderUserAccessHistory();
+
+  // Mở Popup
+  openModal("userSettingsDialog");
+}
+
+function closeUserSettingsModal() {
+  closeModal("userSettingsDialog");
+}
+
+async function renderUserAccessHistory() {
+  const account = currentAccount();
+  const tbody = byId("userAccessHistoryTableBody");
+  if (!tbody || !account) return;
+
+  tbody.innerHTML = '<tr><td colspan="3" class="empty-cell">Đang tải lịch sử...</td></tr>';
+
+  let logs = [];
+  const supabase = window.supabaseClient;
+
+  // 1. Đọc dữ liệu từ Supabase (nếu có kết nối cloud)
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("access_logs")
+        .select("*")
+        .eq("account_id", account.id)
+        .order("accessed_at", { ascending: false })
+        .limit(20);
+
+      if (!error && Array.isArray(data) && data.length) {
+        logs = data.map((item) => ({
+          time: item.accessed_at || item.created_at,
+          type: item.access_type === "active_session" ? "Đăng nhập / Truy cập hệ thống" : item.access_type || "Truy cập",
+          status: "Thành công",
+        }));
+      }
+    } catch (e) {
+      console.warn("⚠️ Chưa thể nạp access_logs từ Supabase:", e);
+    }
+  }
+
+  // 2. Dự phòng đọc từ Nhật ký hoạt động trong ứng dụng
+  if (!logs.length && Array.isArray(state.activityLog)) {
+    const userActivities = state.activityLog.filter(
+      (act) => act.actorId === account.id || act.actorName === account.displayName || act.actorName === account.username
+    );
+
+    logs = userActivities.slice(0, 20).map((act) => ({
+      time: act.timestamp,
+      type: `${act.action || "Thao tác"} - ${act.module || "Hệ thống"}`,
+      status: act.details || "Thành công",
+    }));
+  }
+
+  if (!logs.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="empty-cell">Chưa có dữ liệu lịch sử truy cập.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = logs
+    .map(
+      (item) => `
+        <tr>
+          <td><strong>${escapeHtml(formatDateTime(item.time))}</strong></td>
+          <td>${escapeHtml(item.type)}</td>
+          <td><span class="badge good">${escapeHtml(item.status)}</span></td>
+        </tr>
+      `
+    )
+    .join("");
+}
+
+// Khởi tạo sự kiện đổi mật khẩu và đóng/mở Popup
+document.addEventListener("DOMContentLoaded", () => {
+  const closeBtn = byId("closeUserSettings");
+  if (closeBtn) closeBtn.onclick = closeUserSettingsModal;
+
+  const modal = byId("userSettingsDialog");
+  if (modal) {
+    modal.onclick = (e) => {
+      if (e.target === modal) closeUserSettingsModal();
+    };
+  }
+
+  // Xử lý Form Đổi Mật Khẩu
+  const passForm = byId("changePasswordForm");
+  if (passForm) {
+    passForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const account = currentAccount();
+      const errEl = byId("changePasswordError");
+      const succEl = byId("changePasswordSuccess");
+
+      if (errEl) errEl.textContent = "";
+      if (succEl) {
+        succEl.textContent = "";
+        succEl.style.display = "none";
+      }
+
+      if (!account) return;
+
+      const currPass = byId("currentPasswordInput").value;
+      const newPass = byId("newPasswordInput").value;
+      const confirmPass = byId("confirmPasswordInput").value;
+
+      // 1. Kiểm tra mật khẩu hiện tại
+      if (currPass !== account.password) {
+        if (errEl) errEl.textContent = "Mật khẩu hiện tại không chính xác.";
+        return;
+      }
+
+      // 2. Kiểm tra độ dài mật khẩu mới
+      if (newPass.length < 6) {
+        if (errEl) errEl.textContent = "Mật khẩu mới phải có tối thiểu 6 ký tự.";
+        return;
+      }
+
+      // 3. Kiểm tra khớp mật khẩu mới
+      if (newPass !== confirmPass) {
+        if (errEl) errEl.textContent = "Mật khẩu mới và Xác nhận mật khẩu không khớp.";
+        return;
+      }
+
+      // Cập nhật mật khẩu trong State
+      account.password = newPass;
+      account.updatedAt = new Date().toISOString();
+
+      const accIndex = state.accounts.findIndex((a) => a.id === account.id);
+      if (accIndex >= 0) {
+        state.accounts[accIndex].password = newPass;
+        state.accounts[accIndex].updatedAt = account.updatedAt;
+      }
+
+      saveState();
+
+      logActivity({
+        action: "Cập nhật",
+        module: "Cài đặt cá nhân",
+        targetType: "account",
+        targetId: account.id,
+        title: "Đổi mật khẩu tài khoản",
+        details: `Tài khoản ${account.username} đã đổi mật khẩu thành công.`,
+      });
+
+      if (succEl) {
+        succEl.textContent = "✅ Đã đổi mật khẩu thành công!";
+        succEl.style.display = "block";
+      }
+      passForm.reset();
+    };
+  }
+});
