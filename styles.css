@@ -1940,7 +1940,7 @@ body.is-customization-resizing {
   min-width: 0;
   display: grid;
   grid-column: span 3;
-  gap: 4px;
+  gap: 2px;
   font-size: 0.86rem;
 }
 
@@ -9661,4 +9661,842 @@ div.task-filter {
 .active-status-toggle-btn:active {
   background: #cbd5e1 !important;
   transform: scale(0.95) !important;
+}
+/* 🔴 ÉP ẨN TUYỆT ĐỐI CÁC DÒNG NGƯỜI PHỐI HỢP KHÔNG KHỚP TÌM KIẾM */
+#taskCollaborators .checkbox-option.is-hidden,
+#taskCollaborators label.is-hidden {
+  display: none !important;
+}
+/* =========================================================
+   ✨ SỬA TRIỆT ĐỂ LỖI THƯA DÒNG & TRÀN CHỮ NGƯỜI PHỐI HỢP
+   ========================================================= */
+
+/* 1. Mở rộng chiều rộng khung Popup để chứa đủ Tên + Chức vụ dài */
+#taskCollaboratorPanel,
+.task-collaborator-panel {
+  width: 350px !important;             /* Tăng chiều rộng giúp chứa đủ chữ */
+  max-width: 92vw !important;
+  padding: 8px !important;
+}
+
+/* 2. Khung chứa danh sách cuộn */
+#taskCollaborators {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 1px !important;                 /* Thu hẹp tối đa khoảng cách giữa các dòng */
+  max-height: 230px !important;
+  overflow-y: auto !important;
+  padding: 2px 0 !important;
+  margin-top: 6px !important;
+}
+
+/* 3. Từng dòng chọn nhân sự: ÉP TRÊN 1 DÒNG DUY NHẤT */
+#taskCollaborators .checkbox-option,
+#taskCollaborators label {
+  display: flex !important;
+  align-items: center !important;      /* Căn thẳng hàng dọc checkbox & chữ */
+  gap: 8px !important;
+  padding: 5px 8px !important;         /* Giảm chiều cao từng dòng */
+  margin: 0 !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;      /* 🔴 CHỐNG RỚT DÒNG (Nguyên nhân gây thưa) */
+  font-size: 13px !important;
+  line-height: 1.2 !important;
+  height: 30px !important;             /* Cố định chiều cao dòng siêu gọn */
+}
+
+/* Hiệu ứng di chuột đổi màu nhẹ */
+#taskCollaborators .checkbox-option:hover,
+#taskCollaborators label:hover {
+  background: #f1f5f9 !important;
+}
+
+/* 4. Phần chữ tên + chức vụ: Tự động thêm '...' nếu quá dài thay vì rớt dòng */
+#taskCollaborators .checkbox-option span,
+#taskCollaborators label span {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  color: #1e293b !important;
+  font-weight: 500 !important;
+}
+
+/* 5. Khóa cố định kích thước ô vuông Checkbox */
+#taskCollaborators input[type="checkbox"] {
+  height: 15px !important;
+  flex-shrink: 0 !important;           /* Không bị ép dẹp ô vuông */
+  margin: 0 !important;
+  cursor: pointer !important;
+  accent-color: #176b87 !important;
+}
+/* =========================================================
+   ✨ TỐI ƯU ĐỘ GIÃN DÒNG KHUNG CHỌN NGƯỜI THỰC HIỆN
+   ========================================================= */
+
+/* Khung cuộn chứa danh sách */
+#taskOwnerOptions {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;                 /* Tạo khoảng trống 4px giữa các thẻ tên */
+  max-height: 240px !important;
+  overflow-y: auto !important;
+  padding: 4px !important;
+  margin-top: 6px !important;
+}
+
+/* Từng dòng tên nhân sự */
+.task-owner-option {
+  display: flex !important;
+  align-items: center !important;
+  padding: 8px 12px !important;        /* Nâng độ dày trên/dưới giúp dòng thoáng */
+  min-height: 34px !important;         /* Chiều cao chuẩn vừa mắt */
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  line-height: 1.4 !important;         /* Nâng độ giãn dòng chữ, chống dính chữ */
+  color: #1e293b !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  transition: background 0.15s ease !important;
+}
+
+/* Hiệu ứng khi di chuột vào dòng */
+.task-owner-option:hover {
+  background: #f1f5f9 !important;
+}
+
+/* Hiệu ứng dòng đang được chọn */
+.task-owner-option.is-selected {
+  background: #e0f2fe !important;
+  color: #0369a1 !important;
+  font-weight: 600 !important;
+}
+/* =========================================================
+   🎨 CHUẨN HÓA GIAO DIỆN Ô "NGƯỜI THỰC HIỆN" GIỐNG "NGƯỜI PHỐI HỢP"
+   ========================================================= */
+
+.task-owner-picker-container {
+  width: 100% !important;
+}
+
+/* Ép lại khung hiển thị dạng ô Input trắng chuẩn form */
+.task-owner-trigger,
+button.task-owner-trigger {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  height: 36px !important;
+  padding: 0 12px !important;
+  background-color: #ffffff !important;      /* Nền trắng chuẩn */
+  color: #1e293b !important;                 /* Chữ màu tối dễ đọc */
+  border: 1px solid #bdccd8 !important;      /* Viền xám bo góc đồng bộ */
+  border-radius: 6px !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  cursor: pointer !important;
+  text-transform: none !important;
+  transition: border-color 0.15s ease !important;
+}
+
+/* Đổi màu viền khi rê chuột vào */
+.task-owner-trigger:hover,
+button.task-owner-trigger:hover {
+  background-color: #ffffff !important;
+  border-color: #176b87 !important;
+}
+
+/* Căn chỉnh chữ tên nhân sự */
+.task-owner-trigger span {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  color: #334155 !important;
+}
+
+/* Mũi tên chỉ xuống góc phải */
+.task-owner-trigger small {
+  color: #64748b !important;
+  font-size: 10px !important;
+  margin-left: 8px !important;
+}
+/* =========================================================================
+   🎯 FIX TRIỆT ĐỂ: 9 BOX BẰNG NHAU 100% (3 Ô/HÀNG) & KHÓA NỔI POPUP NGƯỜI THỰC HIỆN
+   ========================================================================= */
+
+/* 1. Đưa #taskForm về Lưới 12 cột chuẩn */
+#taskForm {
+  display: grid !important;
+  grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+  gap: 12px 16px !important;
+  align-items: start !important;
+}
+
+/* 2. ÉP ĐÚNG 9 TRƯỜNG ĐẦU TIÊN CHIẾM CHÍNH XÁC SPAN 4 (TƯƠNG ĐƯƠNG 1/3 CHIỀU RỘNG = BẰNG NHAU 100%) */
+#taskForm .task-title-field,
+#taskForm .task-project-field,
+#taskForm .task-category-field,
+#taskForm .task-owner-field,
+#taskForm #taskOwnerPickerWrapper,
+#taskForm .task-owner-picker-container,
+#taskForm .task-collaborator-field,
+#taskForm .task-work-type-field,
+#taskForm .task-recurrence-field,
+#taskForm .task-start-field,
+#taskForm .task-due-field {
+  grid-column: span 4 !important; /* 4/12 = 33.3% chiều rộng tuyệt đối */
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* 3. ĐỒNG BỘ CHIỀU CAO 38PX & VIỀN TRẮNG CHO CẢ 9 BOX */
+#taskForm input[type="text"],
+#taskForm input[type="number"],
+#taskForm input[type="date"],
+#taskForm select,
+#taskForm .task-owner-trigger,
+#taskForm button.task-owner-trigger,
+#taskForm #taskCollaboratorToggle,
+#taskForm .collaborator-picker-toggle {
+  width: 100% !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+  padding: 0 12px !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 6px !important;
+  background-color: #ffffff !important;
+  color: #1e293b !important;
+  font-family: inherit !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  box-sizing: border-box !important;
+}
+
+/* 4. SỬA LỖI POPUP "NGƯỜI THỰC HIỆN": ÉP NỔI BÊN TRÊN (POSITION: ABSOLUTE) */
+#taskOwnerPickerWrapper,
+.task-owner-picker-container {
+  position: relative !important; /* Làm gốc tọa độ để Popup nổi lên */
+}
+
+#taskOwnerPanel,
+.task-owner-panel {
+  position: absolute !important;
+  top: calc(100% + 4px) !important;
+  left: 0 !important;
+  width: 100% !important;
+  min-width: 300px !important;
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.15) !important;
+  padding: 8px !important;
+  z-index: 99999 !important; /* Nổi hoàn toàn lên trên, không đẩy vỡ các box khác */
+}
+
+/* Ép ẩn Popup khi chưa bấm mở */
+#taskOwnerPanel.is-hidden,
+.task-owner-panel.is-hidden {
+  display: none !important;
+}
+
+/* 5. ÉP ẨN TUYỆT ĐỐI Ô SELECT MẶC ĐỊNH BỊ TRÙNG */
+#taskOwner,
+select#taskOwner {
+  display: none !important;
+}
+
+/* 6. CÁC PHẦN DƯỚI BẢNG (NỘI DUNG, HỒ SƠ, NÚT BẤM) CHO TRẢI FULL HÀNG */
+#taskForm .task-upload-field,
+#taskForm .task-note-field,
+#taskForm .form-actions {
+  grid-column: 1 / -1 !important;
+}
+/* =========================================================================
+   ✨ ĐỒNG BỘ 100% KÍCH THƯỚC KHUNG "NGƯỜI THỰC HIỆN" & "NGƯỜI PHỐI HỢP"
+   ========================================================================= */
+
+/* 1. ĐỒNG BỘ KHUNG POPUP BÊN NGOÀI (CÙNG RỘNG 350PX, VIỀN & BÓNG BỎ) */
+#taskOwnerPanel,
+#taskCollaboratorPanel,
+.task-owner-panel,
+.collaborator-picker-panel {
+  position: absolute !important;
+  top: calc(100% + 4px) !important;
+  left: 0 !important;
+  width: 350px !important;              /* Đảm bảo 2 khung có cùng chiều rộng 350px */
+  max-width: 92vw !important;
+  padding: 8px !important;
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12) !important;
+  z-index: 99999 !important;
+  box-sizing: border-box !important;
+}
+
+/* 2. ĐỒNG BỘ Ô GÕ TÌM KIẾM BÊN TRONG (CÙNG CAO 34PX) */
+#taskOwnerSearch,
+#taskCollaboratorSearch {
+  width: 100% !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 10px !important;
+  font-size: 13px !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 6px !important;
+  background-color: #ffffff !important;
+  color: #1e293b !important;
+  box-sizing: border-box !important;
+  outline: none !important;
+}
+
+/* 3. ĐỒNG BỘ KHUNG CHỨA DANH SÁCH CUỘN (CÙNG CAO TỐI ĐA 220PX) */
+#taskOwnerOptions,
+#taskCollaborators {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  max-height: 220px !important;
+  overflow-y: auto !important;
+  padding: 2px 0 !important;
+  margin-top: 6px !important;
+}
+
+/* 4. ĐỒNG BỘ TỪNG DÒNG CHỌN TÊN (CÙNG CAO 32PX, DÒNG TRÊN 1 HÀNG, CÓ '...') */
+.task-owner-option,
+#taskCollaborators .checkbox-option,
+#taskCollaborators label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 8px !important;
+  margin: 0 !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  font-size: 13px !important;
+  line-height: 1.2 !important;
+  box-sizing: border-box !important;
+}
+
+/* Hiệu ứng khi di chuột vào từng dòng */
+.task-owner-option:hover,
+#taskCollaborators .checkbox-option:hover,
+#taskCollaborators label:hover {
+  background-color: #f1f5f9 !important;
+}
+
+/* Cắt gọn tên nếu quá dài bằng dấu '...' */
+.task-owner-option span,
+#taskCollaborators span {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  color: #1e293b !important;
+  font-weight: 500 !important;
+}
+
+/* 5. CỐ ĐỊNH THANH CUỘN NHỎ GỌN CHO CẢ 2 POPUP */
+#taskOwnerOptions::-webkit-scrollbar,
+#taskCollaborators::-webkit-scrollbar {
+  width: 5px !important;
+}
+
+#taskOwnerOptions::-webkit-scrollbar-thumb,
+#taskCollaborators::-webkit-scrollbar-thumb {
+  background: #cbd5e1 !important;
+  border-radius: 4px !important;
+}
+/* =========================================================================
+   🚫 XÓA HẮN Ô CHECKBOX BÊN NGƯỜI PHỐI HỢP (GIỐNG NGƯỜI THỰC HIỆN 100%)
+   ========================================================================= */
+
+/* 1. Triệt hạ hoàn toàn sự tồn tại của ô vuông Checkbox */
+#taskCollaborators input[type="checkbox"] {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* 2. Dòng tên phẳng đét, căn sát lề trái chuẩn như bên Người thực hiện */
+#taskCollaborators .checkbox-option,
+#taskCollaborators label {
+  display: flex !important;
+  align-items: center !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 10px !important;
+  margin: 0 !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  font-size: 13px !important;
+  color: #1e293b !important;
+  transition: background-color 0.15s ease !important;
+}
+
+/* 3. Đổi quầng sáng nền xanh nhạt + chữ xanh đậm cho người ĐƯỢC CHỌN */
+#taskCollaborators .checkbox-option:has(input:checked),
+#taskCollaborators label:has(input:checked) {
+  background-color: #e0f2fe !important;
+  color: #0369a1 !important;
+  font-weight: 600 !important;
+}
+
+/* 4. Hiệu ứng rê chuột vào dòng chưa chọn */
+#taskCollaborators .checkbox-option:hover,
+#taskCollaborators label:hover {
+  background-color: #f1f5f9 !important;
+}
+/* =========================================================================
+   🔒 ÉP ẨN TRIỆT ĐỂ TOÀN BỘ NÚT CÔNG CỤ HEADER DÀNH CHO CÁC TÀI KHOẢN KHÔNG PHẢI ADMIN
+   ========================================================================= */
+
+/* Mặc định ẩn tất cả các nút có class .is-hidden trong top-actions */
+.top-actions .is-hidden,
+.top-actions button.is-hidden,
+.top-actions label.is-hidden,
+.top-actions .file-button.is-hidden {
+  display: none !important;
+}
+/* =========================================================================
+   📱 TỐI ƯU MOBILE 2 CỘT (1 HÀNG 2 BOX BẰNG NHAU NẰM NGANG)
+   ========================================================================= */
+
+@media (max-width: 768px) {
+  /* 1. Đưa Lưới Form về 2 CỘT BẰNG NHAU (1fr 1fr) */
+  #taskForm {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px 10px !important;
+    padding: 10px !important;
+    align-items: end !important;
+  }
+
+  /* 2. Mặc định tất cả các box chiếm đúng 1 CỘT (Ghép cặp 2 box / 1 hàng) */
+  #taskForm > label,
+  #taskForm > div,
+  #taskForm > .task-field-container,
+  #taskForm > .task-owner-picker-container,
+  #taskForm > .collaborator-picker,
+  #taskForm .task-project-field,
+  #taskForm .task-category-field,
+  #taskForm .task-owner-field,
+  #taskForm .task-collaborator-field,
+  #taskForm .task-work-type-field,
+  #taskForm .task-recurrence-field,
+  #taskForm .task-start-field,
+  #taskForm .task-due-field,
+  #taskForm .task-status-field,
+  #taskForm .task-progress-field,
+  #taskForm .task-quality-field {
+    grid-column: span 1 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 3. Riêng Tên công việc, Nội dung, Tải hồ sơ và Nút bấm cho trải Full 2 cột (100%) */
+  #taskForm .task-title-field,
+  #taskForm .task-note-field,
+  #taskForm .task-upload-field,
+  #taskForm .form-actions,
+  #taskForm .wide {
+    grid-column: 1 / -1 !important;
+  }
+
+  /* 4. Tối ưu phông chữ & chiều cao 34px nhỏ gọn cho 2 cột không bị vỡ chữ */
+  #taskForm label {
+    font-size: 11.5px !important;
+    gap: 2px !important;
+    font-weight: 700 !important;
+  }
+
+  #taskForm input[type="text"],
+  #taskForm input[type="number"],
+  #taskForm input[type="date"],
+  #taskForm select,
+  #taskForm .task-owner-trigger,
+  #taskForm button.task-owner-trigger,
+  #taskForm .collaborator-picker-toggle,
+  #taskForm #taskCollaboratorToggle {
+    height: 34px !important;
+    min-height: 34px !important;
+    max-height: 34px !important;
+    padding: 0 8px !important;
+    font-size: 12px !important;
+    border-radius: 6px !important;
+    box-sizing: border-box !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  /* 5. Khung Popup mở danh sách tên tràn phủ rộng dễ chọn */
+  #taskOwnerPanel,
+  #taskCollaboratorPanel,
+  .task-owner-panel,
+  .collaborator-picker-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 99999 !important;
+  }
+}
+/* =========================================================================
+   🎯 MOBILE 2 CỘT HOÀN HẢO: ĐÈ BẸP CODE CŨ, KHÔNG ĐÈ BOX & KHÔNG RỚT CHỮ
+   ========================================================================= */
+
+@media (max-width: 768px) {
+  /* 1. Đưa Lưới Form về 2 CỘT BẰNG NHAU (1fr 1fr) */
+  #taskForm {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px 10px !important;
+    padding: 10px !important;
+    align-items: start !important;
+  }
+
+  /* 2. ÉP ĐÚNG CÁC TRƯỜNG NÀY CHIẾM 1 CỘT (2 BOX / HÀNG NGANG SONG SONG) */
+  #taskForm .task-project-field,
+  #taskForm .task-category-field,
+  #taskForm .task-owner-field,
+  #taskForm #taskOwnerPickerWrapper,
+  #taskForm .task-owner-picker-container,
+  #taskForm .task-collaborator-field,
+  #taskForm .task-work-type-field,
+  #taskForm .task-recurrence-field,
+  #taskForm .task-start-field,
+  #taskForm .task-due-field,
+  #taskForm .task-status-field,
+  #taskForm .task-progress-field {
+    grid-column: span 1 !important;
+    width: 100% !important;
+    min-width: 0 !important; /* Bắt buộc để không bị xô lệch box */
+  }
+
+  /* 3. CÁC TRƯỜNG DÀI CHO TRẢI FULL 100% CHIỀU RỘNG (1 BOX / HÀNG) */
+  #taskForm .task-title-field,
+  #taskForm .task-quality-field,
+  #taskForm .task-upload-field,
+  #taskForm .task-note-field,
+  #taskForm .form-actions,
+  #taskForm .wide {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* 4. TỐI ƯU TIÊU ĐỀ: KHÓA CHỐNG NGHẼN RỚT DÒNG ("Người thực / hiện") */
+  #taskForm label,
+  #taskForm .task-field-label,
+  #taskForm #taskOwnerLabelText {
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    white-space: nowrap !important; /* Giữ tiêu đề nằm trên 1 hàng ngang */
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    margin-bottom: 2px !important;
+  }
+
+  /* 5. KHÓA KÍCH THƯỚC Ô NHẬP, CHỐNG TRÀN ĐÈ SANG BOX BÊN CẠNH */
+  #taskForm input[type="text"],
+  #taskForm input[type="number"],
+  #taskForm input[type="date"],
+  #taskForm select,
+  #taskForm .task-owner-trigger,
+  #taskForm button.task-owner-trigger,
+  #taskForm .collaborator-picker-toggle,
+  #taskForm #taskCollaboratorToggle {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    max-height: 34px !important;
+    padding: 0 6px !important;
+    font-size: 12px !important;
+    border-radius: 6px !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 6. TÊN CÁN BỘ QUÁ DÀI TỰ ĐỘNG THÊM '...' CHỐNG BÀN BỐ TRÍ */
+  #taskOwnerTriggerText,
+  .task-owner-trigger span,
+  .collaborator-picker-toggle span {
+    display: block !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  /* 7. KHUNG POPUP XỔ DANH SÁCH TÊN TRÀN RỘNG DỄ BẤM */
+  #taskOwnerPanel,
+  #taskCollaboratorPanel,
+  .task-owner-panel,
+  .collaborator-picker-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 99999 !important;
+  }
+}
+/* =========================================================================
+   🎨 ĐỒNG BỘ 100% PHÔNG CHỮ, CỠ CHỮ & MÀU SẮC CHO FORM CÔNG VIỆC (#taskForm)
+   ========================================================================= */
+
+/* 1. TIÊU ĐỀ (LABELS): Đồng bộ màu xanh đen nhám, chữ đậm 700, cỡ 12px */
+#taskForm label,
+#taskForm .task-field-label,
+#taskForm #taskOwnerLabelText,
+#taskForm .compact-upload-title {
+  color: #0f2d3a !important;        /* Màu tiêu đề chuẩn của hệ thống */
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1.3 !important;
+  margin-bottom: 3px !important;
+}
+
+/* 2. CHỮ NGƯỜI DÙNG NHẬP (INPUTS / SELECTS / CUSTOM TRIGGERS): Màu Slate tối, cỡ 12.5px */
+#taskForm input[type="text"],
+#taskForm input[type="number"],
+#taskForm input[type="date"],
+#taskForm select,
+#taskForm textarea,
+#taskForm .task-owner-trigger,
+#taskForm button.task-owner-trigger,
+#taskForm .collaborator-picker-toggle,
+#taskForm #taskCollaboratorToggle,
+#taskOwnerTriggerText,
+.task-owner-trigger span,
+.collaborator-picker-toggle span {
+  font-family: "Segoe UI", Arial, sans-serif !important;
+  color: #1e293b !important;        /* Màu văn bản chính rõ nét */
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
+}
+
+/* 3. CHỮ GỢI Ý (PLACEHOLDERS): Ép về màu xám mờ nhạt chuẩn (400), không bị nhầm là chữ gõ */
+#taskForm input::placeholder,
+#taskForm textarea::placeholder {
+  color: #94a3b8 !important;        /* Màu xám mờ chuẩn UI */
+  font-weight: 400 !important;       /* Chữ thường, không bị in đậm */
+  opacity: 1 !important;
+}
+
+/* 4. CHỮ DÒNG GHI CHÚ PHỤ & HƯỚNG DẪN (.field-note): Màu xám Slate dịu mắt */
+#taskForm .field-note,
+#taskForm .compact-upload-row .field-note,
+#taskForm .attachment-list .muted {
+  color: #64748b !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 1.35 !important;
+}
+
+/* 5. NÚT CHỌN HỒ SƠ THU NHỎ GỌN NHẸ VỪA TẮP WITH LABEL */
+#taskForm .compact-file-button {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #0f2d3a !important;
+}
+/* =========================================================================
+   📱 TỐI ƯU BÓNG ĐỔ & CĂN KHÍT POPUP CHỌN TÊN / GỢI Ý TRÊN MOBILE (<= 768PX)
+   ========================================================================= */
+
+@media (max-width: 768px) {
+  /* 1. Ép Popup nằm KHÍT 100% CHIỀU RỘNG của ô chọn, không bị lệch lơ lửng */
+  #taskOwnerPanel,
+  #taskCollaboratorPanel,
+  .task-owner-panel,
+  .collaborator-picker-panel {
+    position: absolute !important;
+    top: calc(100% + 4px) !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    background: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+    /* Đổi bóng đổ thô sang quầng bóng mịn nhẹ, tinh tế */
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12) !important;
+    z-index: 999999 !important;
+  }
+
+  /* 2. Tối ưu hiệu ứng VIỀN SÁNG MỊN khi Click/Focus vào bất kỳ ô nhập liệu nào */
+  #taskForm input:focus,
+  #taskForm select:focus,
+  #taskForm textarea:focus,
+  #taskForm .task-owner-trigger:focus,
+  #taskForm button.task-owner-trigger:focus,
+  #taskForm .collaborator-picker-toggle:focus,
+  #taskForm #taskCollaboratorToggle:focus {
+    border-color: #176b87 !important;
+    /* Quầng sáng xanh mịn dịu mắt thay cho vệt bóng đen cứng */
+    box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.15) !important;
+    outline: none !important;
+  }
+
+  /* 3. Tăng chiều cao dòng chọn lên 36px cho vừa ngón tay chạm bấm */
+  #taskOwnerOptions .task-owner-option,
+  #taskCollaborators .checkbox-option,
+  #taskCollaborators label {
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 0 10px !important;
+    font-size: 13px !important;
+  }
+}
+/* =========================================================================
+   🎨 FIX LỖI ÉP CHỮ & VỠ KHUNG TRONG KPI CÁ NHÂN / KPI THEO VỊ TRÍ
+   ========================================================================= */
+
+/* 1. Đưa lưới thẻ KPI về dạng co giãn thông minh (Tối thiểu 280px / thẻ) */
+#evaluations .criteria-grid,
+.criteria-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important;
+  gap: 12px !important;
+}
+
+/* 2. Chuẩn hóa thẻ Tiêu chí vuông vắn, sạch sẽ */
+.criteria-item {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  padding: 12px 14px !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* 3. ĐỈNH THẺ: Đưa Tiêu đề lên DÒNG TRÊN FULL WIDTH, Badge & Nút bấm xuống DÒNG DƯỚI */
+.criteria-item .criteria-top {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  margin-bottom: 10px !important;
+}
+
+/* Tiêu đề tiêu chí: Rộng rãi 100%, chữ to rõ, rớt dòng tự nhiên */
+.criteria-item .criteria-top strong {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: #0f2d3a !important;
+  line-height: 1.4 !important;
+  word-break: break-word !important;
+}
+
+/* Khung chứa Badge Trọng số + Nút Chi tiết dàn ngang đều 2 bên */
+.criteria-item .criteria-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+}
+
+/* 4. Định dạng ô Kế hoạch & Thực hiện */
+.criteria-item .criteria-input-grid {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 10px !important;
+  margin-bottom: 8px !important;
+}
+
+/* 5. Dòng % Hoàn thành & Điểm số dưới cùng có đường gạch ngang mờ */
+.criteria-item .criteria-calculated {
+  display: flex !important;
+  justify-content: space-between !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #1e293b !important;
+  border-top: 1px dashed #e2e8f0 !important;
+  padding-top: 8px !important;
+  margin-top: 4px !important;
+}
+/* =========================================================================
+   📱 TỐI ƯU MOBILE: CHIA 1 HÀNG 2 BOX NGANG CHO FORM KPI CÁ NHÂN (#evaluationForm)
+   ========================================================================= */
+
+@media (max-width: 768px) {
+  /* 1. Ép Khung thông tin KPI cá nhân về Lưới 2 CỘT (1fr 1fr) */
+  #evaluationForm .form-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px 10px !important;
+    align-items: start !important;
+  }
+
+  /* 2. Ghép cặp 2 box / 1 hàng ngang (Kỳ + Nhân sự, KPI phòng + Người xác nhận) */
+  #evaluationForm .form-grid > label {
+    grid-column: span 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 3. Nút bấm, Nhận xét và Nút Lưu trải rộng Full 2 cột (100%) */
+  #evaluationForm .form-grid > .inline-form-action,
+  #evaluationForm .full-label,
+  #evaluationForm .form-actions {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+  }
+
+  /* 4. Khóa tiêu đề chống rớt dòng ("Kỳ", "Nhân sự", "KPI phòng", "Người xác nhận") */
+  #evaluationForm label {
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    color: #0f2d3a !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    margin-bottom: 2px !important;
+  }
+
+  /* 5. Chuẩn hóa ô nhập liệu cao 34px, bo góc 8px phẳng mịn */
+  #evaluationForm input[type="text"],
+  #evaluationForm input[type="month"],
+  #evaluationForm input[type="number"],
+  #evaluationForm select {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    max-height: 34px !important;
+    padding: 0 8px !important;
+    font-size: 12px !important;
+    border-radius: 8px !important;
+    border: 1px solid #cbd5e1 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 6. Dòng chữ hướng dẫn màu đỏ dưới ô KPI phòng xuống dòng tự nhiên */
+  #evalDepartmentLinkHint {
+    white-space: normal !important;
+    font-size: 10.5px !important;
+    line-height: 1.3 !important;
+    margin-top: 3px !important;
+    display: block !important;
+  }
 }
