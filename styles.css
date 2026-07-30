@@ -10500,3 +10500,484 @@ select#taskOwner {
     display: block !important;
   }
 }
+/* =========================================================================
+   ⚙️ BỘ CÔNG CỤ QUẢN TRỊ & TÙY BIẾN TRONG TAB CẤU HÌNH HỆ THỐNG
+   ========================================================================= */
+
+.settings-tools-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.settings-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.settings-tools-grid button,
+.settings-tools-grid label.file-button {
+  height: 40px !important;
+  min-height: 40px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  border-radius: 8px !important;
+  margin: 0 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: all 140ms ease;
+}
+
+.settings-tools-grid button:hover,
+.settings-tools-grid label.file-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+}
+/* =========================================================================
+   👤 DROPDOWN MENU TÀI KHOẢN CHUẨN (ẢNH 2)
+   ========================================================================= */
+
+.user-dropdown-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+/* Nút bấm Tài khoản góc phải */
+.user-chip-btn {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 4px 10px 4px 6px !important;
+  height: 38px !important;
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 20px !important;
+  cursor: pointer !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+  transition: all 0.15s ease !important;
+}
+
+.user-chip-btn:hover {
+  background: #f8fafc !important;
+  border-color: #176b87 !important;
+}
+
+.user-avatar-mini {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #0f8a5f;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.user-chip-info {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  line-height: 1.15;
+}
+
+.user-chip-info strong {
+  font-size: 12.5px;
+  color: #0f2d3a;
+  white-space: nowrap;
+}
+
+.user-chip-info span {
+  font-size: 10px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.user-chip-arrow {
+  font-size: 10px;
+  color: #64748b;
+  margin-left: 2px;
+}
+
+/* 🟢 KHUNG DROPDOWN POPUP */
+.account-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  max-width: 90vw;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.15);
+  padding: 16px 12px 12px 12px;
+  z-index: 99999;
+  box-sizing: border-box;
+  animation: dropdownFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.account-dropdown-menu.is-hidden {
+  display: none !important;
+}
+
+@keyframes dropdownFadeIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Header Avatar lớn */
+.dropdown-user-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 4px 0 8px 0;
+}
+
+.dropdown-avatar-large {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: #0f8a5f;
+  color: #ffffff;
+  font-size: 28px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+  box-shadow: 0 4px 10px rgba(15, 138, 95, 0.25);
+}
+
+.dropdown-user-header strong {
+  font-size: 17px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.dropdown-subtext {
+  margin: 2px 0 0 0;
+  font-size: 12.5px;
+  color: #64748b;
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 10px 0;
+}
+
+/* Danh sách Menu Items */
+.dropdown-menu-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dropdown-menu-item {
+  width: 100%;
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  padding: 10px 12px !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 10px !important;
+  color: #1e293b !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  text-align: left !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
+  box-shadow: none !important;
+  transition: background 0.15s ease !important;
+}
+
+.dropdown-menu-item:hover {
+  background: #f8fafc !important;
+  color: #0f2d3a !important;
+  transform: none !important;
+}
+
+.menu-item-icon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.menu-item-text {
+  flex: 1;
+}
+
+.menu-item-extra {
+  font-size: 12.5px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.menu-item-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.menu-item-sub {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 400;
+}
+
+.menu-item-arrow {
+  color: #94a3b8;
+  font-size: 16px;
+}
+
+/* Footer Đăng xuất & Phiên bản */
+.dropdown-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.logout-item {
+  color: #0f2d3a !important;
+}
+
+.logout-item:hover {
+  background: #fff1f1 !important;
+  color: #e53e3e !important;
+}
+
+.dropdown-version-tag {
+  text-align: center;
+  font-size: 11px;
+  color: #94a3b8;
+  padding-top: 4px;
+}
+/* =========================================================================
+   👤 GIAO DIỆN "NGƯỜI LIÊN HỆ" FACEBOOK SIDEBAR (DÀNH CHO PC)
+   ========================================================================= */
+
+@media (min-width: 769px) {
+  /* 1. Cố định Cột Người liên hệ sát lề phải */
+  .fb-contacts-sidebar {
+    position: fixed !important;
+    top: 56px !important;
+    right: 0 !important;
+    width: 280px !important;
+    height: calc(100vh - 56px) !important;
+    background: #f7f8fa !important; /* Màu xám kem nhẹ chuẩn Facebook */
+    padding: 12px 8px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    z-index: 900 !important;
+    box-sizing: border-box !important;
+    border-left: 1px solid #e4e6eb !important;
+    overflow: hidden !important;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  }
+
+  /* 2. Tiêu đề "Người liên hệ" & Nút Kính lúp, Nút Ba chấm */
+  .fb-contacts-header {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    padding: 4px 8px 8px 8px !important;
+  }
+
+  .fb-contacts-header h3 {
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    color: #65676b !important;
+    margin: 0 !important;
+  }
+
+  .fb-contacts-actions {
+    display: flex !important;
+    gap: 4px !important;
+  }
+
+  .fb-icon-btn {
+    width: 32px !important;
+    height: 32px !important;
+    border-radius: 50% !important;
+    background: transparent !important;
+    border: none !important;
+    color: #65676b !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    font-size: 13px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .fb-icon-btn:hover {
+    background: #e4e6eb !important;
+  }
+
+  /* 3. Ô tìm kiếm người liên hệ */
+  .fb-contact-search-box {
+    padding: 4px 8px 8px 8px !important;
+  }
+
+  .fb-contact-search-box input {
+    width: 100% !important;
+    height: 32px !important;
+    border-radius: 16px !important;
+    border: 1px solid #cbd5e1 !important;
+    padding: 0 12px !important;
+    font-size: 13px !important;
+    background: #ffffff !important;
+  }
+
+  /* 4. Danh sách người liên hệ cuộn mượt */
+  .fb-contacts-list {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 2px !important;
+    flex: 1 !important;
+    overflow-y: auto !important;
+    padding-top: 4px !important;
+  }
+
+  .fb-contacts-list::-webkit-scrollbar {
+    width: 6px !important;
+  }
+
+  .fb-contacts-list::-webkit-scrollbar-thumb {
+    background: #bcc0c4 !important;
+    border-radius: 10px !important;
+  }
+
+  /* 5. Từng dòng người dùng (Avatar + Chấm xanh + Tên) */
+  .fb-contact-item {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    padding: 8px !important;
+    border-radius: 8px !important;
+    cursor: pointer !important;
+    transition: background 0.15s ease !important;
+    box-sizing: border-box !important;
+  }
+
+  .fb-contact-item:hover {
+    background: #e4e6eb !important;
+  }
+
+  .fb-contact-avatar-box {
+    position: relative !important;
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 50% !important;
+    background: linear-gradient(135deg, #176b87 0%, #0f8a5f 100%) !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    font-size: 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* Chấm xanh lá rực rỡ chuẩn góc dưới Avatar */
+  .fb-online-dot {
+    position: absolute !important;
+    bottom: 0 !important;
+    right: 0 !important;
+    width: 10px !important;
+    height: 10px !important;
+    background-color: #31a24c !important; /* Xanh lá rực rỡ Facebook */
+    border: 2px solid #f7f8fa !important;
+    border-radius: 50% !important;
+  }
+
+  .fb-contact-name {
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    color: #050505 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  /* Khi bấm thu gọn */
+  .fb-contacts-sidebar.is-hidden {
+    transform: translateX(100%) !important;
+  }
+}
+/* =========================================================================
+   ⚙️ TÍCH HỢP QUẢN LÝ TÀI KHOẢN VÀO TRANG CÀI ĐẶT
+   ========================================================================= */
+
+.account-settings-integrated {
+  padding: 14px !important;
+}
+
+.account-settings-integrated .table-wrap {
+  border: 1px solid #dfe7ef !important;
+  border-radius: 8px !important;
+}
+/* =========================================================================
+   🔐 MÀN HÌNH POPUP CÀI ĐẶT TÀI KHOẢN CÁ NHÂN
+   ========================================================================= */
+
+.user-settings-modal {
+  width: min(680px, calc(100vw - 24px)) !important;
+  max-height: calc(100vh - 40px) !important;
+  overflow-y: auto !important;
+  gap: 16px !important;
+}
+
+.settings-section {
+  padding: 14px !important;
+  background: #ffffff !important;
+  border: 1px solid #dfe7ef !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+.settings-section h3 {
+  margin-top: 0 !important;
+  margin-bottom: 12px !important;
+  color: #0f2d3a !important;
+  font-size: 15px !important;
+}
+
+.change-password-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  padding: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.user-access-history-table {
+  max-height: 220px !important;
+  overflow-y: auto !important;
+  border: 1px solid #dfe7ef !important;
+  border-radius: 6px !important;
+}
+
+.user-access-history-table table {
+  min-width: 100% !important;
+  font-size: 12.5px !important;
+}
+
+.user-access-history-table th,
+.user-access-history-table td {
+  padding: 8px 10px !important;
+}
