@@ -125,7 +125,7 @@
             </div>
             <button id="toggleActiveStatusBtn" type="button" class="active-status-toggle-btn" title="Thu gọn / Đóng">
               <span class="desktop-only-inline">−</span>
-              <span class="mobile-only-inline">−</span>
+              <span class="mobile-only-inline">-</span>
             </button>
           </div>
         </div>
@@ -510,7 +510,7 @@
             <span id="taskInboxBadge" class="task-inbox-badge">0</span>
           </button>
         </section>
-        <form id="taskForm" class="form-grid">
+        <form id="taskForm" class="form-grid" autocomplete="off">
           <input type="hidden" id="taskId">
           <input id="taskDueTime" type="hidden" value="">
           <label class="is-hidden">Loại công việc
@@ -520,10 +520,10 @@
             </select>
           </label>
           <label class="task-title-field">Tên công việc
-            <input id="taskTitle" required placeholder="Hoàn thiện hồ sơ dự án...">
+            <input id="taskTitle" required placeholder="Hoàn thiện hồ sơ dự án..." autocomplete="do-not-autofill" autocorrect="off" autocapitalize="none" spellcheck="false">
           </label>
           <label class="task-project-field">Tên dự án
-            <input id="taskProjectName" placeholder="Nhập tên dự án liên quan...">
+            <input id="taskProjectName" placeholder="Nhập tên dự án liên quan..." autocomplete="do-not-autofill" autocorrect="off" autocapitalize="none" spellcheck="false">
           </label>
           <label class="task-category-field">Danh mục KPI cá nhân
             <select id="taskCategory" required>
@@ -1457,7 +1457,7 @@
         <strong id="mobileUserLabel">Tài khoản</strong>
         <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
       </div>
-      <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
+      <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">-</button>
     </div>
     <div class="mobile-menu-list">
       <button type="button" class="mobile-menu-item" data-view="archive">
