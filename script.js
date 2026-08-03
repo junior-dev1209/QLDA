@@ -713,7 +713,7 @@ function defaultAccounts() {
     {
       id: "account-admin",
       username: "admin",
-      password: "123456",
+      password: "",
       displayName: "Kỹ Thuật Viên",
       role: "admin",
       personId: "",
@@ -722,7 +722,7 @@ function defaultAccounts() {
     {
       id: "account-director",
       username: "daongochuan",
-      password: "123456",
+      password: "",
       displayName: "Đào Ngọc Huân",
       role: "director",
       personId: "",
@@ -731,7 +731,7 @@ function defaultAccounts() {
     {
       id: "account-deputy-1",
       username: "Nguyenvanhien",
-      password: "123456",
+      password: "",
       displayName: "Nguyễn Văn Hiện",
       role: "director",
       personId: "",
@@ -740,7 +740,7 @@ function defaultAccounts() {
     {
       id: "account-deputy-2",
       username: "nguyenthihonghanh",
-      password: "123456",
+      password: "",
       displayName: "Nguyễn Thị Hồng Hạnh",
       role: "director",
       personId: "",
@@ -749,7 +749,7 @@ function defaultAccounts() {
     {
       id: "account-deputy-3",
       username: "tovietdung",
-      password: "123456",
+      password: "",
       displayName: "Tô Việt Dũng",
       role: "director",
       personId: "",
@@ -802,7 +802,7 @@ function createPersonnelAccount(person, accounts) {
   return {
     id: `account-person-${person.id}`,
     username: uniqueUsernameForPerson(person, accounts),
-    password: "123456",
+    password: "",
     displayName: person.name,
     role: accountRoleForPerson(person),
     personId: person.id,
@@ -10336,7 +10336,7 @@ function seedDemoData() {
       state.accounts.push({
         id: uid("account"),
         username,
-        password: "123456",
+        password: "",
         displayName,
         role,
         personId: person.id,
