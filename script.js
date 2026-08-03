@@ -1,4 +1,3 @@
-let openedTaskDetailFromInbox = false;
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
@@ -16,10 +15,16 @@ const SHARED_SYNC_CONFLICT_KEY = "phuc-thinh-shared-sync-conflict-v1";
 const SHARED_SYNC_REQUIRED_KEY = "phuc-thinh-shared-sync-required-v1";
 const SHARED_SYNC_SESSION_TOKEN_KEY = "phuc-thinh-shared-sync-session-v1";
 const SHARED_SYNC_DIRTY_KEY = "phuc-thinh-shared-sync-dirty-v1";
-const SHARED_SYNC_BUCKET = "kpi-files";
-const SHARED_SYNC_PROXY_UPLOAD_LIMIT = 10 * 1024 * 1024;
+const OFFLINE_LOGIN_PROOFS_KEY = "phuc-thinh-offline-login-proofs-v1";
 const STATE_SAVED_AT_KEY = "phuc-thinh-state-saved-at-v1";
 const SHARED_SYNC_REFRESH_MS = 10000;
+const SHARED_SYNC_REFRESH_JITTER_MS = 4000;
+const SHARED_SYNC_RETRY_INITIAL_MS = 2500;
+const SHARED_SYNC_RETRY_MAX_MS = 60000;
+const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
+const OFFLINE_LOGIN_PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const OFFLINE_LOGIN_PBKDF2_ITERATIONS = 120000;
+const OFFLINE_LOGIN_PROOF_MAX_ENTRIES = 500;
 const MAX_DELETED_ID_HISTORY = 2000;
 const ACCOUNT_PRESENCE_HEARTBEAT_MS = 45000;
 const SHARED_SYNC_COLLECTIONS = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "activityLog"];
@@ -51,8 +56,7 @@ const legacyCanBoGpmbTaskCategories = {
   "Xử lý đơn thư": "Chi trả tiền đền bù / Bàn giao mặt bằng / Xử lý đơn thư",
 };
 const importedPeopleFromExcel = Array.isArray(window.PHUC_THINH_IMPORTED_PEOPLE) ? window.PHUC_THINH_IMPORTED_PEOPLE : [];
-// 🌟 THÊM DÒNG NÀY ĐỂ ĐỌC DANH SÁCH TÀI KHOẢN KÈM MẬT KHẨU TỪ PEOPLE-DATA.JS
-const importedAccountsFromExcel = Array.isArray(window.PHUC_THINH_IMPORTED_ACCOUNTS) ? window.PHUC_THINH_IMPORTED_ACCOUNTS : [];
+
 const departments = [
   {
     id: "ke-hoach",
@@ -666,13 +670,29 @@ const systemModules = [
   { id: "bulletin", label: "Bảng tin", note: "Tin tức chung, thông báo nội bộ và chương trình bình chọn." },
   { id: "archive", label: "Lưu Trữ", note: "Kho hồ sơ dự án, nhân sự, văn bản và công văn." },
   { id: "people", label: "Nhân sự", note: "Hồ sơ nhân sự toàn Ban và thông tin hợp đồng, lương." },
-  { id: "tasks", label: "Công việc", note: "Danh mục công việc, giao việc, hồ sơ và tiến độ." },
+  { id: "tasks", label: "Công việc", note: "Danh mục công việc, hồ sơ và tiến độ." },
   { id: "department-evaluations", label: "KPI phòng", note: "Dữ liệu hoạt động và chấm điểm KPI cấp phòng." },
   { id: "evaluations", label: "KPI cá nhân", note: "Chấm điểm KPI cá nhân và kết quả thi đua tháng." },
   { id: "history", label: "Lịch sử", note: "Dòng thời gian hoạt động của phòng ban và nhân viên." },
-  { id: "accounts", label: "Tài khoản", note: "Quản lý tài khoản và cấu hình sử dụng hệ thống." },
+  { id: "accounts", label: "Tài khoản", note: "Quản lý tài khoản sử dụng hệ thống." },
   { id: "rules", label: "Quy chế", note: "Quy chế thi đua, khen thưởng và cách tính KPI." },
 ];
+
+// These defaults preserve the existing business permissions. Admin can still
+// explicitly enable an additional module for a role in System Settings.
+const moduleDefaultRoleAccess = {
+  dashboard: ["director"],
+  bulletin: [...moduleAccessRoles],
+  archive: [...moduleAccessRoles],
+  people: ["director", "manager", "deputy_manager"],
+  tasks: [...moduleAccessRoles],
+  "department-evaluations": ["director", "manager", "deputy_manager"],
+  evaluations: [...moduleAccessRoles],
+  history: ["director", "manager", "deputy_manager"],
+  accounts: [...moduleAccessRoles],
+  rules: [...moduleAccessRoles],
+};
+const MODULE_SETTINGS_VERSION = 2;
 
 const customFieldScopes = [
   { id: "people", label: "Nhân sự", formId: "personForm" },
@@ -713,44 +733,44 @@ function defaultAccounts() {
     {
       id: "account-admin",
       username: "admin",
-      password: "",
-      displayName: "Kỹ Thuật Viên",
+      password: "123456",
+      displayName: "Admin tổng hợp",
       role: "admin",
       personId: "",
       departmentId: "",
     },
     {
       id: "account-director",
-      username: "daongochuan",
-      password: "",
-      displayName: "Đào Ngọc Huân",
+      username: "giamdoc",
+      password: "123456",
+      displayName: "Giám đốc",
       role: "director",
       personId: "",
       departmentId: "",
     },
     {
       id: "account-deputy-1",
-      username: "Nguyenvanhien",
-      password: "",
-      displayName: "Nguyễn Văn Hiện",
+      username: "phogiamdoc1",
+      password: "123456",
+      displayName: "Phó giám đốc 1",
       role: "director",
       personId: "",
       departmentId: "",
     },
     {
       id: "account-deputy-2",
-      username: "nguyenthihonghanh",
-      password: "",
-      displayName: "Nguyễn Thị Hồng Hạnh",
+      username: "phogiamdoc2",
+      password: "123456",
+      displayName: "Phó giám đốc 2",
       role: "director",
       personId: "",
       departmentId: "",
     },
     {
       id: "account-deputy-3",
-      username: "tovietdung",
-      password: "",
-      displayName: "Tô Việt Dũng",
+      username: "phogiamdoc3",
+      password: "123456",
+      displayName: "Phó giám đốc 3",
       role: "director",
       personId: "",
       departmentId: "",
@@ -767,7 +787,6 @@ function ensureDefaultAccounts(accounts, { bootstrap = false } = {}) {
 
 function accountRoleForPerson(person) {
   const roleId = person?.roleId || "";
-  if (roleId === "giam-doc" || roleId === "pho-giam-doc") return "director";
   if (roleId.startsWith("truong-phong-")) return "manager";
   if (roleId.startsWith("pho-phong-")) return "deputy_manager";
   if (roleId.startsWith("truong-bo-phan-")) return "section_head";
@@ -802,7 +821,7 @@ function createPersonnelAccount(person, accounts) {
   return {
     id: `account-person-${person.id}`,
     username: uniqueUsernameForPerson(person, accounts),
-    password: "",
+    password: "123456",
     displayName: person.name,
     role: accountRoleForPerson(person),
     personId: person.id,
@@ -829,11 +848,7 @@ function syncPersonnelAccounts() {
     const expectedRole = accountRoleForPerson(person);
 
     // 1. Tìm tài khoản hiện có khớp Tên đăng nhập hoặc Tên hiển thị
-    const linkedAccounts = state.accounts.filter((account) => account.personId === person.id);
-    let matchingAccount =
-      linkedAccounts.find((account) => !account.autoCreated && !isPersonnelAccountRole(account.role)) ||
-      linkedAccounts.find((account) => !account.autoCreated) ||
-      linkedAccounts[0];
+    let matchingAccount = state.accounts.find((account) => account.personId === person.id);
     if (!matchingAccount) {
       matchingAccount = state.accounts.find((account) => {
         const accountUsername = String(account.username || "").toLowerCase();
@@ -845,14 +860,13 @@ function syncPersonnelAccounts() {
     if (matchingAccount) {
       // Nếu đã có tài khoản -> Cập nhật nối personId và departmentId
       const shouldSyncRole = isPersonnelAccountRole(matchingAccount.role) || matchingAccount.autoCreated || !matchingAccount.role;
-      const shouldSyncDepartment = isPersonnelAccountRole(matchingAccount.role) || matchingAccount.autoCreated || !matchingAccount.departmentId;
       const needsUpdate =
         matchingAccount.personId !== person.id ||
-        (shouldSyncDepartment && matchingAccount.departmentId !== (person.departmentId || "")) ||
+        matchingAccount.departmentId !== (person.departmentId || "") ||
         (shouldSyncRole && matchingAccount.role !== expectedRole);
       if (needsUpdate) {
         matchingAccount.personId = person.id;
-        if (shouldSyncDepartment) matchingAccount.departmentId = person.departmentId || "";
+        matchingAccount.departmentId = person.departmentId || "";
         if (shouldSyncRole) matchingAccount.role = expectedRole;
         matchingAccount.updatedAt = new Date().toISOString();
         changed = true;
@@ -865,41 +879,30 @@ function syncPersonnelAccounts() {
     }
   });
 
-  // Remove obsolete auto-created accounts when a manually managed account
-  // already represents the same person or username. This prevents a duplicate
-  // employee account from shadowing a director/manager account at login.
-  const managedAccounts = state.accounts.filter((account) => !account.autoCreated);
-  const filteredAccounts = state.accounts.filter((account) => {
-    if (!account.autoCreated) return true;
-    const username = String(account.username || "").trim().toLowerCase();
-    const duplicate = managedAccounts.some((candidate) => {
-      const samePerson = account.personId && candidate.personId === account.personId;
-      const sameUsername = username && String(candidate.username || "").trim().toLowerCase() === username;
-      return samePerson || sameUsername;
-    });
-    if (duplicate) changed = true;
-    return !duplicate;
-  });
-  if (filteredAccounts.length !== state.accounts.length) state.accounts = filteredAccounts;
-
   return changed;
 }
 
-function defaultModuleRoleSettings() {
-  return Object.fromEntries(moduleAccessRoles.map((role) => [role, true]));
+function defaultModuleRoleSettings(moduleId = "") {
+  const allowedRoles = new Set(moduleDefaultRoleAccess[moduleId] || moduleAccessRoles);
+  return Object.fromEntries(moduleAccessRoles.map((role) => [role, allowedRoles.has(role)]));
 }
 
 function defaultModuleSettings() {
-  return Object.fromEntries(systemModules.map((module) => [module.id, { enabled: true, roles: defaultModuleRoleSettings() }]));
+  return Object.assign(
+    { schemaVersion: MODULE_SETTINGS_VERSION },
+    Object.fromEntries(systemModules.map((module) => [module.id, { enabled: true, roles: defaultModuleRoleSettings(module.id) }])),
+  );
 }
 
 function normalizeModuleSettings(settings = {}) {
   const defaults = defaultModuleSettings();
+  const migrateLegacyDefaults = Number(settings?.schemaVersion || 0) < MODULE_SETTINGS_VERSION;
   systemModules.forEach((module) => {
     const saved = settings?.[module.id] || {};
-    const roles = defaultModuleRoleSettings();
+    const roles = defaultModuleRoleSettings(module.id);
     moduleAccessRoles.forEach((role) => {
-      roles[role] = saved?.roles?.[role] !== false;
+      if (migrateLegacyDefaults && saved?.roles?.[role] === false) roles[role] = false;
+      if (!migrateLegacyDefaults && typeof saved?.roles?.[role] === "boolean") roles[role] = saved.roles[role];
     });
     defaults[module.id] = { enabled: module.locked ? true : saved.enabled !== false, roles };
   });
@@ -916,7 +919,8 @@ function moduleIsAvailableToAccount(viewId, account = currentAccount()) {
   const module = systemModules.find((item) => item.id === viewId);
   if (!module || module.locked || account?.role === "admin") return true;
   if (!moduleIsEnabled(viewId)) return false;
-  return state?.moduleSettings?.[viewId]?.roles?.[account?.role] !== false;
+  if (!moduleAccessRoles.includes(account?.role)) return false;
+  return state?.moduleSettings?.[viewId]?.roles?.[account.role] === true;
 }
 
 function themeOptionById(themeId) {
@@ -1084,9 +1088,13 @@ if (localStorage.getItem(SESSION_KEY)) {
 let customizeMode = localStorage.getItem(CUSTOMIZE_MODE_KEY) === "1";
 let customizationDragElement = null;
 let customizationResizeState = null;
+let customizationResizeFrame = 0;
+let customizationHoverElement = null;
+let customizationHoverClearTimer = 0;
+let customizationDropState = { target: null, container: null };
+let customizationElementIndexCache = new WeakMap();
 let evaluationGradeFilter = "";
 let peoplePendingEvaluationOnly = false;
-let peopleDirectoryGroupFilter = "";
 let bulletinMediaDraft = [];
 let archiveFileDraft = [];
 let bulletinResizeRefreshQueued = false;
@@ -1101,11 +1109,14 @@ let durableStorageRequestPromise = null;
 let durableStateWritePromise = Promise.resolve();
 let durableStateRestorePromise = null;
 let durableStateRestoreComplete = false;
+let offlineLoginProofCacheTimer = 0;
+let offlineLoginProofCacheInFlight = false;
 const storedFileDataCache = new Map();
 const storedFileObjectUrlCache = new Map();
 const DASHBOARD_CHART_ANIMATION_MS = 720;
 const sharedSync = {
   available: null,
+  initialized: null,
   session: false,
   sessionToken: localStorage.getItem(SHARED_SYNC_SESSION_TOKEN_KEY) || "",
   revision: null,
@@ -1113,9 +1124,13 @@ const sharedSync = {
   pending: false,
   inFlight: false,
   retryTimer: 0,
+  retryAttempt: 0,
+  refreshTimer: 0,
   conflict: false,
   conflictNotified: false,
   baseState: null,
+  accountId: "",
+  dirtyAccountId: "",
   localChangeVersion: 0,
   dirty: localStorage.getItem(SHARED_SYNC_DIRTY_KEY) === "1",
   checkpointRestorePromise: null,
@@ -1127,168 +1142,20 @@ const accountPresence = {
   inFlight: false,
   payload: null,
   error: "",
-  usageLogs: [],
+  usageInFlight: false,
+  usagePayload: null,
+  usageError: "",
 };
-// ✅ HÀM XÓA TRỰC TIẾP TRÊN SUPABASE CLOUD
-async function deleteFromSupabase(tableName, id) {
-  // Khi dùng Edge Function, mọi thay đổi phải đi qua kpi-sync để kiểm tra quyền.
-  if (usingSupabaseSync()) return;
-  const supabase = window.supabaseClient;
-  if (!supabase || !id) return;
-  try {
-    const { error } = await supabase.from(tableName).delete().eq("id", id);
-    if (error) console.warn(`⚠️ Lỗi xóa [${tableName}]:`, error.message);
-  } catch (err) {
-    console.error(`❌ Lỗi kết nối xóa Supabase [${tableName}]:`, err);
-  }
-}
-// ✅ HÀM ĐẨY DỮ LIỆU LÊN SUPABASE (ĐÃ TÍCH HỢP TỰ ĐỘNG KHỬ TRÙNG ID TUYỆT ĐỐI)
-async function syncCollectionToSupabase(tableName, items) {
-  const supabase = window.supabaseClient;
-  if (!supabase || typeof supabase.from !== "function" || !Array.isArray(items) || !items.length) return;
-
-  try {
-    const ALLOWED_TASK_KEYS = [
-      "id", "kind", "title", "projectName", "ownerId", "collaboratorIds",
-      "collaboratorId", "category", "workType", "recurrence",
-      "recurrenceSeriesId", "recurrenceAnchorDue", "recurrenceAnchorValue",
-      "startDate", "due", "dueTime", "status", "progress", "qualityPercent",
-      "responseStatus", "responseNote", "note", "attachments",
-      "completionReviewStatus", "completionReviewNote", "createdAt", "updatedAt"
-    ];
-
-    const NUMERIC_KEYS = ["progress", "qualityPercent"];
-    const DATE_KEYS = ["startDate", "due", "createdAt", "updatedAt"];
-    const ARRAY_KEYS = ["collaboratorIds", "attachments"];
-
-    const cleanItems = items.map(item => {
-      const copy = { ...item };
-      delete copy.dataUrl; // Xóa dữ liệu file base64 thừa nếu có
-
-      if (tableName === "tasks") {
-        const sanitizedTask = {};
-        ALLOWED_TASK_KEYS.forEach(key => {
-          if (copy[key] !== undefined) {
-            let val = copy[key];
-
-            if (NUMERIC_KEYS.includes(key)) {
-              val = (val === "" || val === null || val === undefined || isNaN(val)) ? null : Number(val);
-            } else if (DATE_KEYS.includes(key)) {
-              val = (val === "" || val === null) ? null : String(val);
-            } else if (ARRAY_KEYS.includes(key)) {
-              if (typeof val === "string") {
-                try { val = JSON.parse(val); } catch(e) { val = []; }
-              }
-              if (!Array.isArray(val)) val = [];
-            } else if (val === "") {
-              val = null;
-            }
-
-            sanitizedTask[key] = val;
-          }
-        });
-        return sanitizedTask;
-      }
-      return copy;
-    });
-
-    // 🟢 TRIỆT HẠ LỖI ON CONFLICT: Lọc sạch trùng ID trước khi gửi lên Supabase
-    const uniqueMap = new Map();
-    cleanItems.forEach(item => {
-      if (item && item.id) {
-        uniqueMap.set(String(item.id), item);
-      }
-    });
-    const uniqueItems = Array.from(uniqueMap.values());
-
-    if (!uniqueItems.length) return;
-
-    const { error } = await supabase
-      .from(tableName)
-      .upsert(uniqueItems, { onConflict: 'id' });
-
-    if (error) {
-      console.warn(`⚠️ Cảnh báo đồng bộ [${tableName}]:`, error.message || error);
-    }
-  } catch (err) {
-    console.error(`❌ Lỗi kết nối Supabase bảng [${tableName}]:`, err);
-  }
-}
-
-async function pushAllStateToSupabase() {
-  // Edge Function kpi-sync là nguồn đồng bộ duy nhất khi đã có cấu hình Supabase.
-  if (usingSupabaseSync()) return;
-  const supabase = window.supabaseClient;
-  if (!supabase || typeof supabase.from !== "function") return;
-  
-  await Promise.all([
-    syncCollectionToSupabase("people", state.people),
-    syncCollectionToSupabase("tasks", state.tasks),
-    syncCollectionToSupabase("bulletins", state.bulletins),
-    syncCollectionToSupabase("archive_records", state.archiveRecords),
-    syncCollectionToSupabase("evaluations", state.evaluations),
-    syncCollectionToSupabase("department_evaluations", state.departmentEvaluations),
-    syncCollectionToSupabase("accounts", state.accounts)
-  ]);
-}
-// Hàm đẩy toàn bộ các mảng dữ liệu trong state lên Supabase
-// ✅ BỔ SUNG HÀM NÀY NGAY BÊN DƯỚI pushAllStateToSupabase():
-async function pullAllStateFromSupabase() {
-  // Không kéo từng bảng trực tiếp khi hệ thống đã dùng Edge Function.
-  if (usingSupabaseSync()) return false;
-  const supabase = window.supabaseClient;
-  if (!supabase || typeof supabase.from !== "function") return false;
-
-  try {
-    const [
-      { data: people },
-      { data: tasks },
-      { data: bulletins },
-      { data: archiveRecords },
-      { data: evaluations },
-      { data: departmentEvaluations },
-      { data: accounts }
-    ] = await Promise.all([
-      supabase.from("people").select("*"),
-      supabase.from("tasks").select("*"),
-      supabase.from("bulletins").select("*"),
-      supabase.from("archive_records").select("*"),
-      supabase.from("evaluations").select("*"),
-      supabase.from("department_evaluations").select("*"),
-      supabase.from("accounts").select("*")
-    ]);
-
-    // ✅ LỌC BỎ CÁC ID ĐÃ BỊ XÓA TRONG MEMORY (CHỐNG HỒI SINH)
-    const deletedSet = new Set(state.deletedIds || []);
-
-    if (people && people.length) state.people = people.filter(item => !deletedSet.has(item.id));
-    if (tasks && tasks.length) state.tasks = tasks.filter(item => !deletedSet.has(item.id));
-    if (bulletins && bulletins.length) state.bulletins = bulletins.filter(item => !deletedSet.has(item.id));
-    if (archiveRecords && archiveRecords.length) state.archiveRecords = archiveRecords.filter(item => !deletedSet.has(item.id));
-    if (evaluations && evaluations.length) state.evaluations = evaluations.filter(item => !deletedSet.has(item.id));
-    if (departmentEvaluations && departmentEvaluations.length) state.departmentEvaluations = departmentEvaluations.filter(item => !deletedSet.has(item.id));
-    if (accounts && accounts.length) state.accounts = accounts;
-
-    persistState();
-    renderAll();
-    console.log("✅ Đã kéo đồng bộ toàn bộ dữ liệu từ Supabase thành công!");
-    return true;
-  } catch (err) {
-    console.error("❌ Lỗi khi kéo dữ liệu từ Supabase:", err);
-    return false;
-  }
-}
 
 const TASK_STATUS_PREPARING = "Chuẩn bị thực hiện";
 const TASK_STATUS_OLD_PREPARING = "Chưa bắt đầu";
 const TASK_STATUS_COMPLETED = "Hoàn thành";
 const TASK_STATUS_CLOSED = "Đã kết thúc";
+const TASK_STATUS_PENDING_REVIEW = "Chờ đánh giá";
 const taskStatuses = [TASK_STATUS_PREPARING, "Đang thực hiện", "Hoàn thành", "Quá hạn"];
-let mobileExpandedTaskStatus = "";
 const TASK_KIND_ASSIGNED = "assigned";
 const TASK_KIND_REGULAR = "regular";
 const taskKindLabels = {
-  [TASK_KIND_ASSIGNED]: "Việc được giao",
   [TASK_KIND_REGULAR]: "Danh mục KPI cá nhân",
 };
 const TASK_WORK_TYPE_ROUTINE = "routine";
@@ -1315,11 +1182,11 @@ const archiveCategories = ["Hồ sơ dự án", "Hồ sơ nhân sự", "Văn b�
 const archiveStatuses = ["Đang thực hiện", "Đã hoàn thành", "Còn hiệu lực", "Hết hiệu lực", "Lưu tham khảo"];
 const MAX_TASK_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const MAX_TASK_ATTACHMENT_TOTAL_BYTES = 5 * 1024 * 1024;
-const MAX_BULLETIN_MEDIA_BYTES = 20 * 1024 * 1024;
+const MAX_SHARED_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_BULLETIN_MEDIA_BYTES = MAX_SHARED_FILE_BYTES;
 const MAX_BULLETIN_MEDIA_TOTAL_BYTES = 120 * 1024 * 1024;
-const MAX_ARCHIVE_FILE_BYTES = 30 * 1024 * 1024;
+const MAX_ARCHIVE_FILE_BYTES = MAX_SHARED_FILE_BYTES;
 const MAX_ARCHIVE_FILE_TOTAL_BYTES = 300 * 1024 * 1024;
-const TASK_OVERDUE_STATUS_LOCK_MS = 24 * 60 * 60 * 1000;
 
 function currentMonth() {
   const date = new Date();
@@ -1441,6 +1308,39 @@ function taskIsLateCompletion(task) {
   if (!taskCompletionIsApproved(task)) return false;
   const completedAt = task?.completionReviewedAt || task?.completedAt || "";
   return !!completedAt && !isTimestampBeforeDeadline(completedAt, task);
+}
+
+function taskCompletionTimingStatus(task, confirmedAt = "") {
+  if (!taskCompletionIsApproved(task) || !task?.due) return "";
+  if (taskIsLateCompletion(task)) return "late";
+  const timestamp = confirmedAt || task?.completionReviewedAt || task?.completedAt || "";
+  const completedAt = timestamp ? new Date(timestamp) : null;
+  const plannedDate = new Date(`${task.due}T00:00:00`);
+  if (!completedAt || Number.isNaN(completedAt.getTime()) || Number.isNaN(plannedDate.getTime())) return "";
+  return completedAt < plannedDate ? "ahead" : "";
+}
+
+function taskCompletionTimingLabel(task, confirmedAt = "") {
+  const status = taskCompletionTimingStatus(task, confirmedAt);
+  if (status === "ahead") return "Vượt tiến độ";
+  if (status === "late") return "Chậm tiến độ";
+  return "";
+}
+
+function taskCompletionTimingBadgeHtml(task) {
+  const status = taskCompletionTimingStatus(task);
+  const label = taskCompletionTimingLabel(task);
+  return label ? `<span class="task-completion-timing is-${status}">${label}</span>` : "";
+}
+
+function taskCompletionReviewValueHtml(task) {
+  const status = taskCompletionReviewStatus(task);
+  if (status === "passed") {
+    return `<span class="task-completion-review-value is-passed">Đạt${taskCompletionTimingBadgeHtml(task)}</span>`;
+  }
+  if (status === "failed") return "Không đạt · Yêu cầu tiếp tục thực hiện";
+  if (status === "pending") return "Chờ đánh giá Đạt/Không đạt";
+  return "Chưa yêu cầu";
 }
 
 function taskHasQualityPercent(task) {
@@ -1570,17 +1470,25 @@ async function writeStoredFile(file, dataUrl) {
 async function readSharedBinaryFile(file) {
   const remoteKey = file?.remoteKey || "";
   if (!remoteKey || !sharedSync.session || !sharedSync.available) return "";
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), SHARED_SYNC_REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(sharedEndpoint("file", { key: remoteKey, type: file?.type || "application/octet-stream" }), {
       credentials: usingSupabaseSync() ? "omit" : "same-origin",
       cache: "no-store",
       headers: sharedRequestHeaders(),
+      signal: controller.signal,
     });
-    if (!response.ok) return "";
+    if (!response.ok) {
+      if (response.status === 401) expireSharedSession();
+      return "";
+    }
     const blob = await response.blob();
     return normalizeStoredMediaDataUrl(await readFileAsDataUrl(blob), file?.type || blob.type);
   } catch {
     return "";
+  } finally {
+    window.clearTimeout(timeout);
   }
 }
 
@@ -1649,6 +1557,45 @@ function storedFileDisplayUrl(file, dataUrl) {
   return objectUrl;
 }
 
+function taskAttachmentByKey(key) {
+  const normalizedKey = String(key || "");
+  if (!normalizedKey) return null;
+  const draft = [...taskAttachmentDraft, ...assignmentAttachmentDraft].find((file) => storedFileKey(file) === normalizedKey);
+  if (draft) return draft;
+  for (const task of state.tasks || []) {
+    const found = (task.attachments || []).find((file) => storedFileKey(file) === normalizedKey);
+    if (found) return found;
+  }
+  return null;
+}
+
+function taskAttachmentLinkHtml(file, className = "attachment-link") {
+  const key = escapeHtml(storedFileKey(file));
+  const source = escapeHtml(file?.dataUrl || "");
+  const name = escapeHtml(file?.name || "Tệp đính kèm");
+  return `<a class="${className}" href="${source || "#"}" data-task-attachment-key="${key}" download="${name}" target="_blank" rel="noopener">${name}</a>`;
+}
+
+async function hydrateTaskAttachmentLinks(root = document) {
+  if (!root) return;
+  const elements = Array.from(root.querySelectorAll("[data-task-attachment-key]"));
+  await Promise.all(
+    elements.map(async (element) => {
+      if (element.dataset.fileReady === "true") return;
+      const file = taskAttachmentByKey(element.dataset.taskAttachmentKey);
+      if (!file) return;
+      try {
+        const dataUrl = await readStoredFileDataUrl(file);
+        if (!dataUrl) return;
+        element.href = storedFileDisplayUrl(file, dataUrl);
+        element.dataset.fileReady = "true";
+      } catch {
+        element.dataset.fileReady = "error";
+      }
+    }),
+  );
+}
+
 async function deleteStoredFile(file) {
   const key = storedFileKey(file);
   if (key) {
@@ -1681,14 +1628,20 @@ async function readTaskAttachmentFiles(files) {
     throw new Error(`Tệp "${oversized.name}" vượt quá 2MB. Vui lòng chọn tệp nhỏ hơn để lưu trực tiếp trong dữ liệu ứng dụng.`);
   }
   return Promise.all(
-    selected.map(async (file) => ({
-      id: uid("task-file"),
-      name: file.name,
-      type: file.type || "application/octet-stream",
-      size: file.size,
-      uploadedAt: new Date().toISOString(),
-      dataUrl: await readFileAsDataUrl(file),
-    })),
+    selected.map(async (file) => {
+      const id = uid("task-file");
+      const type = archiveFileTypeFromFile(file);
+      const record = {
+        id,
+        storageKey: id,
+        name: file.name,
+        type,
+        size: file.size,
+        uploadedAt: new Date().toISOString(),
+      };
+      await writeStoredFile(record, normalizeStoredMediaDataUrl(await readFileAsDataUrl(file), type));
+      return record;
+    }),
   );
 }
 
@@ -1731,7 +1684,7 @@ async function readBulletinMediaFiles(files) {
   }
   const oversized = selected.find((file) => file.size > MAX_BULLETIN_MEDIA_BYTES);
   if (oversized) {
-    throw new Error(`Tệp "${oversized.name}" vượt quá 20MB. Vui lòng chọn file media nhỏ hơn để lưu ổn định trong dữ liệu ứng dụng.`);
+    throw new Error(`Tệp "${oversized.name}" vượt quá 10MB. Vui lòng chọn file media nhỏ hơn để đồng bộ ổn định trên các thiết bị.`);
   }
   return Promise.all(
     selected.map(async (file) => {
@@ -1806,7 +1759,7 @@ async function readArchiveFiles(files) {
   const selected = Array.from(files || []);
   const oversized = selected.find((file) => file.size > MAX_ARCHIVE_FILE_BYTES);
   if (oversized) {
-    throw new Error(`Tệp "${oversized.name}" vượt quá 30MB. Vui lòng chọn tệp nhỏ hơn để lưu ổn định trong kho dữ liệu.`);
+    throw new Error(`Tệp "${oversized.name}" vượt quá 10MB. Vui lòng chọn tệp nhỏ hơn để đồng bộ ổn định trong kho dữ liệu.`);
   }
   return Promise.all(
     selected.map(async (file) => {
@@ -1826,61 +1779,6 @@ async function readArchiveFiles(files) {
       return record;
     }),
   );
-}
-
-function normalizedProjectCatalogName(value) {
-  return String(value || "").trim().replace(/\s+/g, " ");
-}
-
-function projectCatalogNameKey(value) {
-  return normalizedProjectCatalogName(value).toLocaleLowerCase("vi");
-}
-
-function normalizeProjectCatalog(catalog = [], tasks = []) {
-  const projects = [];
-  const names = new Set();
-  const ids = new Set();
-  const addProject = (record, fallbackName = "") => {
-    const name = normalizedProjectCatalogName(record?.name || fallbackName);
-    if (!name || names.has(projectCatalogNameKey(name))) return;
-    let id = String(record?.id || "").trim() || uid("project");
-    while (ids.has(id)) id = uid("project");
-    ids.add(id);
-    names.add(projectCatalogNameKey(name));
-    projects.push({
-      id,
-      name,
-      createdAt: record?.createdAt || "",
-      createdById: record?.createdById || "",
-      createdByName: record?.createdByName || "",
-      updatedAt: record?.updatedAt || "",
-      updatedById: record?.updatedById || "",
-      updatedByName: record?.updatedByName || "",
-    });
-  };
-  (Array.isArray(catalog) ? catalog : []).forEach((project) => addProject(project));
-  (Array.isArray(tasks) ? tasks : []).forEach((task) => addProject(null, task?.projectName));
-  return projects;
-}
-
-function normalizeTaskProjectLinks(tasks = [], projectCatalog = []) {
-  const projectsById = new Map(projectCatalog.map((project) => [project.id, project]));
-  const projectsByName = new Map(projectCatalog.map((project) => [projectCatalogNameKey(project.name), project]));
-  return (Array.isArray(tasks) ? tasks : []).map((task) => {
-    if (!task || typeof task !== "object") return task;
-    const linked = projectsById.get(String(task.projectId || "").trim()) || projectsByName.get(projectCatalogNameKey(task.projectName));
-    return linked
-      ? { ...task, projectId: linked.id, projectName: linked.name }
-      : { ...task, projectId: "", projectName: normalizedProjectCatalogName(task.projectName) };
-  });
-}
-
-function projectById(projectId) {
-  return (state.projectCatalog || []).find((project) => project.id === String(projectId || "").trim()) || null;
-}
-
-function projectNameForTask(task) {
-  return projectById(task?.projectId)?.name || normalizedProjectCatalogName(task?.projectName);
 }
 
 function defaultStatePayload() {
@@ -1904,22 +1802,99 @@ function defaultStatePayload() {
 }
 
 // 🌟 Hàm ghi nhận ID vừa xóa để đồng bộ lệnh xóa sang tất cả máy trạm khác
+function normalizedProjectCatalogName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function projectCatalogNameKey(value) {
+  return normalizedProjectCatalogName(value).toLocaleLowerCase("vi");
+}
+
+function normalizeProjectCatalog(catalog = [], tasks = []) {
+  const projects = [];
+  const names = new Set();
+  const ids = new Set();
+  const addProject = (record, fallbackName = "") => {
+    const name = normalizedProjectCatalogName(record?.name || fallbackName);
+    if (!name) return;
+    const nameKey = projectCatalogNameKey(name);
+    if (names.has(nameKey)) return;
+    let id = String(record?.id || "").trim() || uid("project");
+    while (ids.has(id)) id = uid("project");
+    ids.add(id);
+    names.add(nameKey);
+    projects.push({
+      id,
+      name,
+      createdAt: record?.createdAt || "",
+      createdById: record?.createdById || "",
+      createdByName: record?.createdByName || "",
+      updatedAt: record?.updatedAt || "",
+      updatedById: record?.updatedById || "",
+      updatedByName: record?.updatedByName || "",
+    });
+  };
+  (Array.isArray(catalog) ? catalog : []).forEach((record) => addProject(record));
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => addProject(null, task?.projectName));
+  return projects;
+}
+
+function normalizeTaskProjectLinks(tasks = [], projectCatalog = []) {
+  const projectsById = new Map(projectCatalog.map((project) => [project.id, project]));
+  const projectsByName = new Map(projectCatalog.map((project) => [projectCatalogNameKey(project.name), project]));
+  return (Array.isArray(tasks) ? tasks : []).map((task) => {
+    if (!task || typeof task !== "object") return task;
+    const projectId = String(task.projectId || "").trim();
+    const linkedProject = projectsById.get(projectId) || projectsByName.get(projectCatalogNameKey(task.projectName));
+    if (!linkedProject) {
+      return { ...task, projectId: "", projectName: normalizedProjectCatalogName(task.projectName) };
+    }
+    return { ...task, projectId: linkedProject.id, projectName: linkedProject.name };
+  });
+}
+
+function projectById(projectId) {
+  const id = String(projectId || "").trim();
+  return (state.projectCatalog || []).find((project) => project.id === id) || null;
+}
+
+function projectIdForTask(task) {
+  const directProject = projectById(task?.projectId);
+  if (directProject) return directProject.id;
+  const nameKey = projectCatalogNameKey(task?.projectName);
+  return (state.projectCatalog || []).find((project) => projectCatalogNameKey(project.name) === nameKey)?.id || "";
+}
+
+function projectNameForTask(task) {
+  return projectById(task?.projectId)?.name || normalizedProjectCatalogName(task?.projectName);
+}
+
+function isRetiredAssignmentTaskRecord(task) {
+  if (!task || typeof task !== "object") return false;
+  const kind = String(task.kind || task.taskKind || "").trim().toLowerCase();
+  return kind === "assigned" || (!kind && Boolean(task.assignedById || task.assignedAt || task.responseStatus || task.responseAt));
+}
+
 function registerDeletedId(id) {
-    const normalizedId = String(id || "").trim();
-    if (!normalizedId) return;
-    if (!Array.isArray(state.deletedIds)) state.deletedIds = [];
-    state.deletedIds = [...new Set([...state.deletedIds, normalizedId])].slice(-MAX_DELETED_ID_HISTORY);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) return;
+  if (!Array.isArray(state.deletedIds)) state.deletedIds = [];
+  state.deletedIds = [...new Set([...state.deletedIds, normalizedId])].slice(-MAX_DELETED_ID_HISTORY);
 }
 
 function normalizeStatePayload(parsed) {
   const fallback = defaultStatePayload();
   if (!parsed || typeof parsed !== "object") return fallback;
   const sourceTasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
-  const projectCatalog = normalizeProjectCatalog(parsed.projectCatalog, sourceTasks);
+  const retiredAssignmentTaskIds = new Set(
+    sourceTasks.filter((task) => isRetiredAssignmentTaskRecord(task)).map((task) => String(task?.id || "")).filter(Boolean),
+  );
+  const tasks = sourceTasks.filter((task) => !isRetiredAssignmentTaskRecord(task));
+  const projectCatalog = normalizeProjectCatalog(parsed.projectCatalog, tasks);
   return {
     activePeriod: parsed.activePeriod || fallback.activePeriod,
     people: Array.isArray(parsed.people) ? parsed.people : [],
-    tasks: normalizeTaskProjectLinks(sourceTasks, projectCatalog),
+    tasks: normalizeTaskProjectLinks(tasks, projectCatalog),
     projectCatalog,
     bulletins: Array.isArray(parsed.bulletins) ? parsed.bulletins : [],
     archiveRecords: Array.isArray(parsed.archiveRecords) ? parsed.archiveRecords : [],
@@ -1928,7 +1903,9 @@ function normalizeStatePayload(parsed) {
     accounts: Array.isArray(parsed.accounts) ? parsed.accounts : fallback.accounts,
     moduleSettings: normalizeModuleSettings(parsed.moduleSettings),
     systemCustomization: normalizeSystemCustomization(parsed.systemCustomization),
-    activityLog: Array.isArray(parsed.activityLog) ? parsed.activityLog : [],
+    activityLog: Array.isArray(parsed.activityLog)
+      ? parsed.activityLog.filter((entry) => !retiredAssignmentTaskIds.has(String(entry?.targetId || "")))
+      : [],
     importedPeopleVersion: parsed.importedPeopleVersion || "",
     canBoGpmbKpiCatalogVersion: parsed.canBoGpmbKpiCatalogVersion || "",
     deletedIds: Array.isArray(parsed.deletedIds)
@@ -1949,9 +1926,6 @@ function loadState() {
 }
 
 function persistState() {
-  if (Array.isArray(state.accounts)) {
-    state.accounts = Array.from(new Map(state.accounts.map(acc => [acc.id, acc])).values());
-  }
   const serialized = JSON.stringify(state);
   try {
     localStorage.setItem(STORAGE_KEY, serialized);
@@ -1978,9 +1952,6 @@ function saveState() {
   }
   scheduleDashboardRefresh();
   queueSharedStateSync();
-
-  // Chế độ cũ mới đẩy từng bảng trực tiếp. Chế độ Edge Function được xếp hàng ở trên.
-  if (!usingSupabaseSync()) pushAllStateToSupabase();
 }
 
 async function restoreDurableState() {
@@ -1990,6 +1961,11 @@ async function restoreDurableState() {
     if (!serialized) return false;
     const durableSavedAt = new Date(record.updatedAt || 0).getTime() || 0;
     const localSavedAt = Number(localStorage.getItem(STATE_SAVED_AT_KEY) || 0);
+    const localSerialized = localStorage.getItem(STORAGE_KEY) || "";
+    // A normal reload already has the same serialized snapshot in
+    // localStorage. Skipping the duplicate restore avoids reprocessing all
+    // attachment migrations before the interface is usable.
+    if (localSerialized === serialized) return false;
     if (localSavedAt > durableSavedAt) return false;
     Object.assign(state, normalizeStatePayload(JSON.parse(serialized)));
     try {
@@ -2019,6 +1995,7 @@ function ensureDurableStateRestored() {
 function sharedSyncCheckpointPayload() {
   return {
     dirty: Boolean(sharedSync.dirty),
+    dirtyAccountId: sharedSync.dirtyAccountId || "",
     revision: sharedSync.revision,
     baseState: sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : null,
   };
@@ -2041,6 +2018,7 @@ async function restoreSharedSyncCheckpoint() {
       const checkpoint = record?.value;
       if (!checkpoint || typeof checkpoint !== "object") return false;
       sharedSync.dirty = Boolean(checkpoint.dirty) || localStorage.getItem(SHARED_SYNC_DIRTY_KEY) === "1";
+      sharedSync.dirtyAccountId = String(checkpoint.dirtyAccountId || "");
       sharedSync.revision = Number.isFinite(Number(checkpoint.revision)) ? Number(checkpoint.revision) : sharedSync.revision;
       sharedSync.baseState = checkpoint.baseState ? cloneStatePayload(normalizeStatePayload(checkpoint.baseState)) : sharedSync.baseState;
       return true;
@@ -2054,6 +2032,7 @@ async function restoreSharedSyncCheckpoint() {
 
 function markSharedStateDirty() {
   sharedSync.dirty = true;
+  sharedSync.dirtyAccountId = sharedSync.accountId || currentAccount()?.id || sharedSync.dirtyAccountId || "";
   try {
     localStorage.setItem(SHARED_SYNC_DIRTY_KEY, "1");
   } catch {
@@ -2064,6 +2043,7 @@ function markSharedStateDirty() {
 
 function clearSharedStateDirty() {
   sharedSync.dirty = false;
+  sharedSync.dirtyAccountId = "";
   try {
     localStorage.removeItem(SHARED_SYNC_DIRTY_KEY);
   } catch {
@@ -2074,6 +2054,210 @@ function clearSharedStateDirty() {
 
 function cloneStatePayload(payload) {
   return JSON.parse(JSON.stringify(payload));
+}
+
+function normalizedLoginUsername(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function readOfflineLoginProofs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(OFFLINE_LOGIN_PROOFS_KEY) || "{}");
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeOfflineLoginProofs(proofs) {
+  try {
+    const entries = Object.entries(proofs || {})
+      .filter(([, proof]) => proof && typeof proof === "object")
+      .sort(([, left], [, right]) => String(right?.verifiedAt || "").localeCompare(String(left?.verifiedAt || "")))
+      .slice(0, OFFLINE_LOGIN_PROOF_MAX_ENTRIES);
+    localStorage.setItem(OFFLINE_LOGIN_PROOFS_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Offline sign-in remains unavailable if this browser blocks local storage.
+  }
+}
+
+function bytesToBase64(bytes) {
+  let output = "";
+  Array.from(bytes || []).forEach((value) => {
+    output += String.fromCharCode(value);
+  });
+  return btoa(output);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(String(value || ""));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function secureTextEquals(left, right) {
+  const first = String(left || "");
+  const second = String(right || "");
+  if (first.length !== second.length) return false;
+  let difference = 0;
+  for (let index = 0; index < first.length; index += 1) difference |= first.charCodeAt(index) ^ second.charCodeAt(index);
+  return difference === 0;
+}
+
+async function offlineCredentialDigest(password, salt, iterations = OFFLINE_LOGIN_PBKDF2_ITERATIONS) {
+  if (!window.crypto?.subtle || !password || !salt?.length) return "";
+  const workFactor = Math.max(50000, Math.min(OFFLINE_LOGIN_PBKDF2_ITERATIONS, Number(iterations) || OFFLINE_LOGIN_PBKDF2_ITERATIONS));
+  const material = await window.crypto.subtle.importKey("raw", new TextEncoder().encode(String(password)), "PBKDF2", false, ["deriveBits"]);
+  const bits = await window.crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: workFactor, hash: "SHA-256" },
+    material,
+    256,
+  );
+  return bytesToBase64(new Uint8Array(bits));
+}
+
+async function rememberOfflineLogin(account, password) {
+  const username = normalizedLoginUsername(account?.username);
+  if (!username || !account?.id || !password || !window.crypto?.getRandomValues) return;
+  try {
+    const salt = window.crypto.getRandomValues(new Uint8Array(16));
+    const verifier = await offlineCredentialDigest(password, salt);
+    if (!verifier) return;
+    const proofs = readOfflineLoginProofs();
+    proofs[username] = {
+      accountId: String(account.id),
+      username,
+      salt: bytesToBase64(salt),
+      verifier,
+      iterations: OFFLINE_LOGIN_PBKDF2_ITERATIONS,
+      verifiedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + OFFLINE_LOGIN_PROOF_MAX_AGE_MS).toISOString(),
+    };
+    writeOfflineLoginProofs(proofs);
+  } catch {
+    // A successful online sign-in must not fail just because offline caching is unavailable.
+  }
+}
+
+function cacheServerOfflineLoginProofs(proofs) {
+  if (!Array.isArray(proofs) || !proofs.length) return;
+  const storedProofs = readOfflineLoginProofs();
+  let changed = false;
+  proofs.forEach((proof) => {
+    const username = normalizedLoginUsername(proof?.username);
+    const expiresAt = new Date(proof?.expiresAt || "").getTime();
+    if (!username || !proof?.accountId || !proof?.salt || !proof?.verifier || Number.isNaN(expiresAt) || expiresAt <= Date.now()) return;
+    storedProofs[username] = {
+      accountId: String(proof.accountId),
+      username,
+      salt: String(proof.salt),
+      verifier: String(proof.verifier),
+      iterations: Math.max(50000, Math.min(OFFLINE_LOGIN_PBKDF2_ITERATIONS, Number(proof.iterations) || OFFLINE_LOGIN_PBKDF2_ITERATIONS)),
+      verifiedAt: proof.verifiedAt || new Date().toISOString(),
+      expiresAt: proof.expiresAt,
+    };
+    changed = true;
+  });
+  if (changed) writeOfflineLoginProofs(storedProofs);
+}
+
+function offlineLoginProofNeedsRefresh(account, proof) {
+  const proofExpiresAt = new Date(proof?.expiresAt || "").getTime();
+  const accountUpdatedAt = new Date(account?.updatedAt || 0).getTime();
+  const proofVerifiedAt = new Date(proof?.verifiedAt || 0).getTime();
+  return (
+    !proof ||
+    String(proof.accountId || "") !== String(account?.id || "") ||
+    Number.isNaN(proofExpiresAt) ||
+    proofExpiresAt <= Date.now() ||
+    (accountUpdatedAt > 0 && accountUpdatedAt > proofVerifiedAt)
+  );
+}
+
+function shouldRequestAdminOfflineCredentials(username) {
+  const normalizedUsername = normalizedLoginUsername(username);
+  const signedInAccount = (state.accounts || []).find((account) => normalizedLoginUsername(account?.username) === normalizedUsername);
+  if (signedInAccount?.role !== "admin") {
+    // A non-Admin view receives only its own account, so it cannot know
+    // whether the next online sign-in is the Admin account. The server still
+    // enforces the Admin role before returning any verifier.
+    return !(state.accounts || []).some((account) => account?.role === "admin");
+  }
+  const proofs = readOfflineLoginProofs();
+  return (state.accounts || [])
+    .filter((account) => account?.id && account?.username && !account?.disabled)
+    .some((account) => offlineLoginProofNeedsRefresh(account, proofs[normalizedLoginUsername(account.username)]));
+}
+
+function scheduleLocalOfflineLoginProofCache(accounts) {
+  const candidates = (Array.isArray(accounts) ? accounts : [])
+    .filter((account) => account?.id && account?.username && account?.password && !account?.disabled)
+    .map((account) => ({ id: String(account.id), username: String(account.username), password: String(account.password) }));
+  if (!candidates.length || offlineLoginProofCacheTimer || offlineLoginProofCacheInFlight) return;
+
+  const cacheProofs = async () => {
+    offlineLoginProofCacheTimer = 0;
+    offlineLoginProofCacheInFlight = true;
+    try {
+      const existing = readOfflineLoginProofs();
+      for (const account of candidates) {
+        const username = normalizedLoginUsername(account.username);
+        const proof = existing[username];
+        const isCurrent = proof && String(proof.accountId || "") === account.id && new Date(proof.expiresAt || "").getTime() > Date.now();
+        if (!isCurrent) await rememberOfflineLogin(account, account.password);
+        // Yield between credentials so importing a full personnel file does not stall the interface.
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+    } finally {
+      offlineLoginProofCacheInFlight = false;
+    }
+  };
+
+  if (typeof window.requestIdleCallback === "function") {
+    offlineLoginProofCacheTimer = window.requestIdleCallback(() => cacheProofs(), { timeout: 1500 });
+  } else {
+    offlineLoginProofCacheTimer = window.setTimeout(cacheProofs, 120);
+  }
+}
+
+async function verifyOfflineLogin(username, password) {
+  const normalizedUsername = normalizedLoginUsername(username);
+  if (!normalizedUsername || !password) return null;
+  const localAccount = (state.accounts || []).find((item) => normalizedLoginUsername(item?.username) === normalizedUsername);
+  if (!localAccount || localAccount.disabled) return null;
+  const proof = readOfflineLoginProofs()[normalizedUsername];
+  const proofIsValid = proof && String(proof.accountId || "") === String(localAccount.id || "") && !Number.isNaN(new Date(proof.expiresAt || "").getTime()) && new Date(proof.expiresAt).getTime() >= Date.now();
+  if (!proofIsValid) {
+    // This preserves offline access for a local JSON backup while gradually
+    // replacing plaintext passwords with the one-way offline verifier.
+    if (localAccount.password && secureTextEquals(localAccount.password, password)) {
+      void rememberOfflineLogin(localAccount, password);
+      return localAccount;
+    }
+    return null;
+  }
+  try {
+    const verifier = await offlineCredentialDigest(password, base64ToBytes(proof.salt), proof.iterations);
+    return verifier && secureTextEquals(verifier, proof.verifier) ? localAccount : null;
+  } catch {
+    return null;
+  }
+}
+
+function localStateHasBusinessData(payload = state) {
+  const source = normalizeStatePayload(payload);
+  return [source.people, source.tasks, source.bulletins, source.archiveRecords, source.evaluations, source.departmentEvaluations].some(
+    (records) => Array.isArray(records) && records.length > 0,
+  );
+}
+
+function canBootstrapCloudFromLocalState(payload = state) {
+  const source = normalizeStatePayload(payload);
+  const accounts = Array.isArray(source.accounts) ? source.accounts : [];
+  return (
+    localStateHasBusinessData(source) &&
+    accounts.length >= defaultAccounts().length &&
+    accounts.every((account) => String(account?.password || "").trim())
+  );
 }
 
 function sharedSyncSupported() {
@@ -2116,25 +2300,31 @@ function sharedRequestHeaders(headers = {}, sessionToken = sharedSync.sessionTok
 }
 
 async function sharedJsonRequest(action, options = {}) {
-  const requestOptions = { ...options };
+  const { query = {}, ...requestOptions } = options;
   requestOptions.credentials = usingSupabaseSync() ? "omit" : "same-origin";
   requestOptions.cache = "no-store";
   requestOptions.headers = sharedRequestHeaders(options.headers || {});
-  const response = await fetch(sharedEndpoint(action), {
-    ...requestOptions,
-  });
-  let payload = {};
+  const controller = options.signal ? null : new AbortController();
+  const timeout = controller ? window.setTimeout(() => controller.abort(), SHARED_SYNC_REQUEST_TIMEOUT_MS) : 0;
   try {
-    payload = await response.json();
-  } catch {
-    // A static host can return HTML for a missing API route.
+    const response = await fetch(sharedEndpoint(action, query), {
+      ...requestOptions,
+      signal: options.signal || controller?.signal,
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch {
+      // A static host can return HTML for a missing API route.
+    }
+    return { response, payload };
+  } finally {
+    if (timeout) window.clearTimeout(timeout);
   }
-  return { response, payload };
 }
 
-// 🟢 1. SỬA HÀM KIỂM TRA: BẬT GIÁM SÁT NGAY KHI CÓ KẾT NỐI SUPABASE
 function accountPresenceAvailable() {
-  return Boolean(window.supabaseClient && currentAccount());
+  return usingSupabaseSync() && sharedSync.session && sharedSync.available === true;
 }
 
 function accountPresenceRelativeTime(timestamp) {
@@ -2147,303 +2337,222 @@ function accountPresenceRelativeTime(timestamp) {
   return `${minutes} phút trước`;
 }
 
-// =========================================================================
-// 🟢 MỞ RỘNG QUYỀN XEM THANH ĐANG ONLINE CHO TẤT CẢ TÀI KHOẢN (PC & MOBILE)
-// =========================================================================
-function renderAccountPresence() {
-  const panel = byId("accountPresencePanel");
-  const canMonitor = isAdmin() || isDirector() || hasDepartmentManagementAccess();
+function accountUsageDepartmentName(departmentId) {
+  if (!departmentId || departmentId === "unassigned") return "Chưa phân phòng";
+  return departmentById(departmentId)?.name || "Phòng chưa xác định";
+}
 
-  // 1. Chỉ Quản lý/Admin mới xem được Khung Thống Kê Giám Sát (trong tab Tài Khoản)
-  if (panel) {
-    panel.classList.toggle("is-hidden", !canMonitor);
-    if (canMonitor && accountPresence.payload) {
-      const status = byId("accountPresenceStatus");
-      const onlineCount = byId("accountPresenceOnlineCount");
-      const todayCount = byId("accountPresenceTodayCount");
-      const monthCount = byId("accountPresenceMonthCount");
-      const list = byId("accountPresenceList");
-
-      if (status && onlineCount && todayCount && monthCount && list) {
-        const payload = accountPresence.payload;
-        onlineCount.textContent = String(payload.onlineCount || 0);
-        todayCount.textContent = String(payload.todayUniqueAccounts || 0);
-        monthCount.textContent = String(payload.monthUniqueAccounts || 0);
-        status.textContent = `Cập nhật lúc ${formatDateTime(payload.generatedAt)} · Hoạt động trong ${Math.round(Number(payload.onlineWindowSeconds || 120) / 60)} phút gần nhất.`;
-        const onlineAccounts = Array.isArray(payload.onlineAccounts) ? payload.onlineAccounts : [];
-        list.innerHTML = onlineAccounts.length
-          ? onlineAccounts
+function renderAccountInactiveUsageGroups(groups, emptyText) {
+  if (!Array.isArray(groups) || !groups.length) return `<p class="muted">${escapeHtml(emptyText)}</p>`;
+  return groups
+    .map((group) => {
+      const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+      const inactiveCount = Number(group.inactiveCount) || accounts.length;
+      const totalAccounts = Number(group.totalAccounts) || inactiveCount;
+      return `
+        <section class="account-usage-department">
+          <div class="account-usage-department-head">
+            <strong>${escapeHtml(accountUsageDepartmentName(group.departmentId))}</strong>
+            <span>${inactiveCount}/${totalAccounts} chưa đăng nhập</span>
+          </div>
+          <div class="account-usage-people">
+            ${accounts
               .map((account) => {
-                const department = departmentById(account.departmentId)?.name || "Không phân phòng";
+                const role = accountRoleLabels[account.role] || account.role || "Tài khoản";
+                const lastLogin = account.lastLoginAt ? `Đăng nhập gần nhất: ${formatDateTime(account.lastLoginAt)}` : "Chưa có đăng nhập trong 12 tháng gần đây";
                 return `
-                  <article class="account-presence-row">
-                    <span class="account-presence-dot" aria-hidden="true"></span>
-                    <div class="account-presence-person">
+                  <article class="account-usage-person">
+                    <div>
                       <strong>${escapeHtml(account.displayName || account.username || "Tài khoản")}</strong>
-                      <span>${escapeHtml(accountRoleLabels[account.role] || account.role || "Tài khoản")} · ${escapeHtml(department)}</span>
+                      <span>${escapeHtml(role)}</span>
                     </div>
-                    <time datetime="${escapeHtml(account.lastSeenAt || "")}">${escapeHtml(accountPresenceRelativeTime(account.lastSeenAt))}</time>
+                    <time datetime="${escapeHtml(account.lastLoginAt || "")}">${escapeHtml(lastLogin)}</time>
                   </article>
                 `;
               })
-              .join("")
-          : '<p class="muted">Không có tài khoản nào đang hoạt động trong thời gian giám sát.</p>';
-      }
-    }
-  }
-}
-// 📊 1. HÀM TỰ ĐỘNG GHI LƯỢT TRUY CẬP (MỖI TÀI KHOẢN GHI 1 LẦN/GIỜ TRÁNH TRÁC RÁC)
-async function logAccountAccessSession(account) {
-  const supabase = window.supabaseClient;
-  if (!account || !supabase) return;
-
-  const lastLogKey = `phuc-thinh-access-logged-${account.id}`;
-  const lastLogTime = Number(localStorage.getItem(lastLogKey) || 0);
-  const now = Date.now();
-
-  // 1 tiếng (3.600.000 ms) ghi nhận 1 lượt truy cập
-  if (now - lastLogTime > 3600000) {
-    try {
-      await supabase.from("access_logs").insert([{
-        account_id: account.id,
-        username: account.username,
-        display_name: account.displayName || account.username,
-        role: account.role,
-        department_id: account.departmentId,
-        access_type: "active_session"
-      }]);
-      localStorage.setItem(lastLogKey, String(now));
-    } catch (e) {
-      console.warn("⚠️ Chưa thể lưu access_logs:", e);
-    }
-  }
-}
-
-function renderAccountUsageDetails(logs = [], now = new Date()) {
-  accountPresence.usageLogs = Array.isArray(logs) ? logs : [];
-  const activeAccounts = (state.accounts || []).filter((item) => !item.disabled);
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - 7);
-  const monthStart = new Date(now);
-  monthStart.setDate(now.getDate() - 30);
-  const weekIds = new Set(logs.filter((item) => new Date(item.accessed_at || 0) >= weekStart).map((item) => String(item.account_id || "")));
-  const monthIds = new Set(logs.filter((item) => new Date(item.accessed_at || 0) >= monthStart).map((item) => String(item.account_id || "")));
-  const inactiveWeek = activeAccounts.filter((item) => !weekIds.has(String(item.id)));
-  const inactiveMonth = activeAccounts.filter((item) => !monthIds.has(String(item.id)));
-  const departmentIdForAccount = (account) => account.departmentId || personById(account.personId)?.departmentId || "";
-  const renderDepartmentSummary = (recentIds, periodLabel) => {
-    const rows = departments
-      .map((department) => {
-        const peopleInDepartment = state.people.filter((person) => person.departmentId === department.id);
-        const totalPeople = peopleInDepartment.length;
-        const activeCount = peopleInDepartment.filter((person) => activeAccounts.some((account) => String(account.personId || "") === String(person.id) && recentIds.has(String(account.id)))).length;
-        return { department, totalPeople, activeCount };
-      })
-      .filter((item) => item.totalPeople || activeAccounts.some((account) => departmentIdForAccount(account) === item.department.id));
-    return rows.length
-      ? rows.map((item) => `<button class="account-department-row account-department-button" type="button" data-account-department="${escapeHtml(item.department.id)}" data-account-usage-period="${escapeHtml(periodLabel)}"><span>${escapeHtml(item.department.name)}</span><strong>${item.activeCount}/${item.totalPeople || 0}</strong></button>`).join("")
-      : `<p class="muted">Chưa có dữ liệu phòng ban trong ${periodLabel}.</p>`;
-  };
-  const renderList = (items, emptyText) => items.length
-    ? items.map((item) => `<div class="account-usage-row"><strong>${escapeHtml(item.displayName || item.username)}</strong><span>${escapeHtml(item.username || "")}</span></div>`).join("")
-    : `<p class="muted">${emptyText}</p>`;
-  byId("accountInactiveWeekCount").textContent = String(inactiveWeek.length);
-  byId("accountInactiveMonthCount").textContent = String(inactiveMonth.length);
-  byId("accountDepartmentWeekSummary").innerHTML = renderDepartmentSummary(weekIds, "tuần này");
-  byId("accountDepartmentMonthSummary").innerHTML = renderDepartmentSummary(monthIds, "tháng này");
-  byId("accountInactiveWeekList").innerHTML = renderList(inactiveWeek, "Tất cả tài khoản đã có hoạt động trong 7 ngày gần nhất.");
-  byId("accountInactiveMonthList").innerHTML = renderList(inactiveMonth, "Tất cả tài khoản đã có hoạt động trong 30 ngày gần nhất.");
-
-  const months = new Map();
-  logs.forEach((item) => {
-    const date = new Date(item.accessed_at || "");
-    if (Number.isNaN(date.getTime())) return;
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    if (!months.has(key)) months.set(key, { ids: new Set(), events: 0 });
-    const summary = months.get(key);
-    summary.events += 1;
-    summary.ids.add(String(item.account_id || ""));
-  });
-  const history = [...months.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12);
-  byId("accountUsageHistoryStatus").textContent = history.length ? `12 tháng gần nhất` : "Chưa có dữ liệu";
-  byId("accountUsageMonthlyHistory").innerHTML = history.length
-    ? history.map(([month, value]) => `<button class="account-usage-row account-usage-month-button" type="button" data-account-usage-month="${escapeHtml(month)}" aria-label="Xem chi tiết hoạt động tháng ${escapeHtml(month)}"><strong>${escapeHtml(month)}</strong><span>${value.ids.size} tài khoản · ${value.events} lượt</span></button>`).join("")
-    : '<p class="muted">Chưa có lịch sử đăng nhập.</p>';
-}
-
-function openAccountDepartmentDetail(departmentId, periodLabel) {
-  const department = departmentById(departmentId);
-  const detailId = periodLabel === "tháng này" ? "accountDepartmentMonthDetail" : "accountDepartmentWeekDetail";
-  const detail = byId(detailId);
-  if (!department || !detail) return;
-  const start = new Date();
-  start.setDate(start.getDate() - (periodLabel === "tháng này" ? 30 : 7));
-  const accountDepartmentId = (account) => account.departmentId || personById(account.personId)?.departmentId || "";
-  const entries = (state.people || [])
-    .filter((person) => person.departmentId === departmentId)
-    .map((person) => {
-      const accounts = (state.accounts || []).filter((account) => !account.disabled && String(account.personId || "") === String(person.id));
-      const logs = accounts.flatMap((account) => (accountPresence.usageLogs || [])
-        .filter((item) => String(item.account_id || "") === String(account.id))
-        .map((item) => new Date(item.accessed_at || ""))
-        .filter((date) => !Number.isNaN(date.getTime())));
-      const latest = logs.sort((a, b) => b - a)[0] || null;
-      const active = Boolean(latest && latest >= start);
-      return { person, accounts, latest, active };
+              .join("")}
+          </div>
+        </section>
+      `;
     })
-    .filter((entry) => !entry.active)
-    .sort((a, b) => (b.latest?.getTime() || 0) - (a.latest?.getTime() || 0) || String(a.person.name || "").localeCompare(String(b.person.name || ""), "vi"));
-  const rows = entries.length
-    ? entries.map(({ person, accounts, latest }) => `<div class="account-department-detail-row"><div><strong>${escapeHtml(person.name || "Chưa có tên")}</strong><span>${escapeHtml(accounts.map((account) => account.username).filter(Boolean).join(", ") || "Chưa liên kết tài khoản")}</span></div><div><b class="is-inactive">Chưa đăng nhập</b><span>${latest ? `Gần nhất: ${escapeHtml(formatDateTime(latest))}` : "Chưa có lịch sử"}</span></div></div>`).join("")
-    : '<p class="muted">Tất cả cán bộ của phòng đã đăng nhập trong kỳ này.</p>';
-  detail.innerHTML = `<div class="account-department-detail-head"><div><strong>${escapeHtml(department.name)} · ${periodLabel}</strong><span>${entries.length} cán bộ chưa đăng nhập</span></div><button type="button" class="ghost small" data-close-account-department-detail>Đóng</button></div>${rows}`;
-  document.querySelectorAll(".account-department-detail").forEach((item) => {
-    if (item !== detail) item.classList.add("is-hidden");
-  });
-  detail.classList.remove("is-hidden");
+    .join("");
 }
 
-document.addEventListener("click", (event) => {
-  const departmentButton = event.target.closest("[data-account-department]");
-  if (departmentButton) {
-    openAccountDepartmentDetail(departmentButton.dataset.accountDepartment, departmentButton.dataset.accountUsagePeriod);
+function renderAccountUsageDetails() {
+  const weekCount = byId("accountInactiveWeekCount");
+  const monthCount = byId("accountInactiveMonthCount");
+  const weekList = byId("accountInactiveWeekList");
+  const monthList = byId("accountInactiveMonthList");
+  const historyStatus = byId("accountUsageHistoryStatus");
+  const historyList = byId("accountUsageMonthlyHistory");
+  if (!weekCount || !monthCount || !weekList || !monthList || !historyStatus || !historyList) return;
+
+  if (!accountPresenceAvailable()) {
+    weekCount.textContent = "-";
+    monthCount.textContent = "-";
+    weekList.innerHTML = '<p class="muted">Kết nối máy chủ để xem thống kê sử dụng.</p>';
+    monthList.innerHTML = '<p class="muted">Kết nối máy chủ để xem thống kê sử dụng.</p>';
+    historyStatus.textContent = "Chưa có kết nối";
+    historyList.innerHTML = '<p class="muted">Lịch sử hoạt động được tổng hợp từ máy chủ.</p>';
     return;
   }
-  if (event.target.closest("[data-close-account-department-detail]")) {
-    event.target.closest(".account-department-detail")?.classList.add("is-hidden");
+
+  const payload = accountPresence.usagePayload;
+  if (!payload) {
+    const message = accountPresence.usageError || "Đang tải thống kê sử dụng...";
+    weekCount.textContent = "...";
+    monthCount.textContent = "...";
+    weekList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+    monthList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+    historyStatus.textContent = accountPresence.usageError ? "Không thể tải dữ liệu" : "Đang tải";
+    historyList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+    return;
   }
-});
 
-function openAccountUsageMonthDetail(month) {
-  const detail = byId("accountUsageMonthDetail");
-  if (!detail || !month) return;
-  const summaries = new Map();
-  (accountPresence.usageLogs || []).forEach((item) => {
-    const date = new Date(item.accessed_at || "");
-    if (Number.isNaN(date.getTime())) return;
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    if (key !== month) return;
-    const accountId = String(item.account_id || "");
-    if (!accountId) return;
-    if (!summaries.has(accountId)) summaries.set(accountId, { accountId, count: 0, latest: date });
-    const summary = summaries.get(accountId);
-    summary.count += 1;
-    if (date > summary.latest) summary.latest = date;
-  });
+  const inactiveWeek = payload.inactiveWeek || {};
+  const inactiveMonth = payload.inactiveMonth || {};
+  weekCount.textContent = `${Number(inactiveWeek.inactiveCount) || 0}/${Number(inactiveWeek.totalAccounts) || 0}`;
+  monthCount.textContent = `${Number(inactiveMonth.inactiveCount) || 0}/${Number(inactiveMonth.totalAccounts) || 0}`;
+  weekList.innerHTML = renderAccountInactiveUsageGroups(inactiveWeek.groups, "Tất cả tài khoản đang hoạt động đã đăng nhập trong tuần này.");
+  monthList.innerHTML = renderAccountInactiveUsageGroups(inactiveMonth.groups, "Tất cả tài khoản đang hoạt động đã đăng nhập trong tháng này.");
 
-  const rows = [...summaries.values()]
-    .map((summary) => ({ ...summary, account: accountById(summary.accountId) }))
-    .sort((a, b) => b.count - a.count || b.latest - a.latest)
-    .map(({ account, count, latest, accountId }) => {
-      const name = account?.displayName || account?.username || `Tài khoản ${accountId}`;
-      const username = account?.username ? `@${account.username}` : "";
-      return `<div class="account-usage-detail-row"><div><strong>${escapeHtml(name)}</strong><span>${escapeHtml(username)}</span></div><div><strong>${count} lượt</strong><span>Gần nhất: ${escapeHtml(formatDateTime(latest))}</span></div></div>`;
-    }).join("");
-
-  detail.innerHTML = `<div class="account-usage-detail-head"><div><strong>Chi tiết hoạt động ${escapeHtml(month)}</strong><span>${summaries.size} tài khoản đã đăng nhập</span></div><button type="button" class="btn secondary small" data-close-account-usage-detail>Đóng</button></div><div class="account-usage-detail-list">${rows || '<p class="muted">Không có dữ liệu đăng nhập trong tháng này.</p>'}</div>`;
-  detail.classList.remove("is-hidden");
-  detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const monthlyHistory = Array.isArray(payload.monthlyHistory) ? payload.monthlyHistory : [];
+  historyStatus.textContent = payload.historyTruncated ? "Chỉ hiển thị dữ liệu trong giới hạn an toàn" : `Cập nhật: ${formatDateTime(payload.generatedAt)}`;
+  historyList.innerHTML = monthlyHistory.length
+    ? monthlyHistory
+        .map((entry) => {
+          const departmentSummary = (Array.isArray(entry.departments) ? entry.departments : [])
+            .map((department) => `${accountUsageDepartmentName(department.departmentId)}: ${Number(department.uniqueAccounts) || 0}/${Number(department.totalAccounts) || 0}`)
+            .join(" · ");
+          return `
+            <article class="account-usage-month-row">
+              <div class="account-usage-month-period">
+                <strong>${escapeHtml(formatMonthPeriod(entry.period))}</strong>
+                <span>${escapeHtml(departmentSummary || "Chưa có phòng ban")}</span>
+              </div>
+              <div class="account-usage-month-metrics">
+                <span><strong>${Number(entry.uniqueAccounts) || 0}/${Number(entry.totalAccounts) || 0}</strong> đã đăng nhập</span>
+                <span><strong>${Number(entry.loginCount) || 0}</strong> lượt đăng nhập</span>
+                <span><strong>${Number(entry.inactiveAccounts) || 0}</strong> chưa đăng nhập</span>
+              </div>
+            </article>
+          `;
+        })
+        .join("")
+    : '<p class="muted">Chưa có dữ liệu hoạt động hàng tháng.</p>';
 }
 
-byId("accountUsageMonthlyHistory")?.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-account-usage-month]");
-  if (button?.dataset.accountUsageMonth) openAccountUsageMonthDetail(button.dataset.accountUsageMonth);
-});
-byId("accountUsageMonthDetail")?.addEventListener("click", (event) => {
-  if (!event.target.closest("[data-close-account-usage-detail]")) return;
-  byId("accountUsageMonthDetail").classList.add("is-hidden");
-});
+function renderAccountPresence() {
+  const panel = byId("accountPresencePanel");
+  if (!panel) return;
+  const canMonitor = isAdmin();
+  panel.classList.toggle("is-hidden", !canMonitor);
+  if (!canMonitor) return;
 
-// 🟢 2. CẬP NHẬT SỐ LIỆU GIÁM SÁT THỰC TẾ ĐỔ VÀO KHUNG GIAO DIỆN
+  const status = byId("accountPresenceStatus");
+  const onlineCount = byId("accountPresenceOnlineCount");
+  const todayCount = byId("accountPresenceTodayCount");
+  const monthCount = byId("accountPresenceMonthCount");
+  const list = byId("accountPresenceList");
+  if (!status || !onlineCount || !todayCount || !monthCount || !list) return;
+
+  renderAccountUsageDetails();
+
+  if (!accountPresenceAvailable()) {
+    onlineCount.textContent = "-";
+    todayCount.textContent = "-";
+    monthCount.textContent = "-";
+    status.textContent = usingSupabaseSync()
+      ? "Đang kết nối máy chủ để cập nhật trạng thái trực tuyến."
+      : "Giám sát trực tuyến yêu cầu cấu hình Supabase Cloud.";
+    list.innerHTML = '<p class="muted">Chưa có dữ liệu giám sát trực tuyến.</p>';
+    return;
+  }
+
+  const payload = accountPresence.payload;
+  if (!payload) {
+    onlineCount.textContent = "...";
+    todayCount.textContent = "...";
+    monthCount.textContent = "...";
+    status.textContent = accountPresence.error || "Đang cập nhật trạng thái trực tuyến...";
+    list.innerHTML = '<p class="muted">Đang tải danh sách tài khoản trực tuyến...</p>';
+    return;
+  }
+
+  onlineCount.textContent = String(payload.onlineCount || 0);
+  todayCount.textContent = String(payload.todayUniqueAccounts || 0);
+  monthCount.textContent = String(payload.monthUniqueAccounts || 0);
+  status.textContent = `Cập nhật lúc ${formatDateTime(payload.generatedAt)} · Hoạt động trong ${Math.round(Number(payload.onlineWindowSeconds || 120) / 60)} phút gần nhất.`;
+  const onlineAccounts = Array.isArray(payload.onlineAccounts) ? payload.onlineAccounts : [];
+  list.innerHTML = onlineAccounts.length
+    ? onlineAccounts
+        .map((account) => {
+          const department = departmentById(account.departmentId)?.name || "Không phân phòng";
+          return `
+            <article class="account-presence-row">
+              <span class="account-presence-dot" aria-hidden="true"></span>
+              <div class="account-presence-person">
+                <strong>${escapeHtml(account.displayName || account.username || "Tài khoản")}</strong>
+                <span>${escapeHtml(accountRoleLabels[account.role] || account.role || "Tài khoản")} · ${escapeHtml(department)}</span>
+              </div>
+              <time datetime="${escapeHtml(account.lastSeenAt || "")}">${escapeHtml(accountPresenceRelativeTime(account.lastSeenAt))}</time>
+            </article>
+          `;
+        })
+        .join("")
+    : '<p class="muted">Không có tài khoản nào đang hoạt động trong thời gian giám sát.</p>';
+}
+
 async function requestAccountPresence() {
-  const account = currentAccount();
-  const supabase = window.supabaseClient;
-  if (!account || !supabase) return;
-
-  if (usingSupabaseSync()) {
-    if (!sharedSync.session || !sharedSync.sessionToken) return;
-    try {
-      const { response, payload } = await sharedJsonRequest("presence");
-      if (!response.ok) throw new Error(payload?.error || "Không thể lấy trạng thái trực tuyến.");
-      accountPresence.payload = payload;
-      renderAccountPresence();
-      renderAccountUsageDetails(
-        Array.isArray(payload.usageLogs) ? payload.usageLogs : [],
-        payload.generatedAt ? new Date(payload.generatedAt) : new Date(),
-      );
-    } catch (error) {
-      console.warn("Edge presence request failed:", error);
-    }
-    return;
-  }
-
-  // Ghi log lượt truy cập của tài khoản hiện tại
-  if (typeof logAccountAccessSession === "function") {
-    logAccountAccessSession(account);
-  }
-
-  const now = new Date();
-  const nowIso = now.toISOString();
-
+  if (!accountPresenceAvailable() || document.visibilityState === "hidden" || accountPresence.inFlight) return;
+  accountPresence.inFlight = true;
   try {
-    // 1. Cập nhật mốc thời gian hoạt động gần nhất (last_seen_at)
-    await supabase
-      .from("accounts")
-      .update({ last_seen_at: nowIso })
-      .eq("id", account.id);
+    const { response, payload } = await sharedJsonRequest("presence");
+    if (response.status === 401) {
+      expireSharedSession();
+      return;
+    }
+    if (!response.ok) throw new Error(payload?.error || "Presence request failed.");
+    if (isAdmin()) {
+      accountPresence.payload = payload;
+      accountPresence.error = "";
+      renderAccountPresence();
+    }
+  } catch {
+    if (isAdmin()) {
+      accountPresence.error = "Không thể cập nhật trạng thái trực tuyến. Hệ thống sẽ tự thử lại.";
+      renderAccountPresence();
+    }
+  } finally {
+    accountPresence.inFlight = false;
+  }
+}
 
-    // 2. Chuẩn bị các mốc thời gian
-    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
-    // 3. Truy vấn đồng thời các chỉ số từ Supabase Cloud
-    const usageStart = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toISOString();
-    const [
-      { data: onlineList },
-      { data: todayLogs },
-      { data: monthLogs },
-      { data: usageLogs }
-    ] = await Promise.all([
-      // Đang trực tuyến (2 phút gần nhất)
-      supabase.from("accounts").select("*").gte("last_seen_at", twoMinutesAgo),
-      // Đăng nhập hôm nay (truy vấn từ access_logs)
-      supabase.from("access_logs").select("account_id").gte("accessed_at", startOfToday),
-      // Đăng nhập tháng này (truy vấn từ access_logs)
-      supabase.from("access_logs").select("account_id").gte("accessed_at", startOfMonth),
-      supabase.from("access_logs").select("account_id, accessed_at").gte("accessed_at", usageStart)
-    ]);
-
-    // Tính số lượng tài khoản duy nhất (Unique Accounts)
-    const todayUniqueCount = todayLogs && todayLogs.length 
-      ? new Set(todayLogs.map(l => l.account_id)).size 
-      : (onlineList ? onlineList.length : 0);
-
-    const monthUniqueCount = monthLogs && monthLogs.length 
-      ? new Set(monthLogs.map(l => l.account_id)).size 
-      : todayUniqueCount;
-
-    // 4. Đổ toàn bộ dữ liệu vào cấu trúc Payload để vẽ lên màn hình
-    accountPresence.payload = {
-      onlineCount: onlineList ? onlineList.length : 0,
-      todayUniqueAccounts: todayUniqueCount,
-      monthUniqueAccounts: monthUniqueCount,
-      generatedAt: nowIso,
-      onlineWindowSeconds: 120,
-      onlineAccounts: (onlineList || []).map(acc => ({
-        displayName: acc.displayName || acc.display_name || acc.username,
-        username: acc.username,
-        role: acc.role,
-        departmentId: acc.departmentId || acc.department_id,
-        lastSeenAt: acc.last_seen_at || acc.lastSeenAt
-      }))
-    };
-
-    // Gọi hàm render để cập nhật lên khung HTML
-    renderAccountPresence();
-    renderAccountUsageDetails(usageLogs || [], now);
-  } catch (err) {
-    console.warn("⚠️ Chưa thể cập nhật dữ liệu giám sát tài khoản:", err);
+async function requestAccountUsageHistory({ force = false } = {}) {
+  if (!isAdmin() || !accountPresenceAvailable() || document.visibilityState === "hidden" || accountPresence.usageInFlight) return;
+  if (!force && accountPresence.usagePayload) return;
+  accountPresence.usageInFlight = true;
+  accountPresence.usageError = "";
+  renderAccountUsageDetails();
+  try {
+    const { response, payload } = await sharedJsonRequest("usage-history");
+    if (response.status === 401) {
+      expireSharedSession();
+      return;
+    }
+    if (!response.ok) throw new Error(payload?.error || "Usage history request failed.");
+    if (isAdmin()) {
+      accountPresence.usagePayload = payload;
+      accountPresence.usageError = "";
+      renderAccountUsageDetails();
+    }
+  } catch {
+    if (isAdmin()) {
+      accountPresence.usageError = "Không thể tải thống kê sử dụng. Hãy thử làm mới lại.";
+      renderAccountUsageDetails();
+    }
+  } finally {
+    accountPresence.usageInFlight = false;
   }
 }
 
@@ -2463,18 +2572,28 @@ function stopAccountPresenceMonitoring() {
   accountPresence.inFlight = false;
   accountPresence.payload = null;
   accountPresence.error = "";
+  accountPresence.usageInFlight = false;
+  accountPresence.usagePayload = null;
+  accountPresence.usageError = "";
 }
 
 async function probeSharedSync({ force = false } = {}) {
   if (!sharedSyncSupported()) return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    sharedSync.available = null;
+    sharedSync.initialized = null;
+    return false;
+  }
   if (!force && sharedSync.available === true) return true;
   try {
     const { response, payload } = await sharedJsonRequest("status");
     sharedSync.available = response.ok && payload?.available === true;
+    sharedSync.initialized = sharedSync.available ? Boolean(payload?.initialized) : null;
   } catch {
     // Do not cache a transient connection failure. The next online/focus/poll
     // event must be able to reconnect without forcing the user to reload.
     sharedSync.available = null;
+    sharedSync.initialized = null;
   }
   return sharedSync.available === true;
 }
@@ -2486,10 +2605,19 @@ async function adoptSharedState(payload, { render = true } = {}) {
   Object.assign(state, normalized);
   sharedSync.baseState = cloneStatePayload(normalized);
   persistState();
-  await migrateBulletinMediaToIndexedDb();
-  await migrateArchiveFilesToIndexedDb();
-  await migrateTaskAttachmentsToIndexedDb();
-  await clearSharedStateDirty();
+  const migrationResults = await Promise.all([
+    migrateBulletinMediaToIndexedDb(),
+    migrateArchiveFilesToIndexedDb(),
+    migrateTaskAttachmentsToIndexedDb(),
+  ]);
+  if (migrationResults.some(Boolean)) {
+    sharedSync.localChangeVersion += 1;
+    sharedSync.pending = true;
+    await markSharedStateDirty();
+    queueSharedStateSync();
+  } else {
+    await clearSharedStateDirty();
+  }
   if (render) renderAll();
 }
 
@@ -2511,30 +2639,55 @@ async function loginSharedSession(username, password) {
   await ensureDurableStateRestored();
   await restoreSharedSyncCheckpoint();
   if (!(await probeSharedSync())) {
+    const offlineAccount = await verifyOfflineLogin(username, password);
+    if (offlineAccount) {
+      sharedSync.session = true;
+      sharedSync.accountId = String(offlineAccount.id);
+      sharedSync.available = null;
+      sharedSync.initialized = null;
+      scheduleSharedStateRefresh({ immediate: true });
+      return {
+        mode: "offline",
+        offlineAccountId: String(offlineAccount.id),
+        warning: "Đang làm việc ngoại tuyến. Thay đổi được lưu trên thiết bị này và sẽ chờ đồng bộ khi đăng nhập lại lúc có mạng.",
+      };
+    }
     return usingSupabaseSync() || localStorage.getItem(SHARED_SYNC_REQUIRED_KEY) === "1"
-      ? { mode: "remote", error: "May chu du lieu dang khong san sang. Vui long thu lai khi ket noi duoc khoi phuc." }
+      ? { mode: "remote", error: "Không thể xác thực ngoại tuyến trên thiết bị này. Hãy đăng nhập online một lần trên chính thiết bị này trước." }
       : { mode: "local" };
   }
   let result;
   try {
+    const includeOfflineCredentials = shouldRequestAdminOfflineCredentials(username);
     result = await sharedJsonRequest("login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, includeOfflineCredentials }),
     });
   } catch {
     return { mode: "remote", error: "Khong the ket noi may chu du lieu." };
   }
   if (!result.response.ok || !result.payload?.state) {
-    return {
-      mode: "remote",
-      status: result.response.status,
-      error: result.payload?.error || "Khong the dang nhap may chu du lieu.",
-    };
+    return { mode: "remote", error: result.payload?.error || "Khong the dang nhap may chu du lieu." };
+  }
+  cacheServerOfflineLoginProofs(result.payload.offlineCredentials);
+  const remoteAccounts = Array.isArray(result.payload.state?.accounts) ? result.payload.state.accounts : [];
+  const remoteAccount = remoteAccounts.find((account) => String(account?.username || "").toLowerCase() === String(username || "").toLowerCase());
+  const remoteAccountId = String(remoteAccount?.id || "");
+  if (sharedSync.dirty && sharedSync.dirtyAccountId && remoteAccountId && sharedSync.dirtyAccountId !== remoteAccountId) {
+    persistSharedConflictBackup(cloneStatePayload(state), {
+      download: false,
+      reason: "Thay doi chua dong bo thuoc tai khoan truoc do.",
+    });
+    sharedSync.baseState = null;
+    await clearSharedStateDirty();
   }
   sharedSync.session = true;
+  sharedSync.accountId = remoteAccountId;
   sharedSync.sessionToken = result.payload.sessionToken || "";
   if (usingSupabaseSync() && !sharedSync.sessionToken) {
+    sharedSync.session = false;
+    sharedSync.accountId = "";
     return { mode: "remote", error: "May chu Supabase khong tra ve phien dang nhap hop le." };
   }
   if (sharedSync.sessionToken) localStorage.setItem(SHARED_SYNC_SESSION_TOKEN_KEY, sharedSync.sessionToken);
@@ -2543,93 +2696,100 @@ async function loginSharedSession(username, password) {
   sharedSync.conflict = false;
   sharedSync.conflictNotified = false;
   localStorage.setItem(SHARED_SYNC_REQUIRED_KEY, "1");
+  const serverUninitialized = sharedSync.revision === 0;
+  if (serverUninitialized && remoteAccount?.role === "admin" && canBootstrapCloudFromLocalState()) {
+    sharedSync.baseState = cloneStatePayload(normalizeStatePayload(result.payload.state));
+    sharedSync.localChangeVersion += 1;
+    sharedSync.pending = true;
+    await markSharedStateDirty();
+    queueSharedStateSync();
+    scheduleSharedStateRefresh({ immediate: true });
+    return {
+      mode: "remote",
+      warning: "May chu trung tam dang rong. He thong dang khoi tao tu ban du lieu Admin hien co; giu ket noi mang den khi dong bo hoan tat.",
+    };
+  }
+  if (serverUninitialized && localStateHasBusinessData()) {
+    persistSharedConflictBackup(cloneStatePayload(state), {
+      download: false,
+      reason: "May chu trung tam chua duoc khoi tao; can Nhap JSON day du bang tai khoan Admin.",
+    });
+  }
   if (sharedSync.dirty) {
     await retainUnsyncedLocalChanges(result.payload.state, { render: false });
   } else {
     await adoptSharedState(result.payload.state, { render: false });
   }
+  scheduleSharedStateRefresh({ immediate: true });
   return { mode: "remote" };
 }
 
-function persistSharedConflictBackup(snapshot) {
-  const backup = { createdAt: new Date().toISOString(), revision: sharedSync.revision, state: snapshot };
+function persistSharedConflictBackup(snapshot, { download = true, reason = "" } = {}) {
+  const backup = { createdAt: new Date().toISOString(), revision: sharedSync.revision, reason, state: snapshot };
   try {
     localStorage.setItem(SHARED_SYNC_CONFLICT_KEY, JSON.stringify(backup));
   } catch {
     // The current in-memory state remains available if the local backup cannot be stored.
   }
+  if (!download) return;
   try {
+    const objectUrl = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
+    link.href = objectUrl;
     link.download = `du-lieu-xung-dot-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`;
+    link.style.display = "none";
+    document.body.append(link);
     link.click();
-    URL.revokeObjectURL(link.href);
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
   } catch {
     // Local storage still retains the conflict snapshot when a download is blocked.
   }
-}
-
-async function uploadSharedBinaryFileDirect(key, blob) {
-  const supabase = window.supabaseClient;
-  if (!supabase) throw new Error("Supabase Storage chua san sang.");
-  const { response, payload } = await sharedJsonRequest("file-upload-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key }),
-  });
-  if (!response.ok || !payload?.token) {
-    const error = new Error(payload?.error || "Khong the cap quyen tai tep len Storage.");
-    error.status = response.status;
-    throw error;
-  }
-  const { error } = await supabase.storage
-    .from(SHARED_SYNC_BUCKET)
-    .uploadToSignedUrl(key, payload.token, blob, {
-      contentType: blob.type || "application/octet-stream",
-      cacheControl: "3600",
-    });
-  if (error) throw new Error(error.message || "Khong the tai tep lon len Storage.");
-  return key;
 }
 
 async function uploadSharedBinaryFile(file) {
   const key = storedFileKey(file);
   if (!key || file?.remoteKey) return file?.remoteKey || "";
   const dataUrl = file?.dataUrl || (await readStoredFileDataUrl(file));
-    // ✅ DÒNG MỚI (Cảnh báo và bỏ qua file bị mất dữ liệu để sync tiếp):
-  if (!dataUrl) {
-    console.warn(`Đã bỏ qua tệp không tìm thấy dữ liệu: ${file?.name || key}`);
-    return file?.remoteKey || "";
-  }
-  const blob = dataUrlToBlob(dataUrl, file?.type || "application/octet-stream");
-  if (usingSupabaseSync() && blob.size > SHARED_SYNC_PROXY_UPLOAD_LIMIT) {
-    return uploadSharedBinaryFileDirect(key, blob);
-  }
+  if (!dataUrl) throw new Error(`Khong tim thay du lieu tep ${file?.name || key}.`);
   const formData = new FormData();
   formData.append("key", key);
-  formData.append("file", blob, file?.name || key);
-  const response = await fetch(sharedEndpoint("file"), {
-    method: "POST",
-    body: formData,
-    credentials: usingSupabaseSync() ? "omit" : "same-origin",
-    cache: "no-store",
-    headers: sharedRequestHeaders(),
-  });
-  let payload = {};
+  formData.append("file", dataUrlToBlob(dataUrl, file?.type || "application/octet-stream"), file?.name || key);
   try {
-    payload = await response.json();
-  } catch {
-    // The status check below supplies a useful fallback error.
-  }
-  if (!response.ok || !payload?.key) {
-    if (usingSupabaseSync() && response.status === 413) {
-      return uploadSharedBinaryFileDirect(key, blob);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), SHARED_SYNC_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(sharedEndpoint("file"), {
+        method: "POST",
+        body: formData,
+        credentials: usingSupabaseSync() ? "omit" : "same-origin",
+        cache: "no-store",
+        headers: sharedRequestHeaders(),
+        signal: controller.signal,
+      });
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch {
+        // The status check below supplies a useful fallback error.
+      }
+      if (!response.ok || !payload?.key) {
+        const error = new Error(payload?.error || "Khong the tai tep len may chu.");
+        error.status = response.status;
+        throw error;
+      }
+      return payload.key;
+    } finally {
+      window.clearTimeout(timeout);
     }
-    const error = new Error(payload?.error || "Khong the tai tep len may chu.");
-    error.status = response.status;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error("Tai tep len may chu qua thoi gian cho.");
+      timeoutError.status = 408;
+      throw timeoutError;
+    }
     throw error;
   }
-  return payload.key;
 }
 
 async function processWithConcurrency(items, worker, limit = 3) {
@@ -2680,15 +2840,61 @@ async function attachSharedFileKeys(sourceRecords, snapshotRecords, fieldName) {
 async function createSharedStateSnapshot() {
   const snapshot = cloneStatePayload(state);
   sharedSync.fileWarnings = [];
+  await attachSharedFileKeys(state.tasks, snapshot.tasks, "attachments");
   await attachSharedFileKeys(state.bulletins, snapshot.bulletins, "media");
   await attachSharedFileKeys(state.archiveRecords, snapshot.archiveRecords, "files");
-  await attachSharedFileKeys(state.tasks, snapshot.tasks, "attachments");
   return snapshot;
 }
 
+function sharedSyncRetryDelay() {
+  const exponent = Math.min(sharedSync.retryAttempt, 5);
+  const baseDelay = Math.min(SHARED_SYNC_RETRY_MAX_MS, SHARED_SYNC_RETRY_INITIAL_MS * 2 ** exponent);
+  return baseDelay + Math.round(Math.random() * 1200);
+}
+
+function scheduleSharedStateRetry() {
+  if (!sharedSync.session || !sharedSync.dirty || sharedSync.retryTimer || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  const delay = sharedSyncRetryDelay();
+  sharedSync.retryTimer = window.setTimeout(async () => {
+    sharedSync.retryTimer = 0;
+    if (!sharedSync.session || !sharedSync.dirty) return;
+    if (await probeSharedSync({ force: true })) {
+      sharedSync.pending = true;
+      flushSharedStateSync();
+      return;
+    }
+    sharedSync.retryAttempt += 1;
+    scheduleSharedStateRetry();
+  }, delay);
+}
+
+function scheduleSharedStateRefresh({ immediate = false } = {}) {
+  if (sharedSync.refreshTimer || !sharedSync.session || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  const delay = immediate ? Math.round(Math.random() * 1200) : SHARED_SYNC_REFRESH_MS + Math.round(Math.random() * SHARED_SYNC_REFRESH_JITTER_MS);
+  sharedSync.refreshTimer = window.setTimeout(async () => {
+    sharedSync.refreshTimer = 0;
+    await refreshSharedState();
+    scheduleSharedStateRefresh();
+  }, delay);
+}
+
+function stopSharedStateRefresh() {
+  if (sharedSync.timer) window.clearTimeout(sharedSync.timer);
+  if (sharedSync.refreshTimer) window.clearTimeout(sharedSync.refreshTimer);
+  if (sharedSync.retryTimer) window.clearTimeout(sharedSync.retryTimer);
+  sharedSync.timer = 0;
+  sharedSync.refreshTimer = 0;
+  sharedSync.retryTimer = 0;
+  sharedSync.retryAttempt = 0;
+}
+
 function queueSharedStateSync() {
-  if (!sharedSync.session || !sharedSync.available) return;
+  if (!sharedSync.session || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
   sharedSync.pending = true;
+  if (sharedSync.available !== true) {
+    scheduleSharedStateRetry();
+    return;
+  }
   if (sharedSync.timer) return;
   sharedSync.timer = window.setTimeout(() => {
     sharedSync.timer = 0;
@@ -2799,7 +3005,14 @@ function mergeRemoteStateWithUnsyncedChanges(sentPayload, currentPayload, remote
 }
 
 async function flushSharedStateSync() {
-  if (!sharedSync.session || sharedSync.available !== true) {
+  if (!sharedSync.session) {
+    return { ok: false, pending: sharedSync.dirty, reason: "offline" };
+  }
+  if (usingSupabaseSync() && !sharedSync.sessionToken) {
+    return { ok: false, pending: sharedSync.dirty, reason: "offline-session" };
+  }
+  if (sharedSync.available !== true) {
+    if (sharedSync.dirty) scheduleSharedStateRetry();
     return { ok: false, pending: sharedSync.dirty, reason: "offline" };
   }
   if (!sharedSync.pending) return { ok: !sharedSync.dirty, pending: sharedSync.dirty };
@@ -2825,6 +3038,7 @@ async function flushSharedStateSync() {
         : JSON.stringify({ revision: sharedSync.revision, state: snapshot }),
     });
     if (response.status === 409) {
+      sharedSync.retryAttempt = 0;
       persistSharedConflictBackup(snapshot);
       if (!sharedSync.conflictNotified) {
         sharedSync.conflictNotified = true;
@@ -2837,8 +3051,15 @@ async function flushSharedStateSync() {
       }
       return { ok: false, conflict: true, reason: "conflict" };
     }
+    if (response.status === 401) {
+      persistSharedConflictBackup(snapshot, { download: false, reason: "Phiên đồng bộ đã hết hạn trước khi thay đổi được gửi." });
+      expireSharedSession();
+      return { ok: false, pending: true, reason: "session-expired" };
+    }
     if (!response.ok) throw new Error(payload?.error || "Khong the dong bo du lieu.");
+    sharedSync.retryAttempt = 0;
     sharedSync.revision = Number(payload.revision) || sharedSync.revision;
+    sharedSync.initialized = sharedSync.revision > 0;
     if (payload?.state) {
       const merged = mergeRemoteStateWithUnsyncedChanges(snapshot, state, payload.state);
       Object.assign(state, merged);
@@ -2865,16 +3086,17 @@ async function flushSharedStateSync() {
       fileWarnings: [...sharedSync.fileWarnings],
     };
   } catch (error) {
+    if (Number(error?.status) === 401) {
+      persistSharedConflictBackup(snapshot, { download: false, reason: "Phien dong bo da het han truoc khi tep duoc gui." });
+      expireSharedSession();
+      return { ok: false, pending: true, reason: "session-expired" };
+    }
     sharedSync.pending = true;
     console.warn("Shared state sync failed:", error);
     sharedSync.available = null;
     await markSharedStateDirty();
-    if (!sharedSync.retryTimer) {
-      sharedSync.retryTimer = window.setTimeout(async () => {
-        sharedSync.retryTimer = 0;
-        if (await probeSharedSync({ force: true })) flushSharedStateSync();
-      }, 5000);
-    }
+    sharedSync.retryAttempt += 1;
+    scheduleSharedStateRetry();
     return { ok: false, pending: true, error: error instanceof Error ? error.message : "sync-failed" };
   } finally {
     sharedSync.inFlight = false;
@@ -2882,25 +3104,47 @@ async function flushSharedStateSync() {
   }
 }
 
-// ❌ HÀM CŨ: Gọi sang Edge Function kpi-sync gây lỗi 404
-// ✅ THAY THÀNH:
 async function refreshSharedState() {
-  if (document.activeElement?.matches("input, textarea, select") || document.querySelector(".modal-backdrop:not(.is-hidden)")) return;
-  
-  // Tự động kéo dữ liệu từ các Bảng Supabase về màn hình
-  if (usingSupabaseSync() && sharedSync.session && sharedSync.sessionToken) {
-    try {
-      const { response, payload } = await sharedJsonRequest("state");
-      if (response.ok && payload?.state) {
-        sharedSync.revision = Number(payload.revision) || sharedSync.revision;
-        await adoptSharedState(payload.state);
-      }
-    } catch (error) {
-      console.warn("Edge state refresh failed:", error);
+  if (!sharedSync.session || sharedSync.inFlight || document.visibilityState === "hidden" || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  if (sharedSync.pending || sharedSync.dirty) {
+    if (await probeSharedSync({ force: true })) {
+      sharedSync.pending = true;
+      flushSharedStateSync();
+    } else if (sharedSync.dirty) {
+      scheduleSharedStateRetry();
     }
     return;
   }
-  await pullAllStateFromSupabase();
+  if (sharedSync.available !== true && !(await probeSharedSync({ force: true }))) return;
+  if (document.activeElement?.matches("input, textarea, select") || document.querySelector(".modal-backdrop:not(.is-hidden)")) return;
+  try {
+    const { response, payload } = await sharedJsonRequest("state", {
+      query: sharedSync.revision === null ? {} : { revision: String(sharedSync.revision) },
+    });
+    if (response.status === 401) {
+      expireSharedSession();
+      return;
+    }
+    if (!response.ok || !payload?.state || Number(payload.revision) === sharedSync.revision) return;
+    sharedSync.revision = Number(payload.revision) || 0;
+    sharedSync.initialized = sharedSync.revision > 0;
+    await adoptSharedState(payload.state);
+  } catch {
+    // Keep the last successful local view while the network is temporarily unavailable.
+  }
+}
+
+function expireSharedSession() {
+  stopAccountPresenceMonitoring();
+  stopSharedStateRefresh();
+  sharedSync.session = false;
+  sharedSync.sessionToken = "";
+  sharedSync.revision = null;
+  sharedSync.accountId = "";
+  sharedSync.available = null;
+  localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+  localStorage.removeItem(SESSION_KEY);
+  renderAll();
 }
 
 function logoutSharedSession() {
@@ -2911,6 +3155,8 @@ function logoutSharedSession() {
   sharedSync.session = false;
   sharedSync.sessionToken = "";
   sharedSync.revision = null;
+  sharedSync.accountId = "";
+  stopSharedStateRefresh();
   localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
   if (!canNotifyServer) return;
   fetch(sharedEndpoint("logout"), {
@@ -2921,12 +3167,9 @@ function logoutSharedSession() {
   }).catch(() => {});
 }
 
-// ✅ HÀM MỚI: Khôi phục phiên làm việc & Kéo dữ liệu trực tiếp từ Bảng Supabase
 async function restoreSharedSession() {
-  // 1. Khôi phục dữ liệu lưu tạm trong bộ nhớ trình duyệt
   const restoredDurableState = await ensureDurableStateRestored();
   await restoreSharedSyncCheckpoint();
-
   if (restoredDurableState) {
     await Promise.all([
       migrateBulletinMediaToIndexedDb({ persist: false, render: false }),
@@ -2936,27 +3179,51 @@ async function restoreSharedSession() {
     await persistState();
     renderAll();
   }
-
-  // 2. Nếu chưa đăng nhập thì không cần làm gì thêm
-  if (!localStorage.getItem(SESSION_KEY)) return;
-
-  // 3. Đã đăng nhập -> Đọc thẳng dữ liệu từ các Bảng Supabase về máy
-  try {
-    if (usingSupabaseSync()) {
-      sharedSync.sessionToken = localStorage.getItem(SHARED_SYNC_SESSION_TOKEN_KEY) || "";
-      if (sharedSync.sessionToken && (await probeSharedSync({ force: true }))) {
-        const { response, payload } = await sharedJsonRequest("state");
-        if (response.ok && payload?.state) {
-          sharedSync.session = true;
-          sharedSync.revision = Number(payload.revision) || 0;
-          await adoptSharedState(payload.state);
-        }
-      }
-    } else {
-      await pullAllStateFromSupabase();
+  if (!localStorage.getItem(SESSION_KEY) || !sharedSyncSupported()) return;
+  if (usingSupabaseSync() && !sharedSync.sessionToken) {
+    const savedAccountId = String(localStorage.getItem(SESSION_KEY) || "");
+    const savedAccount = (state.accounts || []).find((account) => String(account?.id || "") === savedAccountId);
+    if (!savedAccount || savedAccount.disabled) {
+      localStorage.removeItem(SESSION_KEY);
+      renderAll();
+      return;
     }
+    // A browser can retain its durable data but lose a session token (for
+    // example after cache cleanup). Keep the local session usable offline;
+    // a new online sign-in will re-establish cloud synchronization.
+    sharedSync.session = true;
+    sharedSync.accountId = savedAccountId;
+    sharedSync.available = null;
+    return;
+  }
+  sharedSync.session = true;
+  sharedSync.accountId = String(localStorage.getItem(SESSION_KEY) || "");
+  if (!(await probeSharedSync())) {
+    // Preserve the authenticated local session and durable snapshot while the
+    // connection is unavailable. A transient outage must not look like data loss.
+    if (sharedSync.dirty) scheduleSharedStateRetry();
+    scheduleSharedStateRefresh();
+    return;
+  }
+  try {
+    const { response, payload } = await sharedJsonRequest("state");
+    if (response.status === 401) throw new Error("Session expired.");
+    if (!response.ok || !payload?.state) throw new Error("Shared state is unavailable.");
+    sharedSync.revision = Number(payload.revision) || 0;
+    if (sharedSync.dirty) {
+      await retainUnsyncedLocalChanges(payload.state);
+    } else {
+      await adoptSharedState(payload.state);
+    }
+    startAccountPresenceMonitoring();
+    scheduleSharedStateRefresh({ immediate: true });
   } catch (error) {
-    console.warn("Chưa thể kết nối kéo dữ liệu Supabase khi khởi động:", error);
+    if (String(error?.message || "") !== "Session expired.") {
+      // Keep the last locally persisted state when a request fails midway.
+      sharedSync.available = null;
+      return;
+    }
+    expireSharedSession();
   }
 }
 
@@ -2991,7 +3258,6 @@ function dashboardElementsReady() {
 function refreshDashboardLiveData() {
   if (!dashboardElementsReady()) return;
   renderDashboard();
-  if (byId("taskInboxBadge")) renderTaskInbox();
 }
 
 function scheduleDashboardRefresh() {
@@ -3138,7 +3404,8 @@ function mergeImportedPeopleIntoState() {
 
   // The Excel source is bootstrap data only. Shared deployments always use
   // the server state and must never overwrite personnel edited by users.
-  if (!importedPeopleFromExcel.length) return false;
+  if (!importedPeopleFromExcel.length || usingSupabaseSync()) return false;
+
   // A populated local state, including one where every source person was
   // later removed, has already completed its initial seed.
   if (state.importedPeopleVersion || localPeople.length) {
@@ -3171,38 +3438,6 @@ function mergeImportedPeopleIntoState() {
   return Boolean(state.people.length);
 }
 
-// ==========================================
-// 🌟 COPY TOÀN BỘ ĐOẠN NÀY DÁN VÀO SCRIPT.JS
-// ==========================================
-function mergeImportedAccountsIntoState() {
-  const importedAccountsFromExcel = Array.isArray(window.PHUC_THINH_IMPORTED_ACCOUNTS) ? window.PHUC_THINH_IMPORTED_ACCOUNTS : [];
-  if (!importedAccountsFromExcel.length) return false;
-  if (!Array.isArray(state.accounts)) state.accounts = [];
-  let changed = false;
-
-  importedAccountsFromExcel.forEach((impAcc) => {
-    if (!impAcc || !impAcc.username) return;
-    const normUser = String(impAcc.username).trim().toLowerCase();
-
-    const index = state.accounts.findIndex(
-      (acc) => acc.id === impAcc.id || String(acc.username || "").trim().toLowerCase() === normUser
-    );
-
-    if (index >= 0) {
-      if (state.accounts[index].password !== impAcc.password || state.accounts[index].role !== impAcc.role) {
-        state.accounts[index] = { ...state.accounts[index], ...impAcc };
-        changed = true;
-      }
-    } else {
-      state.accounts.push(impAcc);
-      changed = true;
-    }
-  });
-
-  if (changed) persistState();
-  return changed;
-}
-// ==========================================
 function migrateCanBoGpmbKpiCatalog() {
   if (state.canBoGpmbKpiCatalogVersion === CAN_BO_GPMB_KPI_CATALOG_VERSION) return false;
 
@@ -3245,7 +3480,6 @@ function migrateCanBoGpmbKpiCatalog() {
 migrateDepartmentTermLabels();
 migrateLegacyProjectDepartments();
 mergeImportedPeopleIntoState();
-mergeImportedAccountsIntoState(); // 🌟 THÊM DÒNG NÀY Ở ĐÂY
 migrateCanBoGpmbKpiCatalog();
 if (syncPersonnelAccounts()) saveState();
 
@@ -3254,169 +3488,134 @@ function departmentById(id) {
 }
 
 function roleById(id) {
-  const leadershipRoles = {
-    "giam-doc": { id: "giam-doc", departmentId: "", name: "Giám Đốc", criteria: [] },
-    "pho-giam-doc": { id: "pho-giam-doc", departmentId: "", name: "Phó Giám Đốc", criteria: [] },
-  };
-  return roles.find((item) => item.id === id) || leadershipRoles[id];
+  return roles.find((item) => item.id === id);
 }
 
 function personById(id) {
   return state.people.find((item) => item.id === id);
 }
 
-// Thứ tự hiển thị thống nhất cho danh bạ Nhân sự và Tài khoản.
-const DIRECTORY_DEPARTMENT_ORDER = {
-  "ke-hoach": 2,
-  "du-an-1": 3,
-  "du-an-2": 4,
-  gpmb: 5,
-  "ha-tang": 6,
-};
-
-function linkedAccountForPerson(personId) {
-  return (state.accounts || []).find((account) => String(account.personId || "") === String(personId || ""));
-}
-
-function directoryDepartmentRank(person, account = null) {
-  const linkedAccount = account || linkedAccountForPerson(person?.id);
-  if (linkedAccount?.role === "admin") return 0;
-  const roleName = normalizeSearchText(roleById(person?.roleId)?.name || "");
-  if (linkedAccount?.role === "director" || roleName.includes("giam doc")) return 1;
-  return DIRECTORY_DEPARTMENT_ORDER[person?.departmentId] ?? 99;
-}
-
-function directoryPositionRank(person, account = null) {
-  const linkedAccount = account || linkedAccountForPerson(person?.id);
-  if (linkedAccount?.role === "admin" || linkedAccount?.role === "director") return 0;
-  const roleName = normalizeSearchText(roleById(person?.roleId)?.name || accountRoleLabels[linkedAccount?.role] || "");
-  if (linkedAccount?.role === "manager" || roleName.includes("truong phong")) return 0;
-  if (linkedAccount?.role === "deputy_manager" || roleName.includes("pho phong")) return 1;
-  if (linkedAccount?.role === "section_head" || roleName.includes("truong bo phan") || roleName.includes("truong nhom")) return 2;
-  if (linkedAccount?.role === "employee" || roleName.includes("nhan vien")) return 3;
-  return 4;
-}
-
-function compareDirectoryMembers(leftPerson, rightPerson, leftAccount = null, rightAccount = null) {
-  const departmentOrder = directoryDepartmentRank(leftPerson, leftAccount) - directoryDepartmentRank(rightPerson, rightAccount);
-  if (departmentOrder) return departmentOrder;
-  const positionOrder = directoryPositionRank(leftPerson, leftAccount) - directoryPositionRank(rightPerson, rightAccount);
-  if (positionOrder) return positionOrder;
-  return String(leftPerson?.name || leftAccount?.displayName || "").localeCompare(
-    String(rightPerson?.name || rightAccount?.displayName || ""),
-    "vi",
-    { sensitivity: "base" },
-  );
-}
-
-function personMatchesDirectoryGroup(person, group) {
-  if (!group) return true;
-  const account = linkedAccountForPerson(person?.id);
-  if (group === "admin") return account?.role === "admin";
-  if (group === "director") {
-    const roleName = normalizeSearchText(roleById(person?.roleId)?.name || "");
-    return account?.role === "director" || roleName.includes("giam doc");
-  }
-  return person?.departmentId === group;
-}
-
-function updatePeopleDirectoryGroupButtons() {
-  document.querySelectorAll("#peopleDirectoryGroups [data-person-group]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.personGroup === peopleDirectoryGroupFilter);
-  });
-}
-
-function sortPeopleForTaskPicker(people = []) {
-  return [...people].filter(Boolean).sort((a, b) => {
-    const departmentA = departmentById(a.departmentId)?.name || "";
-    const departmentB = departmentById(b.departmentId)?.name || "";
-    return departmentA.localeCompare(departmentB, "vi", { sensitivity: "base" })
-      || String(a.name || "").localeCompare(String(b.name || ""), "vi", { sensitivity: "base" });
-  });
-}
-
-function isDirectorPerson(person) {
-  if (!person) return false;
-  const roleName = roleById(person.roleId)?.name || "";
-  return /giám đốc/i.test(roleName)
-    || state.accounts.some((account) => account.role === "director" && String(account.personId || "") === String(person.id));
-}
-
 function accountById(id) {
   if (!id) return null;
   const normKey = String(id).trim().toLowerCase();
-
-  // 1. Tìm trong bộ nhớ hiện tại (state.accounts)
-  let found = (state.accounts || []).find(
+  // 🌟 Nhận diện cả ID lẫn Username để F5 là khớp tài khoản ngay lập tức
+  return (state.accounts || []).find(
     (item) => item.id === id || String(item.username || "").trim().toLowerCase() === normKey
-  );
-  if (found) return found;
-
-  // 2. Dự phòng: Tìm trong file import people-data.js (nếu state chưa kịp nạp khi F5)
-  const importedAccs = Array.isArray(window.PHUC_THINH_IMPORTED_ACCOUNTS) ? window.PHUC_THINH_IMPORTED_ACCOUNTS : [];
-  found = importedAccs.find(
-    (item) => item.id === id || String(item.username || "").trim().toLowerCase() === normKey
-  );
-  if (found) {
-    if (!state.accounts.some((a) => a.id === found.id)) {
-      state.accounts.push(found);
-      persistState();
-    }
-    return found;
-  }
-
-  // 3. Dự phòng: Tìm trong danh sách tài khoản mặc định
-  if (typeof defaultAccounts === "function") {
-    found = defaultAccounts().find(
-      (item) => item.id === id || String(item.username || "").trim().toLowerCase() === normKey
-    );
-    if (found) {
-      if (!state.accounts.some((a) => a.id === found.id)) {
-        state.accounts.push(found);
-        persistState();
-      }
-      return found;
-    }
-  }
-
-  return null;
+  ) || null;
 }
-
-// =========================================================================
-// 🟢 BỘ TỰ CHỮA LÀNH PHIÊN ĐĂNG NHẬP (CHỐNG MẤT SESSION KHI F5 HOẶC LOAD CHẬM)
-// =========================================================================
 
 function currentAccount() {
   const sessionVal = localStorage.getItem(SESSION_KEY);
-  if (!sessionVal) return null; // Nếu không có chìa khóa Session -> Chưa đăng nhập
+  if (!sessionVal) return null;
+  return accountById(sessionVal);
+}
 
-  // 1. Thử tìm tài khoản theo ID hoặc Username trong bộ nhớ
-  let acc = accountById(sessionVal);
-  if (acc) return acc;
-
-  // 2. Dự phòng: Tìm trong file import people-data.js
-  const importedAccs = Array.isArray(window.PHUC_THINH_IMPORTED_ACCOUNTS) ? window.PHUC_THINH_IMPORTED_ACCOUNTS : [];
-  const matchImported = importedAccs.find(a =>
-    String(a.id || "").toLowerCase() === String(sessionVal).toLowerCase() ||
-    String(a.username || "").toLowerCase() === String(sessionVal).toLowerCase()
-  );
-  if (matchImported) return normalizeAccountItem(matchImported);
-
-  // 🟢 3. NẾU VẪN CHƯA TÌM THẤY (Do dữ liệu đang nạp dở khi F5):
-  // Tạo tài khoản tạm thời để GIỮ PHIÊN 100%, TUYỆT ĐỐI KHÔNG TRẢ VỀ NULL!
-  return {
-    id: sessionVal,
-    username: sessionVal,
-    displayName: localStorage.getItem("phuc-thinh-user-name-temp") || sessionVal,
-    role: localStorage.getItem("phuc-thinh-user-role-temp") || "admin",
-    personId: "",
-    departmentId: ""
-  };
+function activeViewStorageKey(account = currentAccount()) {
+  return account?.id ? `${ACTIVE_VIEW_KEY_PREFIX}:${account.id}` : ACTIVE_VIEW_KEY_PREFIX;
 }
 
 function currentPerson() {
   const account = currentAccount();
   return account?.personId ? personById(account.personId) : null;
+}
+
+let birthdayCelebrationCloseTimer = 0;
+let birthdayDateRefreshTimer = 0;
+let birthdayCelebrationDisplayKey = "";
+let birthdayBannerCollapsed = false;
+
+function vietnamDateParts(date = new Date()) {
+  const values = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const part = (type) => values.find((item) => item.type === type)?.value || "";
+  return { year: part("year"), month: part("month"), day: part("day") };
+}
+
+function birthdayMonthDay(value) {
+  const text = String(value || "").trim();
+  const isoMatch = text.match(/^\d{4}-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}`;
+  const vietnameseMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/\d{4}$/);
+  return vietnameseMatch ? `${padDatePart(vietnameseMatch[2])}-${padDatePart(vietnameseMatch[1])}` : "";
+}
+
+function birthdayPersonForToday() {
+  const person = currentPerson();
+  if (!person?.birthDate) return null;
+  const today = vietnamDateParts();
+  return birthdayMonthDay(person.birthDate) === `${today.month}-${today.day}` ? person : null;
+}
+
+function birthdayDisplayKey(account, dateParts) {
+  return `${account.id}:${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+}
+
+function closeBirthdayCelebration() {
+  const dialog = byId("birthdayCelebration");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
+  if (birthdayCelebrationCloseTimer) window.clearTimeout(birthdayCelebrationCloseTimer);
+  birthdayCelebrationCloseTimer = 0;
+}
+
+function birthdayBannerCanCollapse() {
+  return window.matchMedia?.("(max-width: 820px)").matches;
+}
+
+function setBirthdayBannerCollapsed(collapsed) {
+  const banner = byId("birthdayDayBanner");
+  if (!banner) return;
+  birthdayBannerCollapsed = Boolean(collapsed) && birthdayBannerCanCollapse();
+  banner.classList.toggle("is-collapsed", birthdayBannerCollapsed);
+  banner.setAttribute("aria-expanded", String(!birthdayBannerCollapsed));
+  banner.setAttribute("aria-label", birthdayBannerCollapsed ? "Mở lời chúc sinh nhật" : "Thu gọn lời chúc sinh nhật");
+}
+
+function scheduleBirthdayDateRefresh() {
+  if (birthdayDateRefreshTimer) window.clearTimeout(birthdayDateRefreshTimer);
+  const today = vietnamDateParts();
+  const nextVietnamMidnight = Date.UTC(Number(today.year), Number(today.month) - 1, Number(today.day) + 1) - 7 * 60 * 60 * 1000;
+  const delay = Math.max(1000, nextVietnamMidnight - Date.now() + 1200);
+  birthdayDateRefreshTimer = window.setTimeout(() => {
+    birthdayDateRefreshTimer = 0;
+    renderBirthdayCelebration();
+  }, delay);
+}
+
+function renderBirthdayCelebration() {
+  const banner = byId("birthdayDayBanner");
+  const dialog = byId("birthdayCelebration");
+  const account = currentAccount();
+  const person = birthdayPersonForToday();
+  if (!banner || !dialog || !account || !person) {
+    banner?.classList.add("is-hidden");
+    closeBirthdayCelebration();
+    if (birthdayDateRefreshTimer) window.clearTimeout(birthdayDateRefreshTimer);
+    birthdayDateRefreshTimer = 0;
+    return;
+  }
+
+  const today = vietnamDateParts();
+  const name = person.name || account.displayName || "bạn";
+  byId("birthdayDayBannerName").textContent = `Chúc mừng sinh nhật ${name}`;
+  byId("birthdayCelebrationTitle").textContent = `Chúc mừng sinh nhật ${name}`;
+  byId("birthdayCelebrationMessage").textContent = "Chúc bạn luôn mạnh khỏe, hạnh phúc và gặt hái nhiều thành công trong công việc.";
+  banner.classList.remove("is-hidden");
+  setBirthdayBannerCollapsed(birthdayBannerCollapsed);
+  scheduleBirthdayDateRefresh();
+
+  const displayKey = birthdayDisplayKey(account, today);
+  if (birthdayCelebrationDisplayKey === displayKey || !dialog.classList.contains("is-hidden")) return;
+  birthdayCelebrationDisplayKey = displayKey;
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+  if (birthdayCelebrationCloseTimer) window.clearTimeout(birthdayCelebrationCloseTimer);
+  birthdayCelebrationCloseTimer = window.setTimeout(closeBirthdayCelebration, 12000);
 }
 
 function currentDepartmentId() {
@@ -3496,62 +3695,52 @@ function canViewDepartmentEvaluations() {
   return canViewAllData() || hasDepartmentManagementAccess();
 }
 
-function canManageBulletins() {
-  return isAdmin();
-}
-
-function canManageArchive() {
-  return isAdmin();
-}
-
 function accountAccessGrants(account = currentAccount()) {
-  const grants = account?.accessGrants || {};
+  const grants = account?.accessGrants && typeof account.accessGrants === "object" ? account.accessGrants : {};
   return {
-    bulletinPublish: Boolean(grants.bulletinPublish),
-    archiveWrite: Boolean(grants.archiveWrite),
+    bulletinPublish: grants.bulletinPublish === true,
+    archiveWrite: grants.archiveWrite === true,
   };
 }
 
 function canPublishBulletins() {
-  return canManageBulletins() || accountAccessGrants().bulletinPublish;
+  return isAdmin() || accountAccessGrants().bulletinPublish;
+}
+
+function canEditBulletin(post) {
+  const account = currentAccount();
+  return Boolean(isAdmin() || (canPublishBulletins() && post?.createdById && post.createdById === account?.id));
+}
+
+function canDeleteBulletin() {
+  return isAdmin();
 }
 
 function canSaveArchive() {
-  return canManageArchive() || accountAccessGrants().archiveWrite;
+  return isAdmin() || accountAccessGrants().archiveWrite;
+}
+
+function canEditArchive(record) {
+  const account = currentAccount();
+  return Boolean(isAdmin() || (canSaveArchive() && record?.createdById && record.createdById === account?.id));
+}
+
+function canDeleteArchive() {
+  return isAdmin();
 }
 
 function canAccessView(viewId) {
   if (!currentAccount()) return false;
   if (!moduleIsAvailableToAccount(viewId)) return false;
-  
-  // Mở quyền xem "Tổng quan" cho cấp quản lý
-  if (viewId === "dashboard") return canViewAllData() || hasDepartmentManagementAccess() || isSectionHead();
-
-  if (viewId === "bulletin") return true;
-  if (viewId === "archive") return true;
-  
-  // 🌟 ĐÃ SỬA: Chỉ Admin / Ban Giám đốc mới thấy Tab Tài Khoản
-  if (viewId === "accounts") return canManageAccounts();
-  
-  if (viewId === "people") return canViewPeople();
-  if (viewId === "tasks") return canViewTasks();
-  if (viewId === "department-evaluations") return canViewDepartmentEvaluations();
-  if (viewId === "history") return !isEmployee();
-  
-  // 🌟 ĐÃ SỬA: Chỉ Admin mới được truy cập Tab Cấu hình hệ thống (#settings)
-  if (viewId === "settings") return isAdmin();
-  
-  if (canViewAllData()) return true;
-  return ["evaluations", "rules"].includes(viewId);
+  if (viewId === "system-settings") return isAdmin();
+  return systemModules.some((module) => module.id === viewId);
 }
 
-// 🟢 GỘP LẠI THÀNH 1 HÀM DUY NHẤT (Xóa hàm cũ bị trùng)
 function firstAccessibleView() {
   const preferred = canViewAllData()
-    ? ["dashboard", "bulletin", "archive", "people", "tasks", "department-evaluations", "evaluations", "history", "accounts", "rules", "settings"]
-    : ["evaluations", "tasks", "bulletin", "archive", "people", "department-evaluations", "history", "rules", "dashboard"];
-  // Nếu là nhân viên, màn hình mặc định đầu tiên sẽ là "KPI cá nhân" (evaluations) thay vì Tài khoản
-  return preferred.find((viewId) => canAccessView(viewId)) || "evaluations";
+    ? systemModules.map((module) => module.id)
+    : ["evaluations", "tasks", "bulletin", "archive", "people", "department-evaluations", "history", "accounts", "rules", "dashboard"];
+  return preferred.find((viewId) => canAccessView(viewId)) || "accounts";
 }
 
 function canEvaluatePerson(personId) {
@@ -3562,44 +3751,54 @@ function canEvaluatePerson(personId) {
   if (isManager()) return person.departmentId === currentDepartmentId();
   return person.id === account.personId;
 }
+
 function canEditEvaluation(personId, period) {
   return canEvaluatePerson(personId) && canEditPeriod(period);
 }
+
 function canEditEvaluationBehavior(personId, period) {
   const person = personById(personId);
   if (!person || !canEditPeriod(period)) return false;
   if (isDirector() || isAdmin()) return true;
   return isManager() && person.departmentId === currentDepartmentId();
 }
+
 function canReportDepartmentEvaluation(departmentId, period) {
   if (!departmentId || !canEditPeriod(period)) return false;
   if (isAdmin()) return true;
   return hasDepartmentManagementAccess() && departmentId === currentDepartmentId();
 }
+
 function canConfirmDepartmentEvaluation(departmentId, period) {
   if (!departmentId || !canEditPeriod(period)) return false;
   return isDirector() || isAdmin();
 }
+
 function canEditDepartmentEvaluation(departmentId, period) {
   return canReportDepartmentEvaluation(departmentId, period) || canConfirmDepartmentEvaluation(departmentId, period);
 }
+
 function visiblePeopleForEvaluation() {
   if (canViewAllData()) return state.people;
   if (isManager()) return state.people.filter((person) => person.departmentId === currentDepartmentId());
   const person = currentPerson();
   return person ? [person] : [];
 }
+
 function visiblePeopleForPeopleView() {
   if (canViewAllData()) return state.people;
-  if (hasDepartmentManagementAccess()) return state.people.filter((person) => person.departmentId === currentDepartmentId());
-  return [];
-}
-function visiblePeopleForTasks() {
-  if (canViewAllData()) return sortPeopleForTaskPicker(state.people);
-  if (hasDepartmentTaskAccess()) return sortPeopleForTaskPicker(state.people.filter((person) => person.departmentId === currentDepartmentId()));
+  if (hasDepartmentTaskAccess()) return state.people.filter((person) => person.departmentId === currentDepartmentId());
   const person = currentPerson();
   return person ? [person] : [];
 }
+
+function visiblePeopleForTasks() {
+  if (canViewAllData()) return state.people;
+  if (hasDepartmentTaskAccess()) return state.people.filter((person) => person.departmentId === currentDepartmentId());
+  const person = currentPerson();
+  return person ? [person] : [];
+}
+
 function visiblePeopleForHistory() {
   if (canViewAllData()) return state.people;
   const person = currentPerson();
@@ -3611,15 +3810,15 @@ function visibleDepartmentsForHistory() {
   const departmentId = currentDepartmentId();
   return departments.filter((department) => department.id === departmentId);
 }
+
 function visibleDepartmentsForDepartmentEvaluations() {
   if (canViewAllData()) return departments;
-  if (!hasDepartmentManagementAccess()) return [];
   const departmentId = currentDepartmentId();
-  return departments.filter((department) => department.id === departmentId);
+  return departmentId ? departments.filter((department) => department.id === departmentId) : [];
 }
 
 function canAssignTasks() {
-  return canViewAllData() || hasDepartmentManagementAccess() || isSectionHead();
+  return canViewAllData() || hasDepartmentManagementAccess();
 }
 
 function canManageProjectCatalog() {
@@ -3640,9 +3839,9 @@ function canAssignTaskToPerson(personId) {
 }
 
 function assignablePeopleForTasks() {
-  if (canViewAllData()) return sortPeopleForTaskPicker(state.people);
+  if (canViewAllData()) return state.people;
   if (hasDepartmentManagementAccess()) {
-    return sortPeopleForTaskPicker(state.people.filter((person) => person.departmentId === currentDepartmentId() && isAssignableByDepartmentLeader(person)));
+    return state.people.filter((person) => person.departmentId === currentDepartmentId() && isAssignableByDepartmentLeader(person));
   }
   return [];
 }
@@ -3701,7 +3900,10 @@ function canReviewTaskCompletionForPerson(personId) {
 }
 
 function canReviewTaskCompletion(task) {
-  return !!task && taskCompletionNeedsReview(task) && canReviewTaskCompletionForPerson(task.ownerId);
+  if (!task || normalizeTaskStatus(task.status) !== TASK_STATUS_COMPLETED) return false;
+  const needsCompletionDecision = taskCompletionNeedsReview(task);
+  const needsQualityCompletion = taskCompletionIsApproved(task) && !taskHasQualityPercent(task);
+  return (needsCompletionDecision || needsQualityCompletion) && canReviewTaskCompletionForPerson(task.ownerId);
 }
 
 function canAssessTaskQualityForPerson(personId, status, task = null) {
@@ -3722,8 +3924,19 @@ function canCollaborateTask(task) {
   return !!task && !!person && taskCollaboratorIds(task).includes(person.id);
 }
 
+function canManageDepartmentTaskProgress(task) {
+  return !!task && (
+    canViewAllData() ||
+    (hasDepartmentTaskAccess() && taskHasParticipantInDepartment(task, currentDepartmentId()))
+  );
+}
+
+function canUpdateTaskCollaborators(task) {
+  return canManageDepartmentTaskProgress(task);
+}
+
 function canUpdateTaskProgress(task) {
-  return canReportTask(task) || canCollaborateTask(task);
+  return canReportTask(task) || canCollaborateTask(task) || canManageDepartmentTaskProgress(task);
 }
 
 function isTaskAssigner(task) {
@@ -3747,7 +3960,7 @@ function canEndTaskAssignment(task) {
 }
 
 function canOpenTask(task) {
-  return canEditTaskDetails(task) || canDeleteTask(task) || canReportTask(task) || canCollaborateTask(task) || canReviewTaskCompletion(task) || canAssessTaskQuality(task);
+  return canEditTaskDetails(task) || canDeleteTask(task) || canUpdateTaskProgress(task) || canReviewTaskCompletion(task);
 }
 
 function canViewTaskRecord(task) {
@@ -3857,7 +4070,7 @@ function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) 
           {
             ...sourceTask,
             id: uid("task"),
-            startDate: sourceTask.startDate ? addMonthsToIsoDate(sourceTask.startDate, offset, Number(sourceTask.startDate.slice(8, 10))) : "",
+            startDate: sourceTask.startDate ? addMonthsToIsoDate(sourceTask.startDate, offset, Number(sourceTask.startDate.slice(8, 10))) : due,
             due,
             dueTime: sourceTask.dueTime || "",
             status: TASK_STATUS_PREPARING,
@@ -4063,55 +4276,20 @@ function updateTaskCollaboratorSummary() {
   summary.textContent = selectedIds.length ? `Đã chọn ${selectedIds.length} người phối hợp` : "Chọn người phối hợp";
 }
 
-// 🟢 HÀM LỌC NGƯỜI PHỐI HỢP (ẨN TUYỆT ĐỐI BẰNG IMPORTANT)
 function filterTaskCollaboratorOptions() {
   const container = byId("taskCollaborators");
   const searchInput = byId("taskCollaboratorSearch");
   const emptyState = byId("taskCollaboratorSearchEmpty");
   if (!container || !searchInput) return;
-
-  const query = normalizeSearchText(searchInput.value.trim());
+  const query = normalizeSearchText(searchInput.value);
   let visibleCount = 0;
-
-  // Quét qua tất cả các lựa chọn nhân sự trong danh sách
-  const options = container.querySelectorAll(".checkbox-option, label");
-  options.forEach((option) => {
-    const text = normalizeSearchText(option.textContent || option.innerText || "");
-    const visible = !query || text.includes(query);
-
-    if (visible) {
-      option.style.removeProperty("display");
-      option.classList.remove("is-hidden");
-      visibleCount += 1;
-    } else {
-      // Dùng setProperty với "important" để đè bẹp hoàn toàn CSS cũ
-      option.style.setProperty("display", "none", "important");
-      option.classList.add("is-hidden");
-    }
+  container.querySelectorAll(".checkbox-option").forEach((option) => {
+    const visible = !query || normalizeSearchText(option.textContent).includes(query);
+    option.classList.toggle("is-hidden", !visible);
+    if (visible) visibleCount += 1;
   });
-
-  // Hiển thị dòng thông báo nếu không tìm thấy ai
-  if (emptyState) {
-    const showEmpty = Boolean(query) && visibleCount === 0;
-    if (showEmpty) {
-      emptyState.style.setProperty("display", "block", "important");
-      emptyState.classList.remove("is-hidden");
-    } else {
-      emptyState.style.setProperty("display", "none", "important");
-      emptyState.classList.add("is-hidden");
-    }
-  }
+  emptyState?.classList.toggle("is-hidden", !query || visibleCount > 0);
 }
-
-// 🟢 BẮT SỰ KIỆN TOÀN CỤC: ĐẢM BẢO GÕ CHỮ VÀO Ô TÌM KIẾM LÀ LỌC TỨC THÌ 100%
-document.addEventListener("input", (event) => {
-  if (event.target && event.target.id === "taskCollaboratorSearch") {
-    filterTaskCollaboratorOptions();
-  }
-  if (event.target && event.target.id === "taskProjectSearch") {
-    filterTaskProjectOptions();
-  }
-});
 
 function resetTaskCollaboratorSearch() {
   const input = byId("taskCollaboratorSearch");
@@ -4140,52 +4318,45 @@ function setTaskCollaboratorPickerOpen(open) {
   requestAnimationFrame(() => byId("taskCollaboratorSearch")?.focus());
 }
 
-function isTaskOwnerPickerOpen() {
-  return !byId("taskOwnerPanel")?.classList.contains("is-hidden");
-}
-
-function setTaskOwnerPickerOpen(open) {
-  const panel = byId("taskOwnerPanel");
-  const trigger = byId("taskOwnerTrigger");
-  if (!panel || !trigger) return;
-  const shouldOpen = Boolean(open) && !trigger.disabled;
-  panel.classList.toggle("is-hidden", !shouldOpen);
-  trigger.setAttribute("aria-expanded", String(shouldOpen));
-  if (shouldOpen) requestAnimationFrame(() => byId("taskOwnerSearch")?.focus());
-}
-
-function updateTaskOwnerPickerSummary() {
-  const selected = personById(byId("taskOwner")?.value);
-  const text = byId("taskOwnerTriggerText");
-  if (text) text.textContent = selected ? `${selected.name} - ${roleById(selected.roleId)?.name || "Chưa rõ vị trí"}` : "Chọn cán bộ thực hiện";
-}
-
-function filterTaskOwnerOptions() {
-  const query = normalizeSearchText(byId("taskOwnerSearch")?.value || "");
-  const options = byId("taskOwnerOptions")?.querySelectorAll(".task-owner-option") || [];
-  let visibleCount = 0;
-  options.forEach((option) => {
-    const matches = !query || normalizeSearchText(option.dataset.search || "").includes(query);
-    option.classList.toggle("is-hidden", !matches);
-    if (matches) visibleCount += 1;
-  });
-  byId("taskOwnerSearchEmpty")?.classList.toggle("is-hidden", visibleCount > 0);
-}
-
-function renderTaskOwnerOptions(options = [], selectedValue = "") {
-  const container = byId("taskOwnerOptions");
-  if (!container) return;
-  container.innerHTML = options.length
-    ? options.map((option) => `<label class="task-owner-option" data-search="${escapeHtml(option.label)}"><input type="radio" name="taskOwnerPickerOption" value="${escapeHtml(option.value)}" ${option.value === selectedValue ? "checked" : ""}><span>${escapeHtml(option.label)}</span></label>`).join("")
-    : '<span class="muted">Không có cán bộ phù hợp.</span>';
-  updateTaskOwnerPickerSummary();
-  filterTaskOwnerOptions();
-}
-
 function samePersonIdList(first = [], second = []) {
   const a = uniquePersonIds(first);
   const b = uniquePersonIds(second);
   return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+function taskAttachmentSignature(attachments = []) {
+  return (attachments || [])
+    .map((file) => [storedFileKey(file), file?.name || "", Number(file?.size) || 0, file?.type || ""].join("|"))
+    .sort()
+    .join("||");
+}
+
+function taskCustomFieldsSignature(customFields = {}) {
+  return Object.entries(customFields || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${JSON.stringify(value)}`)
+    .join("|");
+}
+
+function taskUpdateChangeLabels(previousTask, nextTask) {
+  const changes = [];
+  if ((previousTask.title || "") !== (nextTask.title || "")) changes.push("Tên công việc");
+  if (projectIdForTask(previousTask) !== projectIdForTask(nextTask)) changes.push("Dự án liên quan");
+  if ((previousTask.ownerId || "") !== (nextTask.ownerId || "")) changes.push("Người thực hiện");
+  if (!samePersonIdList(taskCollaboratorIds(previousTask), taskCollaboratorIds(nextTask))) changes.push("Người phối hợp");
+  if ((previousTask.category || "") !== (nextTask.category || "")) changes.push("Danh mục KPI cá nhân");
+  if (normalizeTaskWorkType(previousTask) !== normalizeTaskWorkType(nextTask)) changes.push("Loại công việc");
+  if (normalizeTaskRecurrence(previousTask) !== normalizeTaskRecurrence(nextTask)) changes.push("Định kỳ");
+  if ((previousTask.startDate || "") !== (nextTask.startDate || "")) changes.push("Ngày bắt đầu");
+  if ((previousTask.due || "") !== (nextTask.due || "")) changes.push("Ngày hoàn thành");
+  if ((previousTask.dueTime || "") !== (nextTask.dueTime || "")) changes.push("Giờ hoàn thành");
+  if (normalizeTaskStatus(previousTask.status) !== normalizeTaskStatus(nextTask.status)) changes.push("Trạng thái");
+  if (Number(previousTask.progress || 0) !== Number(nextTask.progress || 0)) changes.push("Tiến độ");
+  if (String(normalizeTaskQualityInput(previousTask.qualityPercent)) !== String(normalizeTaskQualityInput(nextTask.qualityPercent))) changes.push("Đánh giá chất lượng");
+  if ((previousTask.note || "") !== (nextTask.note || "")) changes.push("Nội dung công việc/Báo cáo tiến độ");
+  if (taskAttachmentSignature(previousTask.attachments) !== taskAttachmentSignature(nextTask.attachments)) changes.push("Hồ sơ liên quan");
+  if (taskCustomFieldsSignature(previousTask.customFields) !== taskCustomFieldsSignature(nextTask.customFields)) changes.push("Thông tin tùy biến");
+  return changes;
 }
 
 function getDueStatus(task) {
@@ -4271,24 +4442,6 @@ function taskHasTimelyProgressReport(task) {
 function taskIsPastDeadline(task) {
   const due = taskDeadlineDate(task);
   return !!due && due < new Date();
-}
-
-function taskOverdueStatusLockDate(task) {
-  const due = taskDeadlineDate(task);
-  return due ? new Date(due.getTime() + TASK_OVERDUE_STATUS_LOCK_MS) : null;
-}
-
-function taskIsPastOverdueStatusLock(task) {
-  const lockDate = taskOverdueStatusLockDate(task);
-  return !!lockDate && getDueStatus(task) === "Quá hạn" && lockDate <= new Date();
-}
-
-function canOverrideTaskOverdueStatusLock() {
-  return canViewAllData();
-}
-
-function isTaskStatusUpdateLocked(task) {
-  return !!task && taskIsPastOverdueStatusLock(task) && !canOverrideTaskOverdueStatusLock();
 }
 
 function taskCompletedBeforeDeadline(task) {
@@ -4682,11 +4835,10 @@ function updateTaskCollaboratorOptions(selectedValues = []) {
   selectedIds.forEach((personId) => {
     const person = personById(personId);
     if (person && !peopleWithSelected.some((item) => item.id === person.id)) {
-      peopleWithSelected.push(person);
+      peopleWithSelected.unshift(person);
     }
   });
-  const options = sortPeopleForTaskPicker(peopleWithSelected)
-    .filter((person) => !isDirectorPerson(person))
+  const options = peopleWithSelected
     .filter((person) => person.id !== ownerId)
     .map((person) => ({
       value: person.id,
@@ -4710,15 +4862,14 @@ function updateTaskCollaboratorOptions(selectedValues = []) {
 }
 
 function renderPersonOptions() {
-  if (!byId("taskId").value) byId("taskKind").value = TASK_KIND_REGULAR;
   const currentTaskOwner = byId("taskOwner").value;
   const currentTaskCollaborators = selectedTaskCollaboratorIds();
   const taskPeople = visiblePeopleForTasks();
   const taskPeopleWithSelected =
     currentTaskOwner && !taskPeople.some((person) => person.id === currentTaskOwner)
-      ? sortPeopleForTaskPicker([personById(currentTaskOwner), ...taskPeople])
+      ? [personById(currentTaskOwner), ...taskPeople].filter(Boolean)
       : taskPeople;
-  const taskSelectOptions = taskPeopleWithSelected.filter((person) => !isDirectorPerson(person)).map((person) => ({
+  const taskSelectOptions = taskPeopleWithSelected.map((person) => ({
     value: person.id,
     label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
   }));
@@ -4749,21 +4900,35 @@ function renderPersonOptions() {
     placeholder.concat(taskSelectOptions),
     selectedTaskOwner,
   );
-  renderTaskOwnerOptions(taskSelectOptions, selectedTaskOwner);
   updateTaskCollaboratorOptions(currentTaskCollaborators);
   updateTaskCategoryOptions(byId("taskCategory").value);
+  fillSelect(byId("evalPerson"), placeholder.concat(evaluationOptions), selectedEvalPerson);
+  byId("evalPerson").disabled = isEmployee();
+  return;
 
   const currentAssignmentOwner = byId("assignmentTaskOwner").value;
   const currentAssignmentCollaborator = byId("assignmentTaskCollaborator").value;
   const assignmentPeople = canAssignTasks() ? assignablePeopleForTasks() : [];
+  const assignmentCollaboratorPeople = hasDepartmentTaskAccess() ? visiblePeopleForTasks() : assignmentPeople;
   const assignmentPeopleWithSelected = [...assignmentPeople];
-  [currentAssignmentOwner, currentAssignmentCollaborator].forEach((personId) => {
+  const assignmentCollaboratorPeopleWithSelected = [...assignmentCollaboratorPeople];
+  [currentAssignmentOwner].forEach((personId) => {
     const person = personById(personId);
     if (person && !assignmentPeopleWithSelected.some((item) => item.id === person.id)) {
-      assignmentPeopleWithSelected.push(person);
+      assignmentPeopleWithSelected.unshift(person);
     }
   });
-  const assignmentOptions = sortPeopleForTaskPicker(assignmentPeopleWithSelected).map((person) => ({
+  [currentAssignmentCollaborator].forEach((personId) => {
+    const person = personById(personId);
+    if (person && !assignmentCollaboratorPeopleWithSelected.some((item) => item.id === person.id)) {
+      assignmentCollaboratorPeopleWithSelected.unshift(person);
+    }
+  });
+  const assignmentOptions = assignmentPeopleWithSelected.map((person) => ({
+    value: person.id,
+    label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
+  }));
+  const assignmentCollaboratorOptions = assignmentCollaboratorPeopleWithSelected.map((person) => ({
     value: person.id,
     label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
   }));
@@ -4772,9 +4937,8 @@ function renderPersonOptions() {
     : assignmentOptions.length === 1
       ? assignmentOptions[0].value
       : "";
-  const selectedAssignmentCollaborator = assignmentOptions.some((option) => option.value === currentAssignmentCollaborator) ? currentAssignmentCollaborator : "";
+  const selectedAssignmentCollaborator = assignmentCollaboratorOptions.some((option) => option.value === currentAssignmentCollaborator) ? currentAssignmentCollaborator : "";
   fillSelect(byId("assignmentTaskOwner"), placeholder.concat(assignmentOptions), selectedAssignmentOwner);
-  const assignmentCollaboratorOptions = assignmentOptions.filter((option) => !isDirectorPerson(personById(option.value)));
   fillSelect(byId("assignmentTaskCollaborator"), [{ value: "", label: "Không chọn người phối hợp" }].concat(assignmentCollaboratorOptions), selectedAssignmentCollaborator);
   updateTaskCategoryOptions(byId("assignmentTaskCategory").value, "assignmentTaskOwner", "assignmentTaskCategory");
   fillSelect(byId("evalPerson"), placeholder.concat(evaluationOptions), selectedEvalPerson);
@@ -4796,17 +4960,15 @@ function renderAccountOptions() {
 
 function renderPeopleTable() {
   const tbody = byId("peopleTable");
-  updatePeopleDirectoryGroupButtons();
   const basePeople = visiblePeopleForPeopleView();
   if (!basePeople.length) {
-    tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"9\"");
+    tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"11\"");
     return;
   }
   const search = normalizeSearchText(byId("personSearch").value.trim());
   const evaluatedPeople = new Set(evaluationsForPeriod(state.activePeriod).map((evaluation) => evaluation.personId));
   const people = basePeople.filter((person) => {
     if (peoplePendingEvaluationOnly && evaluatedPeople.has(person.id)) return false;
-    if (!personMatchesDirectoryGroup(person, peopleDirectoryGroupFilter)) return false;
     if (!search) return true;
     const department = departmentById(person.departmentId)?.name || "";
     const role = roleById(person.roleId)?.name || "";
@@ -4829,28 +4991,37 @@ function renderPeopleTable() {
         person.note,
       ].join(" "),
     ).includes(search);
-  }).sort((left, right) => compareDirectoryMembers(left, right));
+  });
   updatePeopleFilterNote(people.length);
   if (!people.length) {
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-cell">Không tìm thấy nhân sự phù hợp.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="empty-cell">Không tìm thấy nhân sự phù hợp.</td></tr>';
     return;
   }
   tbody.innerHTML = people
     .map((person) => {
       const evaluation = latestEvaluation(person.id);
-      const isLeadership = ["giam-doc", "pho-giam-doc"].includes(person.roleId);
-      const department = isLeadership ? "" : departmentById(person.departmentId)?.name || "";
+      const department = departmentById(person.departmentId)?.name || "";
       const role = roleById(person.roleId)?.name || "";
       const contractDetails = [
         person.contractTerm,
         person.contractSignedDate ? `Ký HĐ: ${formatDate(person.contractSignedDate)}` : "",
       ].filter(Boolean);
+      const salaryDetails = [
+        formatSalary(person),
+        person.salaryReviewDate ? `Xét nâng lương: ${formatDate(person.salaryReviewDate)}` : "",
+      ].filter(Boolean);
       const contractHtml = [
         `<strong>${escapeHtml(person.contract || "Chưa cập nhật")}</strong>`,
         ...contractDetails.map((detail) => `<span>${escapeHtml(detail)}</span>`),
       ].join("");
+      const salaryHtml = salaryDetails.length
+        ? salaryDetails.map((detail, index) => (index ? `<span>${escapeHtml(detail)}</span>` : `<strong>${escapeHtml(detail)}</strong>`)).join("")
+        : '<span class="muted">Chưa cập nhật</span>';
+      const kpiHtml = evaluation
+        ? `<span class="badge ${badgeClass(evaluation.finalScore)}">${formatScore(evaluation.finalScore)} - ${escapeHtml(evaluation.grade)}</span>`
+        : '<span class="muted">Chưa chấm</span>';
       return `
-        <tr class="people-row" data-person-id="${escapeHtml(person.id)}" title="Kích đúp để sửa hồ sơ nhân sự">
+        <tr class="people-row" data-person-id="${escapeHtml(person.id)}">
           <td class="people-name-cell">
             <div class="people-person-card">
               <strong>${escapeHtml(person.name)}</strong>
@@ -4858,12 +5029,14 @@ function renderPeopleTable() {
             </div>
           </td>
           <td class="people-gender"><span class="people-tag">${escapeHtml(person.gender || "-")}</span></td>
+          <td class="people-department-cell"><span class="people-department">${escapeHtml(department || "Chưa cập nhật")}</span></td>
           <td class="people-role-cell"><span class="people-role">${escapeHtml(role || "Chưa cập nhật")}</span></td>
-          <td class="people-department-cell"><span class="people-department">${escapeHtml(department || (isLeadership ? "" : "Chưa cập nhật"))}</span></td>
-          <td><span class="people-detail-text">${escapeHtml(isLeadership ? "" : person.qualification || "Chưa cập nhật")}</span></td>
-          <td class="people-birth-date"><span class="people-date">${escapeHtml(formatDate(person.birthDate) || (isLeadership ? "" : "-"))}</span></td>
+          <td><span class="people-detail-text">${escapeHtml(person.qualification || "Chưa cập nhật")}</span></td>
+          <td class="people-birth-date"><span class="people-date">${escapeHtml(formatDate(person.birthDate) || "-")}</span></td>
           <td><span class="people-address">${escapeHtml(person.address || "Chưa cập nhật")}</span></td>
           <td><div class="people-info-stack">${contractHtml}</div></td>
+          <td><div class="people-info-stack">${salaryHtml}</div></td>
+          <td class="people-kpi-cell">${kpiHtml}</td>
           <td>
             <span class="row-actions">
               ${canEditPeople() ? `<button class="ghost" data-edit-person="${person.id}" type="button">Sửa</button><button class="ghost" data-delete-person="${person.id}" type="button">Xóa</button>` : "<span class=\"muted\">Chỉ xem</span>"}
@@ -4885,30 +5058,11 @@ function updatePeopleFilterNote(resultCount) {
   byId("peopleFilterText").textContent = `Đang lọc ${resultCount} nhân sự chưa chấm KPI cá nhân trong kỳ ${formatPeriod(state.activePeriod)}.`;
   note.classList.remove("is-hidden");
 }
-function assignedTasksForInbox() {
-  const person = currentPerson();
-  const account = currentAccount();
-  if (!account) return [];
-  return state.tasks
-    .map((task) => ({ 
-      ...task, 
-      status: normalizeTaskStatus(task.status), 
-      computedStatus: getDueStatus(task) 
-    }))
-    .filter((task) => {
-      if (!canViewTaskRecord(task)) return false;
 
-      // Nếu là Admin/Lãnh đạo: Xem được hết
-      if (canViewAllData()) return true;
-      // Nếu là Cán bộ/Nhân viên: Chỉ hiện việc mình làm CHỦ TRÌ hoặc PHỐI HỢP
-      if (person) {
-        const isOwner = task.ownerId === person.id;
-        const isCollaborator = taskCollaboratorIds(task).includes(person.id);
-        const isAssigner = isTaskAssigner(task);
-        return isOwner || isCollaborator || isAssigner;
-      }
-      return false;
-    })
+function assignedTasksForInbox() {
+  return state.tasks
+    .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
+    .filter((task) => canViewTaskRecord(task) && isAssignedTask(task))
     .sort((a, b) => {
       const aDone = isTaskFinishedStatus(a.computedStatus) ? 1 : 0;
       const bDone = isTaskFinishedStatus(b.computedStatus) ? 1 : 0;
@@ -4920,12 +5074,6 @@ function assignedTasksForInbox() {
 }
 
 function renderTaskInbox() {
-  const panel = document.querySelector(".task-inbox-panel");
-  if (panel) {
-    panel.classList.toggle("is-hidden", !canAssignTasks());
-  }
-  if (!canAssignTasks()) return;
-
   const assignedTasks = assignedTasksForInbox();
   const pendingCount = assignedTasks.filter((task) => !isTaskFinishedStatus(task.computedStatus)).length;
   byId("taskInboxBadge").textContent = String(pendingCount);
@@ -4937,157 +5085,66 @@ function renderTaskInbox() {
     renderTaskInboxDialog();
   }
 }
-// =========================================================================
-// 🟢 BỘ TỐI ƯU POPUP THÔNG BÁO CÔNG VIỆC (CÓ TÌM KIẾM + PHÂN BIỆT ĐÃ ĐỌC)
-// =========================================================================
 
-// 1. Quản lý danh sách ID thông báo đã bấm xem
-function getReadInboxTaskIds() {
-  try {
-    return new Set(JSON.parse(localStorage.getItem("phuc-thinh-read-inbox-tasks-v1") || "[]"));
-  } catch {
-    return new Set();
-  }
-}
-
-function markInboxTaskAsRead(taskId) {
-  if (!taskId) return;
-  const readSet = getReadInboxTaskIds();
-  readSet.add(taskId);
-  localStorage.setItem("phuc-thinh-read-inbox-tasks-v1", JSON.stringify(Array.from(readSet)));
-}
-
-// 2. Hàm mở và khởi tạo Khung + Ô tìm kiếm
 function renderTaskInboxDialog() {
   const assignedTasks = assignedTasksForInbox();
   const pendingCount = assignedTasks.filter((task) => !isTaskFinishedStatus(task.computedStatus)).length;
-  
-  const titleElem = byId("taskInboxTitle");
-  if (titleElem) titleElem.textContent = "Thông báo công việc";
-  
-  const summaryElem = byId("taskInboxDialogSummary");
-  if (summaryElem) {
-    summaryElem.textContent = assignedTasks.length
-      ? `Có ${pendingCount} công việc chưa xử lý / ${assignedTasks.length} tổng thông báo.`
-      : "Chưa có thông báo công việc mới.";
-  }
-
-  // Tự động chèn Ô tìm kiếm vào dưới Tiêu đề nếu chưa có
-  let searchInput = byId("taskInboxSearchInput");
-  if (!searchInput) {
-    const headerBox = document.querySelector("#taskInboxDialog .section-head");
-    if (headerBox) {
-      const searchBox = document.createElement("div");
-      searchBox.className = "task-inbox-search-box";
-      searchBox.innerHTML = `<input type="text" id="taskInboxSearchInput" class="task-inbox-search-input" placeholder="🔍 Tìm nhanh theo tên công việc, dự án, cán bộ..." />`;
-      headerBox.after(searchBox);
-      
-      searchInput = byId("taskInboxSearchInput");
-      searchInput.addEventListener("input", () => renderTaskInboxListOnly());
-    }
-  }
-
-  renderTaskInboxListOnly();
+  byId("taskInboxDialogSummary").textContent = assignedTasks.length
+    ? `${pendingCount} việc đang cần xử lý, ${assignedTasks.length} việc được giao.`
+    : "Chưa có công việc được giao.";
+  byId("taskInboxList").innerHTML = assignedTasks.length
+    ? assignedTasks
+        .map((task) => {
+          const owner = personById(task.ownerId);
+          const collaboratorNames = taskCollaboratorNames(task);
+          const latestReport = latestTaskProgressReport(task);
+          const violations = taskViolationReasons(task);
+          return `
+            <article class="task-inbox-item">
+              <div class="section-head">
+                <div>
+                  <span class="badge ${task.computedStatus === "Quá hạn" ? "bad" : isTaskFinishedStatus(task.computedStatus) ? "good" : "warn"}">${escapeHtml(task.computedStatus)}</span>
+                  <h3>${escapeHtml(task.title)}</h3>
+                </div>
+                <button class="ghost" data-open-inbox-task="${escapeHtml(task.id)}" type="button">Mở công việc</button>
+              </div>
+              <div class="task-inbox-meta">
+                <span><strong>Loại công việc:</strong> ${escapeHtml(taskKindLabels[normalizeTaskKind(task)] || "Công việc")}</span>
+                <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
+                <span><strong>Danh mục KPI:</strong> ${escapeHtml(task.category || "Chưa phân loại")}</span>
+                <span><strong>Ngày bắt đầu:</strong> ${escapeHtml(formatTaskStartDate(task) || "Chưa có")}</span>
+                <span><strong>Thời hạn hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
+                <span><strong>Tiến độ:</strong> ${formatScore(task.progress)}%</span>
+                <span><strong>Đánh giá chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))}</span>
+                <span><strong>Điểm thực hiện KPI:</strong> ${formatScore(taskKpiActualScore(task))}</span>
+                <span><strong>Người giao:</strong> ${escapeHtml(task.assignedByName || task.createdBy || "Chưa ghi nhận")}</span>
+                <span><strong>Người được giao:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
+                <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
+                <span><strong>Phản hồi:</strong> ${escapeHtml(task.responseStatus || "Chưa phản hồi")}</span>
+                <span><strong>Báo cáo gần nhất:</strong> ${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% - ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
+              </div>
+              ${task.note ? `<p class="task-inbox-note"><strong>Nội dung:</strong> ${escapeHtml(task.note)}</p>` : ""}
+              ${task.responseNote ? `<p class="task-inbox-note"><strong>Phản hồi/Báo cáo:</strong> ${escapeHtml(task.responseNote)}</p>` : ""}
+              ${latestReport?.note && latestReport.note !== task.responseNote ? `<p class="task-inbox-note"><strong>Cập nhật tiến độ gần nhất:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
+              ${taskProgressReportListHtml(task)}
+              ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
+            </article>
+          `;
+        })
+        .join("")
+    : '<div class="empty-state">Chưa có công việc được giao.</div>';
 }
-
-// 3. Hàm lọc từ khóa & vẽ danh sách thẻ gọn gàng
-function renderTaskInboxListOnly() {
-  const assignedTasks = assignedTasksForInbox();
-  const readSet = getReadInboxTaskIds();
-  const searchQuery = normalizeSearchText(byId("taskInboxSearchInput")?.value || "");
-
-  const filteredTasks = assignedTasks.filter((task) => {
-    if (!searchQuery) return true;
-    const owner = personById(task.ownerId)?.name || "";
-    const assigner = task.assignedByName || task.createdBy || "";
-    const project = task.projectName || "";
-    const text = normalizeSearchText(`${task.title} ${project} ${owner} ${assigner} ${task.note || ""}`);
-    return text.includes(searchQuery);
-  });
-
-  const listElem = byId("taskInboxList");
-  if (!listElem) return;
-
-  if (!filteredTasks.length) {
-    listElem.innerHTML = '<div class="empty-state">Không tìm thấy thông báo công việc phù hợp.</div>';
-    return;
-  }
-
-  listElem.innerHTML = filteredTasks
-    .map((task) => {
-      const owner = personById(task.ownerId);
-      const collaboratorNames = taskCollaboratorNames(task);
-      const latestReport = latestTaskProgressReport(task);
-      const violations = taskViolationReasons(task);
-      const person = currentPerson();
-      
-      const isFinished = isTaskFinishedStatus(task.computedStatus);
-      const isRead = readSet.has(task.id);
-      
-      const statusClasses = [];
-      if (isFinished) statusClasses.push("is-completed");
-      if (isRead) statusClasses.push("is-read");
-
-      let myRoleTag = "";
-      if (person) {
-        if (task.ownerId === person.id) myRoleTag = '<span class="badge good" style="font-size:10px; padding:1px 5px;">Chủ trì</span>';
-        else if (taskCollaboratorIds(task).includes(person.id)) myRoleTag = '<span class="badge warn" style="font-size:10px; padding:1px 5px;">Phối hợp</span>';
-      }
-
-      return `
-        <article class="task-inbox-item ${statusClasses.join(" ")}">
-          <div class="section-head task-inbox-title-row" style="margin-bottom:2px; min-height:auto;">
-            <div class="task-inbox-title-main" style="display:flex; gap:6px; align-items:center;">
-              <span class="badge ${task.computedStatus === "Quá hạn" ? "bad" : isFinished ? "good" : "warn"}" style="font-size:10.5px; padding:1px 5px;">${escapeHtml(task.computedStatus)}</span>
-              ${myRoleTag}
-              ${isRead && !isFinished ? '<span class="badge" style="font-size:10px; background:#f1f5f9; color:#64748b; padding:1px 5px;">Đã xem</span>' : ''}
-              <h3 style="font-size:13px; display:inline-block; margin:0; font-weight:700;">${escapeHtml(task.title)}</h3>
-            </div>
-            <button class="ghost" data-open-inbox-task="${escapeHtml(task.id)}" type="button">Xem chi tiết</button>
-          </div>
-
-          <div class="task-inbox-meta task-inbox-meta-structured">
-            <span class="task-inbox-project"><strong>Dự án:</strong> ${escapeHtml(task.projectName || "Chưa có")}</span>
-            <div class="task-inbox-meta-row">
-              <span><strong>Hạn:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
-              <span><strong>Người giao:</strong> ${escapeHtml(task.assignedByName || task.createdBy || "Chưa rõ")}</span>
-            </div>
-            <div class="task-inbox-meta-row">
-              <span><strong>Thực hiện:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
-              <span class="task-inbox-collaborators"><strong>Phối hợp:</strong> <span class="task-inbox-collaborator-names">${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không có")}</span></span>
-            </div>
-          </div>
-
-          ${latestReport?.note ? `<p class="task-inbox-note"><strong>Cập nhật:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
-          ${violations.length ? `<div class="task-violation">Lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
-        </article>
-      `;
-    })
-    .join("");
-}
-
 
 function openTaskInboxDialog() {
-  if (typeof resetAssignmentTaskForm === "function") resetAssignmentTaskForm();
-  const formElem = byId("assignmentTaskForm");
-  if (formElem) formElem.classList.add("is-hidden");
-  if (typeof renderTaskInboxDialog === "function") renderTaskInboxDialog();
-  
-  const dialog = byId("taskInboxDialog");
-  if (dialog) {
-    dialog.classList.remove("is-hidden");
-    dialog.setAttribute("aria-hidden", "false");
-    dialog.style.setProperty("display", "flex", "important");
-  }
+  resetAssignmentTaskForm();
+  renderTaskInboxDialog();
+  byId("taskInboxDialog").classList.remove("is-hidden");
+  byId("taskInboxDialog").setAttribute("aria-hidden", "false");
 }
 
 function closeTaskInboxDialog() {
-  const dialog = byId("taskInboxDialog");
-  if (dialog) {
-    dialog.classList.add("is-hidden");
-    dialog.setAttribute("aria-hidden", "true");
-    dialog.style.setProperty("display", "none", "important");
-  }
+  byId("taskInboxDialog").classList.add("is-hidden");
+  byId("taskInboxDialog").setAttribute("aria-hidden", "true");
 }
 
 function taskBoardSearchText(task) {
@@ -5098,7 +5155,7 @@ function taskBoardSearchText(task) {
   const reports = (task.progressReports || []).map((report) => report.note).join(" ");
   const taskKind = taskKindLabels[normalizeTaskKind(task)] || "";
   const regularMeta = isAssignedTask(task) ? "" : taskWorkMeta(task);
-  return `${task.title} ${task.projectName || ""} ${taskKind} ${owner} ${collaborators} ${assigner} ${task.category} ${regularMeta} ${task.note || ""} ${task.responseNote || ""} ${reports} ${attachments}`.toLowerCase();
+  return `${task.title} ${projectNameForTask(task)} ${taskKind} ${owner} ${collaborators} ${assigner} ${task.category} ${regularMeta} ${task.note || ""} ${task.responseNote || ""} ${reports} ${attachments}`.toLowerCase();
 }
 
 function currentTaskTimeFilter() {
@@ -5112,15 +5169,200 @@ function currentTaskProjectFilter() {
   return byId("taskProjectFilter")?.value.trim() || "";
 }
 
+function taskProjectOptions() {
+  return (state.projectCatalog || [])
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, "vi"))
+    .map((project) => ({ value: project.id, label: project.name }));
+}
+
+function renderTaskProjectOptions() {
+  const options = [{ value: "", label: "Chưa chọn danh mục dự án" }, ...taskProjectOptions()];
+  ["taskProjectId"].forEach((selectId) => {
+    const select = byId(selectId);
+    if (!select) return;
+    const selected = select.value;
+    fillSelect(select, options, selected);
+  });
+}
+
+function resetTaskProjectCatalogForm() {
+  const form = byId("taskProjectCatalogForm");
+  if (!form) return;
+  form.reset();
+  byId("taskProjectCatalogId").value = "";
+}
+
+function renderTaskProjectCatalog() {
+  renderTaskProjectOptions();
+  const panel = byId("taskProjectCatalogPanel");
+  if (!panel) return;
+  const canManage = canManageProjectCatalog();
+  panel.classList.toggle("is-hidden", !canManage);
+  if (!canManage) return;
+  const projects = taskProjectOptions();
+  const search = normalizeSearchText(byId("taskProjectCatalogSearch")?.value || "");
+  const visibleProjects = search
+    ? projects.filter((project) => normalizeSearchText(project.label).includes(search))
+    : projects;
+  byId("taskProjectCatalogNote").textContent = projects.length
+    ? `${projects.length} dự án đang được dùng làm tên chuẩn cho công việc.`
+    : "Chưa có dự án. Thêm dự án để liên kết khi tạo công việc.";
+  byId("taskProjectCatalogList").innerHTML = visibleProjects.length
+    ? visibleProjects
+        .map(
+          (project) => `
+            <div class="project-catalog-item">
+              <button class="project-catalog-project-link" type="button" data-open-project-tasks="${escapeHtml(project.value)}" title="Xem công việc thuộc dự án ${escapeHtml(project.label)}">${escapeHtml(project.label)}</button>
+              <div class="project-catalog-actions">
+                <button class="ghost" type="button" data-edit-task-project="${escapeHtml(project.value)}">Sửa</button>
+                <button class="ghost project-catalog-delete" type="button" data-delete-task-project="${escapeHtml(project.value)}" title="Xóa dự án" aria-label="Xóa dự án ${escapeHtml(project.label)}">X</button>
+              </div>
+            </div>
+          `,
+        )
+        .join("")
+    : search
+      ? '<p class="muted">Không tìm thấy dự án phù hợp.</p>'
+      : '<p class="muted">Chưa có tên dự án trong danh mục.</p>';
+}
+
+function openTaskProjectCatalogDialog() {
+  if (!canManageProjectCatalog()) return;
+  byId("taskProjectCatalogSearch").value = "";
+  renderTaskProjectCatalog();
+  const dialog = byId("taskProjectCatalogDialog");
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+  byId("taskProjectCatalogName").focus();
+}
+
+function closeTaskProjectCatalogDialog() {
+  const dialog = byId("taskProjectCatalogDialog");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
+  resetTaskProjectCatalogForm();
+}
+
+function openProjectTaskList(projectId) {
+  const project = projectById(projectId);
+  if (!project || !canAccessView("tasks")) return;
+  closeTaskProjectCatalogDialog();
+  switchView("tasks");
+  byId("taskSearch").value = "";
+  byId("taskStatusFilter").value = "";
+  clearTaskTimeFilter();
+  renderTaskProjectFilterOptions();
+  byId("taskProjectFilter").value = project.name;
+  renderTaskBoard();
+  byId("taskBoard").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function editTaskProjectCatalog(projectId) {
+  if (!canManageProjectCatalog()) return;
+  const project = projectById(projectId);
+  if (!project) return;
+  byId("taskProjectCatalogId").value = project.id;
+  byId("taskProjectCatalogName").value = project.name;
+  byId("taskProjectCatalogName").focus();
+  byId("taskProjectCatalogName").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function deleteTaskProjectCatalog(projectId) {
+  if (!canManageProjectCatalog()) {
+    alert("Tài khoản hiện tại không có quyền xóa dự án trong danh mục.");
+    return;
+  }
+  const project = projectById(projectId);
+  if (!project) return;
+  const linkedTaskCount = state.tasks.filter((task) => projectIdForTask(task) === project.id).length;
+  const linkedTaskNote = linkedTaskCount
+    ? ` ${linkedTaskCount} công việc đã liên kết vẫn được giữ nguyên để tra cứu lịch sử.`
+    : "";
+  if (!confirm(`Xóa dự án "${project.name}" khỏi danh mục?${linkedTaskNote}`)) return;
+  registerDeletedId(project.id);
+  state.projectCatalog = state.projectCatalog.filter((item) => item.id !== project.id);
+  logActivity({
+    action: "Xóa dự án khỏi danh mục",
+    module: "Công việc",
+    targetType: "project-catalog",
+    targetId: project.id,
+    title: project.name,
+    details: linkedTaskCount
+      ? `Xóa khỏi danh mục; giữ lại ${linkedTaskCount} công việc đã liên kết để tra cứu.`
+      : "Xóa khỏi danh mục dự án.",
+  });
+  saveState();
+  resetTaskProjectCatalogForm();
+  renderAll();
+}
+
+function saveTaskProjectCatalog(event) {
+  event.preventDefault();
+  if (!canManageProjectCatalog()) {
+    alert("Tài khoản hiện tại không có quyền cập nhật danh mục dự án.");
+    return;
+  }
+  const projectId = String(byId("taskProjectCatalogId").value || "").trim();
+  const name = normalizedProjectCatalogName(byId("taskProjectCatalogName").value);
+  if (!name) return;
+  const duplicate = (state.projectCatalog || []).find(
+    (project) => project.id !== projectId && projectCatalogNameKey(project.name) === projectCatalogNameKey(name),
+  );
+  if (duplicate) {
+    alert("Tên dự án này đã có trong danh mục.");
+    return;
+  }
+  const actor = currentActorInfo();
+  const timestamp = new Date().toISOString();
+  const existing = projectId ? projectById(projectId) : null;
+  const savedProject = existing
+    ? {
+        ...existing,
+        name,
+        updatedAt: timestamp,
+        updatedById: actor.id,
+        updatedByName: actor.name,
+      }
+    : {
+        id: uid("project"),
+        name,
+        createdAt: timestamp,
+        createdById: actor.id,
+        createdByName: actor.name,
+        updatedAt: timestamp,
+        updatedById: actor.id,
+        updatedByName: actor.name,
+      };
+  state.projectCatalog = existing
+    ? state.projectCatalog.map((project) => (project.id === existing.id ? savedProject : project))
+    : [...state.projectCatalog, savedProject];
+  logActivity({
+    action: existing ? "Cập nhật danh mục dự án" : "Thêm dự án vào danh mục",
+    module: "Công việc",
+    targetType: "project-catalog",
+    targetId: savedProject.id,
+    title: savedProject.name,
+    details: existing ? `Đổi tên dự án thành ${savedProject.name}.` : `Thêm dự án ${savedProject.name}.`,
+  });
+  saveState();
+  resetTaskProjectCatalogForm();
+  renderAll();
+}
+
 function renderTaskProjectFilterOptions() {
   const select = byId("taskProjectFilter");
   if (!select) return;
   const selected = select.value;
   const projects = [...new Set(
-    state.tasks
-      .filter((task) => canViewTaskRecord(task))
-      .map((task) => String(task.projectName || "").trim())
-      .filter(Boolean),
+    [
+      ...state.tasks
+        .filter((task) => canViewTaskRecord(task))
+        .map((task) => projectNameForTask(task))
+        .filter(Boolean),
+      ...taskProjectOptions().map((project) => project.label),
+    ],
   )].sort((left, right) => left.localeCompare(right, "vi"));
   select.innerHTML = [
     '<option value="">Tất cả dự án</option>',
@@ -5143,7 +5385,13 @@ function taskMatchesTimeFilter(task, timeFilter = currentTaskTimeFilter()) {
 
 function taskMatchesProjectFilter(task, projectFilter = currentTaskProjectFilter()) {
   if (!projectFilter) return true;
-  return normalizeSearchText(task.projectName) === normalizeSearchText(projectFilter);
+  return normalizeSearchText(projectNameForTask(task)) === normalizeSearchText(projectFilter);
+}
+
+function taskMatchesStatusFilter(task, status = "") {
+  if (!status) return true;
+  if (status === TASK_STATUS_PENDING_REVIEW) return taskCompletionNeedsReview(task);
+  return task.computedStatus === status;
 }
 
 function clearTaskTimeFilter() {
@@ -5156,7 +5404,7 @@ function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTi
   return state.tasks
     .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
     .filter((task) => canViewTaskRecord(task))
-    .filter((task) => !status || task.computedStatus === status)
+    .filter((task) => taskMatchesStatusFilter(task, status))
     .filter((task) => taskMatchesTimeFilter(task, timeFilter))
     .filter((task) => taskMatchesProjectFilter(task, projectFilter))
     .filter((task) => !keyword || taskBoardSearchText(task).includes(keyword));
@@ -5182,10 +5430,11 @@ function renderTaskBoard() {
   const tasks = visibleTaskRecords(search, filter, timeFilter, projectFilter);
 
   const renderTaskColumns = () => {
-    return taskStatuses
+    const boardStatuses = filter === TASK_STATUS_PENDING_REVIEW ? [TASK_STATUS_PENDING_REVIEW] : taskStatuses;
+    return boardStatuses
       .map((status) => {
         const cards = tasks
-          .filter((task) => task.computedStatus === status)
+          .filter((task) => taskMatchesStatusFilter(task, status))
           .map((task) => {
             const owner = personById(task.ownerId);
             const collaboratorNames = taskCollaboratorNames(task);
@@ -5196,7 +5445,6 @@ function renderTaskBoard() {
             const copyable = canCopyTask(task);
             const reportable = canUpdateTaskProgress(task) && !taskHasQualityPercent(task);
             const reviewable = canReviewTaskCompletion(task);
-            const assessable = canAssessTaskQuality(task);
             const attachments = task.attachments || [];
             const latestReport = latestTaskProgressReport(task);
             const violations = taskViolationReasons(task);
@@ -5210,10 +5458,7 @@ function renderTaskBoard() {
                 : "Chưa có cập nhật tiến độ";
             const attachmentList = attachments.length
               ? `<div class="task-attachments">${attachments
-                  .map(
-                    (file) =>
-                      `<a class="attachment-link" href="${escapeHtml(file.dataUrl)}" download="${escapeHtml(file.name)}" target="_blank" rel="noopener">${escapeHtml(file.name)}</a>`,
-                  )
+                  .map((file) => taskAttachmentLinkHtml(file))
                   .join("")}</div>`
               : "";
             return `
@@ -5228,30 +5473,27 @@ function renderTaskBoard() {
                 <div class="task-status-grid">
                   ${assigned ? `<span><strong>Phản hồi:</strong> ${escapeHtml(responseText)}</span>` : ""}
                   <span><strong>${assigned ? "Báo cáo" : "Cập nhật"}:</strong> ${escapeHtml(reportText)}</span>
-                  ${taskCompletionNeedsReview(task) ? `<span><strong>Đánh giá hoàn thành:</strong> Chờ đánh giá Đạt/Không đạt</span>` : ""}
-                  ${taskCompletionReviewStatus(task) === "failed" ? `<span><strong>Đánh giá hoàn thành:</strong> Không đạt · Yêu cầu tiếp tục thực hiện</span>` : ""}
-                  ${taskCompletionIsApproved(task) ? `<span><strong>Đánh giá hoàn thành:</strong> Đạt${taskIsLateCompletion(task) ? " · Chậm tiến độ" : ""}</span>` : ""}
+                  ${taskCompletionReviewStatus(task) ? `<span><strong>Đánh giá hoàn thành:</strong> ${taskCompletionReviewValueHtml(task)}</span>` : ""}
                   <span><strong>Chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))} · Thực hiện KPI ${formatScore(taskKpiActualScore(task))}</span>
                 </div>
                 <div class="progress" aria-label="Tiến độ ${task.progress}%"><span style="width:${clamp(task.progress, 0, 100)}%"></span></div>
                 ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
                 ${attachmentList}
                 <div class="row-actions task-card-actions">
-                  ${editable ? `<button class="ghost task-icon-button" data-edit-task="${task.id}" type="button" title="${assigned ? "Sửa giao việc" : "Sửa công việc"}" aria-label="Sửa công việc"><span aria-hidden="true">&#9998;</span></button>` : ""}
+                  ${editable ? `<button class="ghost task-icon-button" data-edit-task="${task.id}" type="button" title="Sửa công việc" aria-label="Sửa công việc"><span aria-hidden="true">&#9998;</span></button>` : ""}
                   ${copyable ? `<button class="ghost task-icon-button" data-copy-task="${task.id}" type="button" title="Sao chép công việc" aria-label="Sao chép công việc"><span aria-hidden="true">&#9112;</span></button>` : ""}
-                  ${reportable ? `<button class="ghost task-icon-button" data-respond-task="${task.id}" type="button" title="${assigned ? "Phản hồi và báo cáo tiến độ" : "Cập nhật tiến độ"}" aria-label="Cập nhật tiến độ"><span aria-hidden="true">&#8635;</span></button>` : ""}
+                  ${reportable ? `<button class="ghost task-icon-button" data-respond-task="${task.id}" type="button" title="${assigned ? "Phản hồi và báo cáo tiến độ" : "Cập nhật tiến độ"}" aria-label="${assigned ? "Phản hồi và báo cáo tiến độ" : "Cập nhật tiến độ"}"><span aria-hidden="true">&#8635;</span></button>` : ""}
                   ${reviewable ? `<button class="ghost task-icon-button task-icon-approve" data-review-task="${task.id}" type="button" title="Duyệt hoàn thành" aria-label="Duyệt hoàn thành"><span aria-hidden="true">&#10003;</span></button>` : ""}
-                  ${assessable && !editable ? `<button class="ghost task-icon-button" data-assess-task="${task.id}" type="button" title="Đánh giá" aria-label="Đánh giá"><span aria-hidden="true">&#9733;</span></button>` : ""}
                   ${deletable ? `<button class="ghost task-icon-button task-icon-delete" data-delete-task="${task.id}" type="button" title="Xóa công việc" aria-label="Xóa công việc"><span aria-hidden="true">&times;</span></button>` : ""}
-                  ${editable || copyable || deletable || reportable || reviewable || assessable ? "" : "<span class=\"muted\">Chỉ xem</span>"}
+                  ${editable || copyable || deletable || reportable || reviewable ? "" : "<span class=\"muted\">Chỉ xem</span>"}
                 </div>
               </article>
             `;
           })
           .join("");
-        const count = visibleTaskRecords(search, status, timeFilter, projectFilter).length;
+        const count = tasks.filter((task) => taskMatchesStatusFilter(task, status)).length;
         return `
-          <section class="task-column${mobileExpandedTaskStatus === status ? " is-mobile-expanded" : ""}">
+          <section class="task-column">
             <button class="task-column-head" data-open-task-status="${escapeHtml(status)}" type="button" aria-label="Xem tất cả công việc trạng thái ${escapeHtml(status)}">
               <span>${escapeHtml(status)}</span>
               <strong>${count}</strong>
@@ -5264,6 +5506,7 @@ function renderTaskBoard() {
   };
 
   byId("taskBoard").innerHTML = `<div class="task-columns">${renderTaskColumns()}</div>`;
+  hydrateTaskAttachmentLinks(byId("taskBoard"));
   applyFieldCustomizations();
 }
 
@@ -5287,7 +5530,7 @@ function renderTaskStatusDetailItem(task) {
       <div class="kpi-task-detail-meta">
         <span><strong>${isAssignedTask(task) ? "Người được giao" : "Người thực hiện"}:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
         <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
-        <span><strong>Tên dự án:</strong> ${escapeHtml(task.projectName || "Chưa cập nhật")}</span>
+        <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
         ${isAssignedTask(task) ? `<span><strong>Người giao:</strong> ${escapeHtml(task.assignedByName || task.createdBy || "Chưa ghi nhận")}</span>` : ""}
         <span><strong>Nhóm công việc:</strong> ${escapeHtml(taskKindLabels[normalizeTaskKind(task)] || "Công việc")}</span>
         <span><strong>Danh mục KPI:</strong> ${escapeHtml(task.category || "Chưa phân loại")}</span>
@@ -5296,7 +5539,7 @@ function renderTaskStatusDetailItem(task) {
         <span><strong>Ngày bắt đầu:</strong> ${escapeHtml(formatTaskStartDate(task) || "Chưa có")}</span>
         <span><strong>Ngày hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
         <span><strong>Tiến độ:</strong> ${formatScore(task.progress)}%</span>
-        <span><strong>Đánh giá hoàn thành:</strong> ${escapeHtml(taskCompletionReviewLabel(task))}${taskIsLateCompletion(task) ? " · Chậm tiến độ" : ""}</span>
+        <span><strong>Đánh giá hoàn thành:</strong> ${taskCompletionReviewValueHtml(task)}</span>
         <span><strong>Đánh giá chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))}</span>
         <span><strong>Điểm thực hiện KPI:</strong> ${formatScore(taskKpiActualScore(task))}</span>
         <span><strong>Cập nhật gần nhất:</strong> ${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% - ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
@@ -5351,26 +5594,29 @@ function closeTaskCompletionReviewDialog() {
 }
 
 function updateTaskCompletionReviewQualityField() {
-  const passed = byId("taskCompletionReviewStatus").value === "passed";
+  const decision = byId("taskCompletionReviewStatus").value;
   const field = byId("taskCompletionReviewQualityField");
   const input = byId("taskCompletionReviewQualityPercent");
+  const form = byId("taskCompletionReviewForm");
   const timing = byId("taskCompletionReviewTiming");
-  const task = state.tasks.find((item) => item.id === byId("taskCompletionReviewTaskId").value);
+  const taskId = byId("taskCompletionReviewTaskId").value;
+  const task = state.tasks.find((item) => item.id === taskId);
+  const passed = decision === "passed";
   field.classList.toggle("is-hidden", !passed);
-  input.disabled = !passed;
+  form.classList.toggle("has-quality-input", passed);
   input.required = passed;
+  input.disabled = !passed;
   if (!passed) input.value = "";
-  const due = task ? taskDeadlineDate(task) : null;
-  if (!passed || !due) {
-    timing.classList.add("is-hidden");
-    timing.textContent = "";
-    return;
-  }
-  const delta = due.getTime() - Date.now();
-  const label = delta >= 0 ? "Vượt tiến độ / đúng hạn" : "Chậm tiến độ";
-  timing.textContent = `Kết quả Đạt sẽ được ghi nhận: ${label}.`;
-  timing.classList.toggle("is-hidden", false);
-  timing.classList.toggle("is-late", delta < 0);
+
+  const previewTask = task && passed
+    ? { ...task, completionReviewStatus: "passed", completionReviewedAt: new Date().toISOString(), lateCompletion: false }
+    : null;
+  const previewStatus = previewTask ? taskCompletionTimingStatus(previewTask) : "";
+  const previewLabel = previewTask ? taskCompletionTimingLabel(previewTask) : "";
+  timing.classList.toggle("is-hidden", !previewLabel);
+  timing.classList.toggle("is-ahead", previewStatus === "ahead");
+  timing.classList.toggle("is-late", previewStatus === "late");
+  timing.textContent = previewLabel ? `Kết quả Đạt sẽ được ghi nhận: ${previewLabel}` : "";
 }
 
 function openTaskCompletionReviewDialog(taskId) {
@@ -5379,7 +5625,7 @@ function openTaskCompletionReviewDialog(taskId) {
   const owner = personById(task.ownerId);
   const currentStatus = getDueStatus(task);
   byId("taskCompletionReviewTaskId").value = task.id;
-  byId("taskCompletionReviewStatus").value = "";
+  byId("taskCompletionReviewStatus").value = taskCompletionIsApproved(task) ? "passed" : "";
   byId("taskCompletionReviewQualityPercent").value = normalizeTaskQualityInput(task.qualityPercent);
   byId("taskCompletionReviewNote").value = "";
   updateTaskCompletionReviewQualityField();
@@ -5393,26 +5639,35 @@ function openTaskCompletionReviewDialog(taskId) {
 function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") {
   const taskIndex = state.tasks.findIndex((item) => item.id === taskId);
   const task = taskIndex >= 0 ? state.tasks[taskIndex] : null;
-  if (!task || !canReviewTaskCompletion(task) || !["passed", "failed"].includes(decision)) return;
+  if (!task || !canReviewTaskCompletion(task) || !["passed", "failed"].includes(decision)) return false;
 
   const timestamp = new Date().toISOString();
   const actor = currentActorInfo();
   const previousStatus = getDueStatus(task);
+  const previousWorkflowStatus = normalizeTaskStatus(task.status);
   const approved = decision === "passed";
   const assessedQuality = approved ? normalizeTaskQualityInput(qualityPercent) : "";
   if (approved && assessedQuality === "") {
     alert("Nhập Đánh giá chất lượng trước khi lưu kết quả Đạt.");
     return false;
   }
+  const wasApproved = taskCompletionIsApproved(task);
+  const completionReviewedAt = approved && wasApproved && task.completionReviewedAt ? task.completionReviewedAt : timestamp;
+  const returnedStatus = previousStatus === "Quá hạn" || taskIsPastDeadline(task) ? "Quá hạn" : "Đang thực hiện";
+  const lateCompletion = approved
+    ? wasApproved
+      ? taskIsLateCompletion(task)
+      : previousStatus === "Quá hạn" || taskIsPastDeadline(task)
+    : false;
   const nextTask = {
     ...task,
-    status: approved ? TASK_STATUS_COMPLETED : "Đang thực hiện",
+    status: approved ? TASK_STATUS_COMPLETED : returnedStatus,
     completionReviewStatus: decision,
-    completionReviewedAt: timestamp,
+    completionReviewedAt,
     completionReviewedById: actor.id,
     completionReviewedByName: actor.name,
     completionReviewNote: String(note || "").trim(),
-    lateCompletion: approved && (previousStatus === "Quá hạn" || taskIsPastDeadline(task)),
+    lateCompletion,
     qualityPercent: assessedQuality,
     qualityAssessedAt: approved ? timestamp : "",
     qualityAssessedById: approved ? actor.id : "",
@@ -5428,16 +5683,22 @@ function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") 
     nextTask.completedByName = "";
   }
   const nextStatus = getDueStatus(nextTask);
+  const completionTimingStatus = approved ? taskCompletionTimingStatus(nextTask) : "";
+  const completionTimingLabel = approved ? taskCompletionTimingLabel(nextTask) : "";
   nextTask.progressReports = [
     ...(task.progressReports || []),
     {
       id: uid("task-report"),
       type: "completion-review",
       decision,
-      action: approved ? "Đánh giá hoàn thành: Đạt" : "Đánh giá hoàn thành: Không đạt",
-      previousStatus,
-      status: nextStatus,
+      action: approved
+        ? `${wasApproved ? "Cập nhật đánh giá chất lượng" : "Đánh giá hoàn thành: Đạt"}${completionTimingLabel ? ` · ${completionTimingLabel}` : ""} · Chất lượng: ${formatScore(assessedQuality)}%`
+        : `Đánh giá hoàn thành: Không đạt · Chuyển về ${returnedStatus}`,
+      previousStatus: previousWorkflowStatus,
+      status: normalizeTaskStatus(nextTask.status),
       progress: Number(nextTask.progress || 0),
+      qualityPercent: assessedQuality,
+      completionTiming: completionTimingStatus,
       note: String(note || "").trim(),
       createdAt: timestamp,
       createdById: actor.id,
@@ -5449,14 +5710,18 @@ function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") 
   syncPersonalEvaluationTaskScoresForTask(auditedTask, task);
   const owner = personById(auditedTask.ownerId);
   logActivity({
-    action: approved ? "Đánh giá công việc Đạt" : "Đánh giá công việc Không đạt",
+    action: approved
+      ? wasApproved
+        ? "Cập nhật đánh giá chất lượng"
+        : `Đánh giá công việc Đạt${completionTimingLabel ? ` · ${completionTimingLabel}` : ""}`
+      : `Đánh giá công việc Không đạt · Chuyển về ${returnedStatus}`,
     module: "Công việc",
     targetType: "task",
     targetId: auditedTask.id,
     personId: auditedTask.ownerId,
     departmentId: owner?.departmentId || "",
     period: taskPeriod(auditedTask),
-    detail: `${auditedTask.title} · ${previousStatus} -> ${nextStatus}${note ? ` · ${String(note).trim()}` : ""}`,
+    detail: `${auditedTask.title} · ${previousWorkflowStatus} -> ${normalizeTaskStatus(auditedTask.status)}${approved && completionTimingLabel ? ` · ${completionTimingLabel}` : ""}${approved ? ` · chất lượng ${formatScore(assessedQuality)}%` : ""}${note ? ` · ${String(note).trim()}` : ""}`,
   });
   saveState();
   renderAll();
@@ -5485,16 +5750,14 @@ function taskDetailActionMarkup(task) {
   const copyable = canCopyTask(task);
   const reportable = canUpdateTaskProgress(task) && (!taskHasQualityPercent(task) || isAdmin());
   const reviewable = canReviewTaskCompletion(task);
-  const assessable = canAssessTaskQuality(task);
   const endable = canEndTaskAssignment(task);
   const deletable = canDeleteTask(task);
-  if (editable) actions.push('<button type="button" data-task-detail-action="edit">Sửa</button>');
-  if (copyable) actions.push('<button class="ghost" type="button" data-task-detail-action="copy">Sao chép</button>');
-  if (reportable) actions.push(`<button class="ghost" type="button" data-task-detail-action="report">${assigned ? "Phản hồi/Báo cáo" : "Cập nhật tiến độ"}</button>`);
-  if (reviewable) actions.push('<button class="ghost" type="button" data-task-detail-action="review">Duyệt hoàn thành</button>');
-  if (assessable && !editable) actions.push('<button class="ghost" type="button" data-task-detail-action="assess">Đánh giá</button>');
-  if (endable) actions.push('<button class="ghost" type="button" data-task-detail-action="end">Kết thúc</button>');
-  if (deletable) actions.push('<button class="ghost danger-action" type="button" data-task-detail-action="delete">Xóa</button>');
+  if (editable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="edit" title="Sửa công việc" aria-label="Sửa công việc"><span aria-hidden="true">&#9998;</span></button>');
+  if (copyable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="copy" title="Sao chép công việc" aria-label="Sao chép công việc"><span aria-hidden="true">&#9112;</span></button>');
+  if (reportable) actions.push(`<button class="ghost task-icon-button" type="button" data-task-detail-action="report" title="${assigned && canReportTask(task) ? "Phản hồi và báo cáo tiến độ" : "Cập nhật tiến độ"}" aria-label="${assigned && canReportTask(task) ? "Phản hồi và báo cáo tiến độ" : "Cập nhật tiến độ"}"><span aria-hidden="true">&#8635;</span></button>`);
+  if (reviewable) actions.push('<button class="ghost task-icon-button task-icon-approve" type="button" data-task-detail-action="review" title="Duyệt hoàn thành" aria-label="Duyệt hoàn thành"><span aria-hidden="true">&#10003;</span></button>');
+  if (endable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="end" title="Kết thúc công việc" aria-label="Kết thúc công việc"><span aria-hidden="true">&#9632;</span></button>');
+  if (deletable) actions.push('<button class="ghost task-icon-button task-icon-delete" type="button" data-task-detail-action="delete" title="Xóa công việc" aria-label="Xóa công việc"><span aria-hidden="true">&times;</span></button>');
   return actions.length ? actions.join("") : '<span class="muted">Chỉ xem chi tiết công việc.</span>';
 }
 
@@ -5537,21 +5800,13 @@ function openTaskDetailInlineEditor(taskId, focusId = "") {
   }
 }
 
-// ✅ THÊM async VÀ await ĐỂ ĐẢM BẢO XÓA TRÊN SUPABASE XONG MỚI RENDER LAI
-async function deleteTaskRecord(taskId) {
+function deleteTaskRecord(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task || !canDeleteTask(task)) return false;
   if (!confirm("Xóa vĩnh viễn công việc này? Dữ liệu công việc sẽ bị loại khỏi danh mục và đồng bộ xóa trên các thiết bị khác.")) return false;
-  
   registerDeletedId(taskId);
   const owner = personById(task.ownerId);
-
-  // 1. Ép chờ Supabase xóa xong trên Cloud trước
-  await deleteFromSupabase("tasks", taskId);
-
-  // 2. Sau đó mới cập nhật lại State ở Frontend
   state.tasks = state.tasks.filter((item) => item.id !== taskId);
-
   syncPersonalEvaluationTaskScoresForTask(null, task);
   logActivity({
     action: "Xóa",
@@ -5565,15 +5820,10 @@ async function deleteTaskRecord(taskId) {
     details: `${owner?.name || "Chưa rõ người nhận"} · ${normalizeTaskStatus(task.status)}`,
     score: `${formatScore(task.progress)}%`,
   });
-
   saveState();
   renderAll();
   return true;
 }
-
-// =========================================================================
-// 🟢 SẮP XẾP BỐ CỤC THÔNG TIN CÔNG VIỆC TRÊN MOBILE CHUẨN KHOA HỌC
-// =========================================================================
 
 function openTaskDetailDialog(taskId) {
   restoreTaskDetailInlineEditor({ reset: true });
@@ -5588,10 +5838,7 @@ function openTaskDetailDialog(taskId) {
   const violations = taskViolationReasons(task);
   const attachmentList = attachments.length
     ? `<div class="task-detail-attachments">${attachments
-        .map(
-          (file) =>
-            `<a class="attachment-link" href="${escapeHtml(file.dataUrl)}" download="${escapeHtml(file.name)}" target="_blank" rel="noopener">${escapeHtml(file.name)}</a>`,
-        )
+        .map((file) => taskAttachmentLinkHtml(file))
         .join("")}</div>`
     : `<p class="muted">Chưa có hồ sơ liên quan.</p>`;
 
@@ -5605,31 +5852,27 @@ function openTaskDetailDialog(taskId) {
     <span><strong>Chất lượng</strong><b>${escapeHtml(taskQualityLabel(task))}</b></span>
     <span><strong>Điểm thực hiện KPI</strong><b>${formatScore(taskKpiActualScore(task))}</b></span>
   `;
-
-  // 🟢 Bố cục sắp xếp Lưới 2 cột ghép cặp & Dòng tràn 100%
   byId("taskDetailContent").innerHTML = `
     <section class="task-detail-section task-detail-information">
       <h3>Thông tin công việc</h3>
       <div class="task-detail-info-grid">
         <span><strong>${assigned ? "Người được giao" : "Người thực hiện"}</strong>${escapeHtml(owner?.name || "Chưa cập nhật")}</span>
         <span><strong>Người phối hợp</strong>${escapeHtml(collaborators.length ? collaborators.join(", ") : "Chưa chọn")}</span>
-        ${assigned ? `<span class="full-width"><strong>Người giao</strong>${escapeHtml(task.assignedByName || task.createdBy || "Chưa cập nhật")}</span>` : ""}
-        <span class="full-width"><strong>Tên dự án</strong>${escapeHtml(task.projectName || "Chưa cập nhật")}</span>
-        <span class="full-width"><strong>Danh mục KPI cá nhân</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
+        ${assigned ? `<span><strong>Người giao</strong>${escapeHtml(task.assignedByName || task.createdBy || "Chưa cập nhật")}</span>` : ""}
+        <span><strong>Tên dự án</strong>${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
+        <span><strong>Danh mục KPI cá nhân</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
         ${!assigned ? `<span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>` : ""}
         ${!assigned ? `<span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}</span>` : ""}
         <span><strong>Ngày bắt đầu</strong>${escapeHtml(formatTaskStartDate(task) || "Chưa cập nhật")}</span>
         <span><strong>Ngày hoàn thành</strong>${escapeHtml(formatTaskDeadline(task) || "Chưa cập nhật")}</span>
-        <span class="full-width"><strong>Đánh giá hoàn thành</strong>${escapeHtml(taskCompletionReviewLabel(task))}${taskIsLateCompletion(task) ? " · Chậm tiến độ" : ""}</span>
-        <span class="full-width"><strong>Cập nhật gần nhất</strong>${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% · ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
+        <span><strong>Đánh giá hoàn thành</strong>${taskCompletionReviewValueHtml(task)}</span>
+        <span><strong>Cập nhật gần nhất</strong>${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% · ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
       </div>
     </section>
-
     <section class="task-detail-section">
       <h3>${assigned ? "Nội dung giao việc" : "Nội dung công việc"}</h3>
       <p class="task-detail-note">${escapeHtml(task.note || "Chưa cập nhật.")}</p>
     </section>
-
     ${assigned ? `
       <section class="task-detail-section">
         <h3>Phản hồi nhận việc</h3>
@@ -5640,23 +5883,20 @@ function openTaskDetailDialog(taskId) {
         <p class="task-detail-note">${escapeHtml(task.responseNote || "Chưa có nội dung phản hồi.")}</p>
       </section>
     ` : ""}
-
     <section class="task-detail-section">
       <h3>Lịch sử báo cáo tiến độ</h3>
       ${taskProgressReportListHtml(task) || `<p class="muted">Chưa có báo cáo tiến độ.</p>`}
     </section>
-
     <section class="task-detail-section">
       <h3>Hồ sơ liên quan</h3>
       ${attachmentList}
     </section>
-
     ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
   `;
-
   byId("taskDetailDialog").dataset.taskId = task.id;
   byId("taskDetailDialog").classList.remove("is-hidden");
   byId("taskDetailDialog").setAttribute("aria-hidden", "false");
+  hydrateTaskAttachmentLinks(byId("taskDetailDialog"));
 }
 
 function closeTaskDetailDialog() {
@@ -5664,12 +5904,6 @@ function closeTaskDetailDialog() {
   byId("taskDetailDialog").classList.add("is-hidden");
   byId("taskDetailDialog").setAttribute("aria-hidden", "true");
   delete byId("taskDetailDialog").dataset.taskId;
-
-  // 🌟 Nếu mở từ Hộp thư thông báo -> Bấm đóng sẽ quay lại Hộp thư
-  if (openedTaskDetailFromInbox) {
-    openedTaskDetailFromInbox = false; // Reset cờ
-    openTaskInboxDialog();
-  }
 }
 
 function formatFileSize(bytes) {
@@ -5689,13 +5923,14 @@ function renderTaskAttachmentDraft() {
     .map(
       (file) => `
         <div class="attachment-item">
-          <a href="${escapeHtml(file.dataUrl)}" download="${escapeHtml(file.name)}" target="_blank" rel="noopener">${escapeHtml(file.name)}</a>
+          ${taskAttachmentLinkHtml(file)}
           <span class="muted">${escapeHtml(formatFileSize(file.size))}</span>
           <button class="ghost" data-remove-task-attachment="${escapeHtml(file.id)}" type="button">Bỏ</button>
         </div>
       `,
     )
     .join("");
+  hydrateTaskAttachmentLinks(list);
 }
 
 function renderAssignmentTaskAttachmentDraft() {
@@ -5708,13 +5943,14 @@ function renderAssignmentTaskAttachmentDraft() {
     .map(
       (file) => `
         <div class="attachment-item">
-          <a href="${escapeHtml(file.dataUrl)}" download="${escapeHtml(file.name)}" target="_blank" rel="noopener">${escapeHtml(file.name)}</a>
+          ${taskAttachmentLinkHtml(file)}
           <span class="muted">${escapeHtml(formatFileSize(file.size))}</span>
           <button class="ghost" data-remove-assignment-attachment="${escapeHtml(file.id)}" type="button">Bỏ</button>
         </div>
       `,
     )
     .join("");
+  hydrateTaskAttachmentLinks(list);
 }
 
 function renderCriteriaInputs(existing = {}) {
@@ -5770,11 +6006,11 @@ function renderTaskBehaviorLinks(links = []) {
   const container = byId("taskBehaviorLinks");
   if (!container) return;
   if (!links.length) {
-    container.innerHTML = '<span class="muted">Chưa có lỗi tự động từ công việc được giao trong kỳ này.</span>';
+    container.innerHTML = '<span class="muted">Chưa có lỗi tự động từ công việc trong kỳ này.</span>';
     return;
   }
   container.innerHTML = `
-    <strong>Lỗi tự động từ công việc được giao</strong>
+    <strong>Lỗi tự động từ công việc</strong>
     ${links
       .map(
         (item) => `
@@ -5801,7 +6037,7 @@ function renderBehaviorInputs(existing = {}) {
         <label class="behavior-item">
           <span class="behavior-top"><strong>${rule[0]}</strong><span class="badge ${rule[1] > 0 ? "good" : "bad"}">${rule[1] > 0 ? "+" : ""}${rule[1]}/lần</span></span>
           <input id="behavior-${index}" type="number" min="0" value="${escapeHtml(manualValue)}" data-score-input>
-          ${automaticCount ? `<span class="field-note is-warning">Tự động từ giao việc: ${automaticCount} lỗi</span>` : ""}
+          ${automaticCount ? `<span class="field-note is-warning">Tự động từ công việc: ${automaticCount} lỗi</span>` : ""}
         </label>
       `;
       },
@@ -6036,7 +6272,7 @@ function renderKpiTaskDetailItem(task) {
       <div class="kpi-task-detail-meta">
         <span><strong>Người thực hiện:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
         <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
-        <span><strong>Tên dự án:</strong> ${escapeHtml(task.projectName || "Chưa cập nhật")}</span>
+        <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
         <span><strong>Loại:</strong> ${escapeHtml(taskKindLabels[normalizeTaskKind(task)] || "Công việc")}</span>
         ${!isAssignedTask(task) ? `<span><strong>Loại công việc:</strong> ${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)])}</span>` : ""}
         ${!isAssignedTask(task) ? `<span><strong>Định kỳ:</strong> ${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)])}</span>` : ""}
@@ -6044,6 +6280,7 @@ function renderKpiTaskDetailItem(task) {
         <span><strong>Ngày bắt đầu:</strong> ${escapeHtml(formatTaskStartDate(task) || "Chưa có")}</span>
         <span><strong>Ngày hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
         <span><strong>Tiến độ:</strong> ${formatScore(task.progress)}%</span>
+        <span><strong>Đánh giá hoàn thành:</strong> ${taskCompletionReviewValueHtml(task)}</span>
         <span><strong>Đánh giá chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))}</span>
         <span><strong>Điểm thực hiện KPI:</strong> ${formatScore(taskKpiActualScore(task))}</span>
         <span><strong>Cập nhật gần nhất:</strong> ${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% - ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
@@ -6472,19 +6709,13 @@ function renderDepartmentEffectivenessChart() {
 function renderHistoryTargetOptions() {
   const type = byId("historyType").value || "department";
   const current = byId("historyTarget").value;
-  
-  // 🌟 Thêm lựa chọn Tất cả các phòng / Toàn hệ thống cho Admin
-  const deptOptions = [
-    { value: "all", label: "Toàn hệ thống" },
-    ...visibleDepartmentsForHistory().map((department) => ({ value: department.id, label: department.name }))
-  ];
-  
-  const personOptions = visiblePeopleForHistory().map((person) => ({
-    value: person.id,
-    label: `${person.name} - ${departmentById(person.departmentId)?.name || "Chưa rõ phòng"}`,
-  }));
-
-  const options = type === "department" ? deptOptions : personOptions;
+  const options =
+    type === "department"
+      ? visibleDepartmentsForHistory().map((department) => ({ value: department.id, label: department.name }))
+      : visiblePeopleForHistory().map((person) => ({
+          value: person.id,
+          label: `${person.name} - ${departmentById(person.departmentId)?.name || "Chưa rõ phòng"}`,
+        }));
   const selected = options.some((option) => option.value === current) ? current : options[0]?.value;
   fillSelect(byId("historyTarget"), options.length ? options : [{ value: "", label: "Chưa có dữ liệu" }], selected);
 }
@@ -6510,16 +6741,12 @@ function historyItemSortValue(item) {
 function activityMatchesHistory(activity, type, targetId) {
   if (!activity || !targetId) return false;
   if (type === "department") {
-    // 🌟 Chọn "Tất cả các phòng" -> Hiển thị toàn bộ dòng thời gian
-    if (targetId === "all") return true;
-
-    // 🌟 Chọn 1 phòng cụ thể -> CHỈ hiện nhật ký thuộc phòng đó
+    if (activity.targetType === "bulletin") return true;
     if (activity.departmentId === targetId) return true;
     if (activity.personId && personById(activity.personId)?.departmentId === targetId) return true;
     if (activity.targetType === "department" && activity.targetId === targetId) return true;
     return false;
   }
-  
   const person = personById(targetId);
   return (
     activity.personId === targetId ||
@@ -6706,7 +6933,8 @@ function taskTimelineItems(task) {
   const status = getDueStatus(task);
   const collaboratorMeta = collaboratorNames.length ? ` · phối hợp ${collaboratorNames.join(", ")}` : "";
   const regularMeta = isAssignedTask(task) ? "" : ` · ${taskWorkMeta(task)}`;
-  const projectMeta = task.projectName ? ` · dự án ${task.projectName}` : "";
+  const projectName = projectNameForTask(task);
+  const projectMeta = projectName ? ` · dự án ${projectName}` : "";
   const qualityMeta = taskHasQualityPercent(task) ? ` · chất lượng ${formatScore(taskQualityPercentValue(task))}%` : "";
   const startMeta = task.startDate ? ` · bắt đầu ${formatTaskStartDate(task)}` : "";
   const baseMeta = `${taskKindLabels[normalizeTaskKind(task)]}${regularMeta}${projectMeta} · ${owner?.name || "Chưa rõ"}${collaboratorMeta} · ${status}${startMeta} · hoàn thành ${formatTaskDeadline(task) || "chưa có"}${qualityMeta}`;
@@ -6753,8 +6981,16 @@ function taskTimelineItems(task) {
       badgeClass: "warn",
     });
   }
+  const qualityIncludedInCompletionReview = (task.progressReports || []).some(
+    (report) => report.type === "completion-review" && report.decision === "passed" && normalizeTaskQualityInput(report.qualityPercent) !== "",
+  );
   (task.progressReports || []).forEach((report) => {
     const isCompletionReview = report.type === "completion-review";
+    const reviewedQuality = normalizeTaskQualityInput(report.qualityPercent);
+    const reviewedTiming = isCompletionReview && report.decision === "passed"
+      ? report.completionTiming || taskCompletionTimingStatus(task)
+      : "";
+    const reviewedTimingLabel = reviewedTiming === "ahead" ? "Vượt tiến độ" : reviewedTiming === "late" ? "Chậm tiến độ" : "";
     const reportStatus = report.status || status;
     const transition = report.previousStatus && report.previousStatus !== reportStatus
       ? `${report.previousStatus} -> ${reportStatus}`
@@ -6765,11 +7001,17 @@ function taskTimelineItems(task) {
       timestamp: report.createdAt,
       actorName: report.createdBy || base.actorName,
       meta: `${report.createdBy || "Người cập nhật"} · ${report.action || transition}${report.note ? ` · ${report.note}` : ""}`,
-      score: isCompletionReview ? (report.decision === "passed" ? "Đạt" : "Không đạt") : `${formatScore(report.progress)}%`,
-      badgeClass: isCompletionReview ? (report.decision === "passed" ? "good" : "bad") : taskStatusBadgeClass(reportStatus),
+      score: isCompletionReview
+        ? report.decision === "passed"
+          ? reviewedQuality === ""
+            ? `Đạt${reviewedTimingLabel ? ` · ${reviewedTimingLabel}` : ""}`
+            : `Đạt${reviewedTimingLabel ? ` · ${reviewedTimingLabel}` : ""} · ${formatScore(reviewedQuality)}%`
+          : "Không đạt"
+        : `${formatScore(report.progress)}%`,
+      badgeClass: isCompletionReview ? (report.decision === "passed" ? (reviewedTiming === "ahead" ? "ahead" : reviewedTiming === "late" ? "bad" : "good") : "bad") : taskStatusBadgeClass(reportStatus),
     });
   });
-  if (task.qualityAssessedAt && taskHasQualityPercent(task)) {
+  if (task.qualityAssessedAt && taskHasQualityPercent(task) && !qualityIncludedInCompletionReview) {
     items.push({
       ...base,
       type: "Đánh giá chất lượng",
@@ -6867,20 +7109,10 @@ function renderHistoryTimeline(items) {
               item.targetType && item.targetId
                 ? ` data-history-target-type="${escapeHtml(item.targetType)}" data-history-target-id="${escapeHtml(item.targetId)}" data-history-person-id="${escapeHtml(item.personId || "")}" data-history-department-id="${escapeHtml(item.departmentId || "")}" data-history-title="${escapeHtml(item.title || "")}"`
                 : "";
-
-            // 🌟 TỰ ĐỘNG XÁC ĐỊNH TÊN PHÒNG BAN CHO TỪNG DÒNG LỊCH SỬ
-            const deptId = item.departmentId || (item.personId ? personById(item.personId)?.departmentId : "");
-            const deptObj = deptId ? departmentById(deptId) : null;
-            const deptBadgeText = deptObj ? deptObj.name : "Hệ thống / Toàn Ban";
-
             return `
             <article class="history-item${targetAttrs ? " history-link" : ""}"${targetAttrs} ${targetAttrs ? 'role="button" tabindex="0"' : ""}>
               <div class="history-item-head">
-                <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
-                  <span class="badge ${item.badgeClass || ""}">${escapeHtml(item.type)}</span>
-                  <!-- 🟢 THẺ HIỂN THỊ TÊN PHÒNG BAN NỔI BẬT -->
-                  <span class="badge" style="background: #e2e8f0; color: #0f2d3a; font-weight: 600;">${escapeHtml(deptBadgeText)}</span>
-                </div>
+                <span class="badge ${item.badgeClass || ""}">${escapeHtml(item.type)}</span>
                 <div class="history-item-audit">
                   <time>${escapeHtml(item.timestamp ? formatDateTime(item.timestamp) : formatPeriod(item.period) || "Không có kỳ")}</time>
                   <span class="history-item-account">${escapeHtml(historyItemActorLabel(item))}</span>
@@ -7005,7 +7237,7 @@ function renderDashboard(options = {}) {
     .filter((task) => taskViolationReasons(task).length)
     .forEach((task) =>
       alerts.push({
-        text: `Lỗi giao việc: ${task.title} (${personById(task.ownerId)?.name || "chưa rõ"}) - ${taskViolationReasons(task).join("; ")}`,
+        text: `Lỗi công việc: ${task.title} (${personById(task.ownerId)?.name || "chưa rõ"}) - ${taskViolationReasons(task).join("; ")}`,
         taskId: task.id,
       }),
     );
@@ -7135,12 +7367,13 @@ function bulletinVoteCounts(post) {
 
 function visibleBulletins() {
   const posts = Array.isArray(state.bulletins) ? state.bulletins : [];
-  if (canManageBulletins()) return posts;
-  return posts.filter((post) => post.status !== "draft");
+  if (isAdmin()) return posts;
+  const accountId = currentAccount()?.id;
+  return posts.filter((post) => post.status !== "draft" || (accountId && post.createdById === accountId));
 }
 
 function bulletinSortValue(post) {
-  return post.publishDate || post.updatedAt || post.createdAt || "";
+  return [post.publishDate || "", post.updatedAt || "", post.createdAt || "", post.id || ""].join("|");
 }
 
 function bulletinMatchesFilters(post, search, category) {
@@ -7194,7 +7427,7 @@ async function hydrateBulletinMediaElements(root = document) {
     );
 }
 
-function renderBulletinMedia(media = [], { detail = false } = {}) {
+function renderBulletinMedia(media = []) {
   if (!media.length) return "";
   return `
     <div class="bulletin-media-grid">
@@ -7207,20 +7440,14 @@ function renderBulletinMedia(media = [], { detail = false } = {}) {
           const key = escapeHtml(storedFileKey(file));
           const name = escapeHtml(file.name || "Media");
           const mediaAttrs = `data-bulletin-media-key="${key}"`;
-          const detailActions = detail
-            ? `<div class="bulletin-media-actions">
-                ${kind === "pdf" ? `<a class="ghost bulletin-media-view" href="${source || "#"}" ${mediaAttrs} target="_blank" rel="noopener">Xem PDF</a>` : ""}
-                <a class="ghost bulletin-media-download" href="${source || "#"}" ${mediaAttrs} download="${name}" target="_blank" rel="noopener">Tải xuống</a>
-              </div>`
-            : "";
           if (kind === "image") {
-            return `<figure class="bulletin-media-item"><img${sourceAttr} ${mediaAttrs} alt="${name}" loading="lazy">${detailActions}</figure>`;
+            return `<figure class="bulletin-media-item"><img${sourceAttr} ${mediaAttrs} alt="${name}" loading="lazy"></figure>`;
           }
           if (kind === "video") {
-            return `<figure class="bulletin-media-item"><video${sourceAttr} ${mediaAttrs} controls preload="metadata"></video>${detailActions}</figure>`;
+            return `<figure class="bulletin-media-item"><video${sourceAttr} ${mediaAttrs} controls preload="metadata"></video></figure>`;
           }
           if (kind === "audio") {
-            return `<figure class="bulletin-media-item is-audio"><audio${sourceAttr} ${mediaAttrs} controls preload="metadata"></audio>${detailActions}</figure>`;
+            return `<figure class="bulletin-media-item is-audio"><audio${sourceAttr} ${mediaAttrs} controls preload="metadata"></audio></figure>`;
           }
           if (kind === "pdf") {
             return `
@@ -7229,13 +7456,11 @@ function renderBulletinMedia(media = [], { detail = false } = {}) {
                   <embed class="bulletin-pdf-viewer"${sourceAttr} ${mediaAttrs} type="application/pdf">
                   <span class="bulletin-pdf-fallback">Đang tải PDF...</span>
                 </object>
-                ${detail ? detailActions : `<a class="bulletin-pdf-open" href="${source || "#"}" ${mediaAttrs} target="_blank" rel="noopener">Mở PDF</a>`}
+                <a class="bulletin-pdf-open" href="${source || "#"}" ${mediaAttrs} target="_blank" rel="noopener">Mở PDF</a>
               </figure>
             `;
           }
-          return detail
-            ? `<figure class="bulletin-media-item is-file"><figcaption>${name}</figcaption>${detailActions}</figure>`
-            : `<a class="attachment-link" href="${source || "#"}" ${mediaAttrs} download="${name}" target="_blank" rel="noopener">Mở media</a>`;
+          return `<a class="attachment-link" href="${source || "#"}" ${mediaAttrs} download="${name}" target="_blank" rel="noopener">Mở media</a>`;
         })
         .join("")}
     </div>
@@ -7385,13 +7610,13 @@ function renderBulletinVoting(post) {
 
 function openBulletinDetailDialog(postId) {
   const post = bulletinById(postId);
-  if (!post || (!canManageBulletins() && post.status === "draft")) return;
+  if (!post || (post.status === "draft" && !canEditBulletin(post))) return;
   const media = Array.isArray(post.media) ? post.media : [];
-  const labels = [post.category || "Tin tức chung", post.pinned ? "Tin ghim" : "", canManageBulletins() ? bulletinStatusLabel(post.status || "published") : ""].filter(Boolean);
+  const labels = [post.category || "Tin tức chung", post.pinned ? "Tin ghim" : "", canEditBulletin(post) ? bulletinStatusLabel(post.status || "published") : ""].filter(Boolean);
   byId("bulletinDetailMeta").textContent = labels.join(" · ");
   byId("bulletinDetailTitle").textContent = post.title || "Tin bài";
   byId("bulletinDetailContent").textContent = post.content || "";
-  byId("bulletinDetailMedia").innerHTML = renderBulletinMedia(media, { detail: true });
+  byId("bulletinDetailMedia").innerHTML = renderBulletinMedia(media);
   bulletinDetailModalElement()?.classList.remove("has-landscape-media");
   bindBulletinDetailMediaOrientation();
   renderBulletinVoting(post);
@@ -7426,21 +7651,10 @@ function renderBulletinMediaDraft() {
   hydrateBulletinMediaElements(list);
 }
 
-// 🌟 Hàm tính số cột Bảng tin: PC 4 cột - Mobile 2 cột
-function bulletinMasonryColumnCount(cardCount = 1) {
-  const isMobile = window.innerWidth <= 768;
-  return isMobile ? 2 : 4; // 📱 Mobile 2 ô - 💻 PC 4 ô
-}
-
 function renderBulletinMasonry(cardHtmls) {
-  const columnCount = bulletinMasonryColumnCount(cardHtmls.length);
-  const columns = Array.from({ length: columnCount }, () => []);
-  cardHtmls.forEach((html, index) => {
-    columns[index % columnCount].push(html);
-  });
-  return columns
-    .map((items) => `<div class="bulletin-masonry-column">${items.join("")}</div>`)
-    .join("");
+  // CSS Grid places direct children left to right, then continues on the next row.
+  // This preserves the pinned/newest-first order established before rendering.
+  return cardHtmls.join("");
 }
 
 function renderBulletinBoard() {
@@ -7453,11 +7667,11 @@ function renderBulletinBoard() {
       if (Boolean(b.pinned) !== Boolean(a.pinned)) return Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
       return bulletinSortValue(b).localeCompare(bulletinSortValue(a));
     });
-  const allPosts = Array.isArray(state.bulletins) ? state.bulletins : [];
+  const allPosts = posts;
   const publishedCount = allPosts.filter((post) => post.status !== "draft").length;
   const draftCount = allPosts.length - publishedCount;
-  byId("bulletinAdminPanel").classList.toggle("is-hidden", !canManageBulletins());
-  byId("bulletinSummary").textContent = canManageBulletins()
+  byId("bulletinAdminPanel").classList.toggle("is-hidden", !canPublishBulletins());
+  byId("bulletinSummary").textContent = canPublishBulletins()
     ? `${publishedCount} tin đang hiển thị${draftCount ? `, ${draftCount} tin nháp` : ""}.`
     : `${publishedCount} tin đang hiển thị.`;
 
@@ -7478,7 +7692,7 @@ function renderBulletinBoard() {
                     <span class="badge">${escapeHtml(post.category || "Tin tức chung")}</span>
                     ${voting ? `<span class="badge ${votingEnded ? "warn" : "good"}">${votingEnded ? "Đã kết thúc" : "Đang bình chọn"}</span>` : ""}
                     ${post.pinned ? "<span class=\"badge warn\">Ghim</span>" : ""}
-                    ${canManageBulletins() ? `<span class="badge ${statusClass}">${escapeHtml(bulletinStatusLabel(status))}</span>` : ""}
+                    ${canEditBulletin(post) ? `<span class="badge ${statusClass}">${escapeHtml(bulletinStatusLabel(status))}</span>` : ""}
                   </div>
                   <h3>${escapeHtml(post.title)}</h3>
                 </div>
@@ -7487,11 +7701,11 @@ function renderBulletinBoard() {
               ${previewText ? `<p class="bulletin-excerpt">${escapeHtml(previewText)}</p>` : ""}
               ${renderBulletinMedia(media)}
               ${
-                canManageBulletins()
+                canEditBulletin(post) || canDeleteBulletin()
                   ? `<div class="bulletin-footer">
                       <span class="row-actions">
-                        <button class="ghost" data-edit-bulletin="${escapeHtml(post.id)}" type="button">Sửa</button>
-                        <button class="ghost" data-delete-bulletin="${escapeHtml(post.id)}" type="button">Xóa</button>
+                        ${canEditBulletin(post) ? `<button class="ghost" data-edit-bulletin="${escapeHtml(post.id)}" type="button">Sửa</button>` : ""}
+                        ${canDeleteBulletin() ? `<button class="ghost" data-delete-bulletin="${escapeHtml(post.id)}" type="button">Xóa</button>` : ""}
                       </span>
                     </div>`
                   : ""
@@ -7587,6 +7801,17 @@ function archiveById(id) {
   return (state.archiveRecords || []).find((record) => record.id === id);
 }
 
+function archiveProjectId(record) {
+  const directProject = projectById(record?.projectId);
+  if (directProject) return directProject.id;
+  const legacyTask = (state.tasks || []).find((task) => task.id === record?.taskId);
+  return legacyTask ? projectIdForTask(legacyTask) : "";
+}
+
+function archiveProjectForRecord(record) {
+  return projectById(archiveProjectId(record));
+}
+
 function archiveRecordTags(record) {
   const source = Array.isArray(record?.tags) ? record.tags.join(",") : record?.tags || "";
   return String(source)
@@ -7613,17 +7838,12 @@ function archiveStatusBadgeClass(status) {
 }
 
 function archiveEditableDepartments() {
-  if (canManageArchive()) return departments;
+  if (canSaveArchive()) return departments;
   return [];
 }
 
 function archiveEditablePeople() {
-  if (canManageArchive()) return state.people;
-  return [];
-}
-
-function archiveEditableDepartmentEvaluations() {
-  if (canManageArchive()) return state.departmentEvaluations || [];
+  if (canSaveArchive()) return state.people;
   return [];
 }
 
@@ -7682,8 +7902,7 @@ async function hydrateArchiveFileLinks(root = document) {
 function renderArchiveOptions() {
   const selectedDepartment = byId("archiveDepartment").value;
   const selectedPerson = byId("archivePerson").value;
-  const selectedTask = byId("archiveTask").value;
-  const selectedDepartmentEvaluation = byId("archiveDepartmentEvaluation").value;
+  const selectedProject = byId("archiveProject").value;
   const selectedCategoryFilter = byId("archiveCategoryFilter").value;
   const selectedStatusFilter = byId("archiveStatusFilter").value;
   const selectedDepartmentFilter = byId("archiveDepartmentFilter").value;
@@ -7704,30 +7923,9 @@ function renderArchiveOptions() {
     selectedPerson,
   );
   fillSelect(
-    byId("archiveTask"),
-    [{ value: "", label: "Không chọn công việc" }].concat(
-      (state.tasks || [])
-        .filter((task) => canViewTaskRecord(task))
-        .sort(compareTaskRecords)
-        .map((task) => ({
-          value: task.id,
-          label: `${task.title} - ${personById(task.ownerId)?.name || "Chưa rõ người thực hiện"}`,
-        })),
-    ),
-    selectedTask,
-  );
-  fillSelect(
-    byId("archiveDepartmentEvaluation"),
-    [{ value: "", label: "Không chọn KPI phòng" }].concat(
-      archiveEditableDepartmentEvaluations()
-        .slice()
-        .sort((a, b) => (b.period || "").localeCompare(a.period || ""))
-        .map((evaluation) => ({
-          value: evaluation.id,
-          label: `${departmentById(evaluation.departmentId)?.name || "Phòng"} - ${formatMonthPeriod(evaluation.period)} - ${formatScore(evaluation.finalScore)} điểm`,
-        })),
-    ),
-    selectedDepartmentEvaluation,
+    byId("archiveProject"),
+    [{ value: "", label: "Không chọn dự án" }].concat(taskProjectOptions()),
+    selectedProject,
   );
   fillSelect(
     byId("archiveCategoryFilter"),
@@ -7749,8 +7947,7 @@ function renderArchiveOptions() {
 function archiveRecordSearchText(record) {
   const department = departmentById(record.departmentId)?.name || "";
   const person = personById(record.personId)?.name || "";
-  const task = (state.tasks || []).find((item) => item.id === record.taskId);
-  const departmentEvaluation = (state.departmentEvaluations || []).find((item) => item.id === record.departmentEvaluationId);
+  const project = archiveProjectForRecord(record);
   const files = (record.files || []).map((file) => file.name).join(" ");
   return normalizeSearchText(
     [
@@ -7761,8 +7958,7 @@ function archiveRecordSearchText(record) {
       record.recordDate,
       department,
       person,
-      task?.title,
-      departmentEvaluation ? `${departmentById(departmentEvaluation.departmentId)?.name || ""} ${formatMonthPeriod(departmentEvaluation.period)}` : "",
+      project?.name,
       archiveRecordTags(record).join(" "),
       record.description,
       files,
@@ -7815,37 +8011,18 @@ function renderArchiveStats(allRecords, filteredRecords) {
     .join("");
 }
 
-function archiveFileLinkHtml(file) {
-  const key = escapeHtml(storedFileKey(file));
-  const name = escapeHtml(file.name || "Tệp đính kèm");
-  return `
-    <button type="button" class="archive-file-link btn-preview-tab" data-open-pdf-tab="${key}" style="background: none; border: none; padding: 0; font: inherit; cursor: pointer; text-align: left; width: 100%; display: flex; align-items: center; justify-content: space-between; text-decoration: none; color: inherit;" title="Bấm để mở xem trong tab mới">
-      <span style="display: flex; align-items: center; gap: 8px;">
-        <span class="badge">${escapeHtml(archiveFileKindLabel(file))}</span>
-        <span>${name}</span>
-        <small class="muted">${escapeHtml(formatFileSize(file.size))}</small>
-      </span>
-      <span style="font-size: 13px; color: #0284c7; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">👁️ Mở tab mới</span>
-    </button>
-  `;
-}
-
 function archiveLinkButtons(record) {
   const buttons = [];
   const person = personById(record.personId);
-  const task = (state.tasks || []).find((item) => item.id === record.taskId);
-  const departmentEvaluation = (state.departmentEvaluations || []).find((item) => item.id === record.departmentEvaluationId);
+  const project = archiveProjectForRecord(record);
   if (record.departmentId && canAccessView("history")) {
     buttons.push(`<button class="archive-link-button ghost" data-open-archive-department-history="${escapeHtml(record.departmentId)}" type="button">Lịch sử phòng</button>`);
   }
   if (person && canAccessView("people")) {
     buttons.push(`<button class="archive-link-button ghost" data-open-archive-person="${escapeHtml(person.id)}" type="button">Hồ sơ nhân sự</button>`);
   }
-  if (task && canAccessView("tasks") && canViewTaskRecord(task)) {
-    buttons.push(`<button class="archive-link-button ghost" data-open-archive-task="${escapeHtml(task.id)}" type="button">Công việc</button>`);
-  }
-  if (departmentEvaluation && canAccessView("department-evaluations")) {
-    buttons.push(`<button class="archive-link-button ghost" data-open-archive-dept-eval="${escapeHtml(departmentEvaluation.id)}" type="button">KPI phòng</button>`);
+  if (project && canAccessView("tasks")) {
+    buttons.push(`<button class="archive-link-button ghost" data-open-archive-project="${escapeHtml(project.id)}" type="button">Dự án liên quan</button>`);
   }
   return buttons.join("");
 }
@@ -7858,7 +8035,7 @@ function renderArchiveCard(record, index) {
   const summary = record.description || tags.join(", ") || record.documentNo || "Click để xem chi tiết hồ sơ.";
   return `
     <article class="archive-card" data-open-archive-detail="${escapeHtml(record.id)}" tabindex="0" style="--bulletin-delay: ${Math.min(index * 35, 360)}ms">
-      ${canManageArchive() ? `<button class="archive-delete-button" data-delete-archive="${escapeHtml(record.id)}" type="button" aria-label="Xóa hồ sơ" title="Xóa">×</button>` : ""}
+      ${canDeleteArchive() ? `<button class="archive-delete-button" data-delete-archive="${escapeHtml(record.id)}" type="button" aria-label="Xóa hồ sơ" title="Xóa">×</button>` : ""}
       <div class="archive-card-head">
         <div>
           <div class="archive-meta">
@@ -7874,7 +8051,7 @@ function renderArchiveCard(record, index) {
           <span>${escapeHtml(compactMeta || record.documentNo || "Chưa phân loại")}</span>
           <strong>${files.length} tệp</strong>
         </div>
-        ${canManageArchive() ? `<button class="archive-edit-button ghost" data-edit-archive="${escapeHtml(record.id)}" type="button">Sửa</button>` : ""}
+        ${canEditArchive(record) ? `<button class="archive-edit-button ghost" data-edit-archive="${escapeHtml(record.id)}" type="button">Sửa</button>` : ""}
       </div>
     </article>
   `;
@@ -7882,7 +8059,7 @@ function renderArchiveCard(record, index) {
 
 function renderArchive() {
   if (!byId("archiveList")) return;
-  byId("archiveAdminPanel").classList.toggle("is-hidden", !canManageArchive());
+  byId("archiveAdminPanel").classList.toggle("is-hidden", !canSaveArchive());
   const allRecords = visibleArchiveRecords()
     .slice()
     .sort((a, b) => archiveSortValue(b).localeCompare(archiveSortValue(a)));
@@ -7906,41 +8083,79 @@ function renderArchive() {
   applyFieldCustomizations();
 }
 
-// 🌟 Mở PDF ở tab mới trong khung HTML chống bị Foxit/IDM bắt tải file
+function storedFileBlob(file, dataUrl) {
+  const type = file?.type || "application/octet-stream";
+  return dataUrlToBlob(normalizeStoredMediaDataUrl(dataUrl, type), type);
+}
+
+function downloadBlobFile(blob, name) {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = name || "tep-luu-tru";
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+}
+
+async function downloadArchiveFile(key) {
+  const file = archiveFileByKey(key);
+  if (!file) {
+    alert("Không tìm thấy tệp lưu trữ cần tải.");
+    return false;
+  }
+  try {
+    const dataUrl = await readStoredFileDataUrl(file);
+    if (!dataUrl) {
+      alert("Không thể tải nội dung tệp. Vui lòng kiểm tra kết nối mạng rồi thử lại.");
+      return false;
+    }
+    downloadBlobFile(storedFileBlob(file, dataUrl), file.name || "tep-luu-tru");
+    return true;
+  } catch {
+    alert("Không thể chuẩn bị tệp để tải xuống. Vui lòng thử lại.");
+    return false;
+  }
+}
+
+// Reserve the tab before the asynchronous data read so mobile browsers do not block it.
 async function openFileInNewTab(key) {
   const file = archiveFileByKey(key) || bulletinMediaByKey(key);
-  if (!file) return;
+  const previewWindow = window.open("", "_blank");
+  if (previewWindow) {
+    previewWindow.document.title = "Đang tải tệp";
+    previewWindow.document.body.textContent = "Đang tải tệp...";
+  }
+  if (!file) {
+    previewWindow?.close();
+    return false;
+  }
 
-  const dataUrl = await readStoredFileDataUrl(file);
+  let dataUrl = "";
+  try {
+    dataUrl = await readStoredFileDataUrl(file);
+  } catch {
+    previewWindow?.close();
+    alert("Không thể nạp nội dung tệp. Vui lòng thử lại.");
+    return false;
+  }
   if (!dataUrl) {
-    alert("Không thể nạp nội dung tệp.");
-    return;
+    previewWindow?.close();
+    alert("Không thể nạp nội dung tệp. Vui lòng kiểm tra kết nối mạng rồi thử lại.");
+    return false;
   }
 
-  const displayUrl = storedFileDisplayUrl(file, dataUrl);
-  const name = escapeHtml(file.name || "Tài liệu PDF");
-
-  // Tạo một tab mới chứa khung HTML hiển thị PDF
-  const win = window.open("", "_blank");
-  if (win) {
-    win.document.write(`
-      <!DOCTYPE html>
-      <html lang="vi">
-        <head>
-          <meta charset="UTF-8">
-          <title>${name}</title>
-          <style>
-            html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #525659; }
-            iframe { width: 100%; height: 100%; border: none; }
-          </style>
-        </head>
-        <body>
-          <iframe src="${displayUrl}"></iframe>
-        </body>
-      </html>
-    `);
-    win.document.close();
+  const objectUrl = URL.createObjectURL(storedFileBlob(file, dataUrl));
+  if (previewWindow) {
+    previewWindow.location.replace(objectUrl);
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 300000);
+    return true;
   }
+  URL.revokeObjectURL(objectUrl);
+  alert("Trình duyệt đang chặn tab mới. Vui lòng cho phép mở tab mới rồi thử lại.");
+  return false;
 }
 
 function renderArchiveDetailFile(file) {
@@ -7948,7 +8163,6 @@ function renderArchiveDetailFile(file) {
   const key = escapeHtml(storedFileKey(file));
   const source = escapeHtml(file.dataUrl || "");
   const name = escapeHtml(file.name || "Tệp đính kèm");
-  const openLink = archiveFileLinkHtml(file);
   const preview =
     kind === "pdf"
       ? `<object class="archive-preview-frame" data-archive-file-key="${key}" type="application/pdf"><span class="muted">Không thể hiển thị PDF trong trình duyệt này.</span></object>`
@@ -7963,8 +8177,8 @@ function renderArchiveDetailFile(file) {
               : `<div class="archive-empty-help">Tệp này cần mở bằng ứng dụng phù hợp trên thiết bị.</div>`;
   return `
     <article class="archive-preview-card">
-      <div class="archive-preview-head" style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
-        <div>
+      <div class="archive-preview-head">
+        <div class="archive-preview-title">
           <strong>${name}</strong>
           <span class="archive-meta">
             <span class="badge">${escapeHtml(archiveFileKindLabel(file))}</span>
@@ -7972,19 +8186,12 @@ function renderArchiveDetailFile(file) {
           </span>
         </div>
 
-        <!-- 🌟 NÚT TẢI FILE XUẤNG (Dành riêng cho nhu cầu tải về) -->
-        <a class="archive-file-link btn-download-file" 
-           href="${source || "#"}" 
-           data-archive-file-key="${key}" 
-           download="${name}" 
-           target="_blank" 
-           rel="noopener" 
-           style="padding: 6px 14px; background: #0284c7; color: #ffffff !important; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          📥 Tải file xuống
-        </a>
+        <div class="archive-preview-actions">
+          <button class="archive-download-button" data-download-archive-file="${key}" type="button">Tải tệp</button>
+          <button class="ghost archive-open-button" data-open-archive-file="${key}" type="button">Mở tệp</button>
+        </div>
       </div>
       ${preview}
-      <div class="archive-files">${openLink}</div>
     </article>
   `;
 }
@@ -7994,8 +8201,7 @@ function openArchiveDetailDialog(recordId) {
   if (!record) return;
   const department = departmentById(record.departmentId);
   const person = personById(record.personId);
-  const task = (state.tasks || []).find((item) => item.id === record.taskId);
-  const departmentEvaluation = (state.departmentEvaluations || []).find((item) => item.id === record.departmentEvaluationId);
+  const project = archiveProjectForRecord(record);
   const tags = archiveRecordTags(record);
   const files = Array.isArray(record.files) ? record.files : [];
   const metaItems = [
@@ -8003,8 +8209,7 @@ function openArchiveDetailDialog(recordId) {
     record.recordDate ? `Ngày: ${formatDate(record.recordDate)}` : "",
     department ? `Phòng: ${department.name}` : "",
     person ? `Nhân sự: ${person.name}` : "",
-    task ? `Công việc: ${task.title}` : "",
-    departmentEvaluation ? `KPI phòng: ${departmentById(departmentEvaluation.departmentId)?.name || "Phòng"} - ${formatMonthPeriod(departmentEvaluation.period)}` : "",
+    project ? `Dự án: ${project.name}` : "",
     record.createdAt ? `Tạo: ${formatDateTime(record.createdAt)}${record.createdBy ? ` bởi ${record.createdBy}` : ""}` : "",
     record.updatedAt ? `Cập nhật: ${formatDateTime(record.updatedAt)}${record.updatedBy ? ` bởi ${record.updatedBy}` : ""}` : "",
   ].filter(Boolean);
@@ -8031,8 +8236,7 @@ function closeArchiveDetailDialog() {
 
 function handleArchiveRelatedTarget(event) {
   const personId = event.target.closest("[data-open-archive-person]")?.dataset.openArchivePerson;
-  const taskId = event.target.closest("[data-open-archive-task]")?.dataset.openArchiveTask;
-  const departmentEvaluationId = event.target.closest("[data-open-archive-dept-eval]")?.dataset.openArchiveDeptEval;
+  const projectId = event.target.closest("[data-open-archive-project]")?.dataset.openArchiveProject;
   const departmentId = event.target.closest("[data-open-archive-department-history]")?.dataset.openArchiveDepartmentHistory;
   if (personId && canAccessView("people")) {
     const person = personById(personId);
@@ -8042,12 +8246,8 @@ function handleArchiveRelatedTarget(event) {
     byId("peopleTable").scrollIntoView({ behavior: "smooth", block: "start" });
     return true;
   }
-  if (taskId && canAccessView("tasks")) {
-    openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
-    return true;
-  }
-  if (departmentEvaluationId && canAccessView("department-evaluations")) {
-    openHistoryTimelineTarget({ targetType: "departmentEvaluation", targetId: departmentEvaluationId });
+  if (projectId && canAccessView("tasks")) {
+    openProjectTaskList(projectId);
     return true;
   }
   if (departmentId && canAccessView("history")) {
@@ -8097,8 +8297,7 @@ function populateArchiveForm(record) {
   byId("archiveDate").value = record.recordDate || todayInputDate();
   byId("archiveDepartment").value = record.departmentId || "";
   byId("archivePerson").value = record.personId || "";
-  byId("archiveTask").value = record.taskId || "";
-  byId("archiveDepartmentEvaluation").value = record.departmentEvaluationId || "";
+  byId("archiveProject").value = archiveProjectId(record);
   byId("archiveTags").value = archiveRecordTags(record).join(", ");
   byId("archiveDescription").value = record.description || "";
   byId("archiveFiles").value = "";
@@ -8184,13 +8383,13 @@ function renderModuleAccessControls() {
   list.innerHTML = systemModules
     .map((module) => {
       const enabled = moduleIsEnabled(module.id);
-      const roles = state.moduleSettings[module.id]?.roles || defaultModuleRoleSettings();
-      const enabledRoles = moduleAccessRoles.filter((role) => roles[role] !== false).length;
+      const roles = state.moduleSettings[module.id]?.roles || defaultModuleRoleSettings(module.id);
+      const enabledRoles = moduleAccessRoles.filter((role) => roles[role] === true).length;
       const roleControls = moduleAccessRoles
         .map(
           (role) => `
             <label class="module-role-toggle">
-              <input type="checkbox" data-module-id="${escapeHtml(module.id)}" data-module-role-toggle="${escapeHtml(role)}" ${roles[role] !== false ? "checked" : ""} ${module.locked ? "disabled" : ""}>
+              <input type="checkbox" data-module-id="${escapeHtml(module.id)}" data-module-role-toggle="${escapeHtml(role)}" ${roles[role] === true ? "checked" : ""} ${module.locked || !enabled ? "disabled" : ""}>
               <span>${escapeHtml(accountRoleLabels[role])}</span>
             </label>
           `,
@@ -8198,7 +8397,7 @@ function renderModuleAccessControls() {
         .join("");
       const status = module.locked ? "Luôn bật" : enabled ? `${enabledRoles}/${moduleAccessRoles.length} nhóm đang bật` : "Đang tắt toàn hệ thống";
       return `
-        <article class="module-toggle-card${module.locked ? " is-locked" : ""}">
+        <article class="module-toggle-card${module.locked ? " is-locked" : ""}${!enabled ? " is-disabled" : ""}">
           <div class="module-toggle-main">
             <label class="module-global-toggle" title="Bật hoặc tắt mục này cho toàn bộ tài khoản không phải admin">
               <input type="checkbox" data-module-toggle="${escapeHtml(module.id)}" ${enabled ? "checked" : ""} ${module.locked ? "disabled" : ""}>
@@ -8290,7 +8489,7 @@ function customizationEnabled() {
 function setCustomizeMode(enabled) {
   customizeMode = Boolean(enabled) && isAdmin();
   localStorage.setItem(CUSTOMIZE_MODE_KEY, customizeMode ? "1" : "0");
-  renderAll();
+  renderDirectCustomization();
 }
 
 function activeViewId() {
@@ -8405,7 +8604,15 @@ function customizableTextNode(element) {
 
 function elementIndexInSet(element, selector) {
   const root = element.closest(".view, .modal-card") || document;
-  return Array.from(root.querySelectorAll(selector)).indexOf(element);
+  let rootCache = customizationElementIndexCache.get(root);
+  if (!rootCache) {
+    rootCache = new Map();
+    customizationElementIndexCache.set(root, rootCache);
+  }
+  if (!rootCache.has(selector)) {
+    rootCache.set(selector, new Map(Array.from(root.querySelectorAll(selector)).map((item, index) => [item, index])));
+  }
+  return rootCache.get(selector).get(element) ?? -1;
 }
 
 function contentCustomizationKey(element) {
@@ -8487,14 +8694,37 @@ function removeCustomizationMiniTools(element) {
 
 function addCustomizationMiniTools(element, key) {
   if (!customizationEnabled() || !customizationHandleEligible(element) || !key) return;
-  removeCustomizationMiniTools(element);
+  if (element.querySelector(":scope > .customization-mini-tools")) return;
   const tools = document.createElement("span");
   tools.className = "customization-mini-tools";
   tools.setAttribute("contenteditable", "false");
   tools.innerHTML = `
+    <button class="customization-drag-handle" data-custom-drag-handle draggable="true" type="button" title="Kéo để di chuyển" aria-label="Kéo để di chuyển">&#8597;</button>
     <span class="customization-resize-handle" data-custom-resize-handle title="Kéo để đổi kích thước"></span>
   `;
   element.appendChild(tools);
+}
+
+function showCustomizationMiniTools(element) {
+  if (!customizationEnabled() || !element || !customizationElementKey(element)) return;
+  if (customizationHoverClearTimer) window.clearTimeout(customizationHoverClearTimer);
+  if (customizationHoverElement === element) return;
+  if (customizationHoverElement) removeCustomizationMiniTools(customizationHoverElement);
+  customizationHoverElement = element;
+  addCustomizationMiniTools(element, customizationElementKey(element));
+}
+
+function hideCustomizationMiniTools(element, { delayed = true } = {}) {
+  if (!element || customizationHoverElement !== element) return;
+  if (customizationHoverClearTimer) window.clearTimeout(customizationHoverClearTimer);
+  const clear = () => {
+    if (customizationHoverElement !== element || customizationResizeState?.element === element) return;
+    removeCustomizationMiniTools(element);
+    customizationHoverElement = null;
+    customizationHoverClearTimer = 0;
+  };
+  if (delayed) customizationHoverClearTimer = window.setTimeout(clear, 120);
+  else clear();
 }
 
 function customizationDropContainerSelector() {
@@ -8596,7 +8826,7 @@ function canMoveCustomizationElementToContainer(element, container) {
 }
 
 function directCustomizableSiblings(parent) {
-  return Array.from(parent?.children || []).filter((element) => element.classList?.contains("is-admin-customizable-field") && customizationElementKey(element));
+  return Array.from(parent?.children || []).filter((element) => customizationElementKey(element));
 }
 
 function persistCustomizationSiblingOrder(parent, movedElement = null) {
@@ -8619,13 +8849,26 @@ function persistCustomizationSiblingOrder(parent, movedElement = null) {
     details: `${siblings.length} nội dung`,
   });
   saveState();
-  applyFieldCustomizations();
+  markCustomizationDropContainers();
+}
+
+function setCustomizationDropState(dropTarget = null) {
+  const nextTarget = dropTarget?.target || null;
+  const nextContainer = dropTarget?.container || null;
+  if (customizationDropState.target && customizationDropState.target !== nextTarget) {
+    customizationDropState.target.classList.remove("is-customization-drop-target");
+  }
+  if (customizationDropState.container && customizationDropState.container !== nextContainer) {
+    customizationDropState.container.classList.remove("is-customization-drop-container-active");
+  }
+  if (nextTarget) nextTarget.classList.add("is-customization-drop-target");
+  if (nextContainer) nextContainer.classList.add("is-customization-drop-container-active");
+  customizationDropState = { target: nextTarget, container: nextContainer };
 }
 
 function clearCustomizationDragState() {
-  document.querySelectorAll(".is-customization-dragging, .is-customization-drop-target, .is-customization-drop-container-active").forEach((element) => {
-    element.classList.remove("is-customization-dragging", "is-customization-drop-target", "is-customization-drop-container-active");
-  });
+  customizationDragElement?.classList.remove("is-customization-dragging");
+  setCustomizationDropState();
   customizationDragElement = null;
 }
 
@@ -8643,7 +8886,10 @@ function applyStoredCustomizationPlacements(elements) {
     affectedParents.add(targetContainer);
   });
   elements.forEach((element) => {
-    if (element.parentElement) affectedParents.add(element.parentElement);
+    const override = state.systemCustomization.fieldOverrides[customizationElementKey(element)] || {};
+    if ((override.parentKey || override.order || override.order === 0) && element.parentElement) {
+      affectedParents.add(element.parentElement);
+    }
   });
   affectedParents.forEach((parent) => {
     directCustomizableSiblings(parent)
@@ -8682,50 +8928,50 @@ function customizableElements() {
     ".sidebar .nav-label",
     ".period-box label",
     ".period-box p",
-    ".view .block",
-    ".view .score-panel",
-    ".view .metrics article",
-    ".view .dashboard-card-column",
-    ".view .dashboard-card-column > section",
-    ".view .task-inbox-panel",
-    ".view .task-kind-head",
-    ".view .task-column",
-    ".view .criteria-item",
-    ".view .behavior-item",
-    ".view .score-result > div",
-    ".view .archive-stat",
-    ".view .bulletin-card",
-    ".view .archive-card",
-    ".view .module-toggle-card",
-    ".view .task-collaborator-field",
-    ".view label",
-    ".view h2",
-    ".view h3",
-    ".view h4",
-    ".view th",
-    ".view button:not(.nav-item):not(.archive-delete-button):not(.popup-customize-button):not(.scroll-jump-button)",
-    ".view .eyebrow",
-    ".view .section-note",
-    ".view .field-note",
-    ".view .compact-upload-title",
-    ".view .badge",
-    ".view .filter-note span",
-    ".view .score-result span",
-    ".view .metrics span",
-    ".view .task-inbox-button strong",
-    ".view .task-inbox-button small",
-    ".view .chart-heading h3",
-    ".view .task-column-head span",
-    ".view .task-column-head strong",
-    ".view .task-card h4",
-    ".view .archive-card h3",
-    ".view .bulletin-card h3",
-    ".view .archive-stat span",
-    ".view .archive-stat strong",
-    ".view .rank-item strong",
-    ".view .alert-item strong",
-    ".view .block > p",
-    ".view .rules-grid li",
+    ".view.is-active .block",
+    ".view.is-active .score-panel",
+    ".view.is-active .metrics article",
+    ".view.is-active .dashboard-card-column",
+    ".view.is-active .dashboard-card-column > section",
+    ".view.is-active .task-inbox-panel",
+    ".view.is-active .task-kind-head",
+    ".view.is-active .task-column",
+    ".view.is-active .criteria-item",
+    ".view.is-active .behavior-item",
+    ".view.is-active .score-result > div",
+    ".view.is-active .archive-stat",
+    ".view.is-active .bulletin-card",
+    ".view.is-active .archive-card",
+    ".view.is-active .module-toggle-card",
+    ".view.is-active .task-collaborator-field",
+    ".view.is-active label",
+    ".view.is-active h2",
+    ".view.is-active h3",
+    ".view.is-active h4",
+    ".view.is-active th",
+    ".view.is-active button:not(.nav-item):not(.archive-delete-button):not(.popup-customize-button):not(.scroll-jump-button)",
+    ".view.is-active .eyebrow",
+    ".view.is-active .section-note",
+    ".view.is-active .field-note",
+    ".view.is-active .compact-upload-title",
+    ".view.is-active .badge",
+    ".view.is-active .filter-note span",
+    ".view.is-active .score-result span",
+    ".view.is-active .metrics span",
+    ".view.is-active .task-inbox-button strong",
+    ".view.is-active .task-inbox-button small",
+    ".view.is-active .chart-heading h3",
+    ".view.is-active .task-column-head span",
+    ".view.is-active .task-column-head strong",
+    ".view.is-active .task-card h4",
+    ".view.is-active .archive-card h3",
+    ".view.is-active .bulletin-card h3",
+    ".view.is-active .archive-stat span",
+    ".view.is-active .archive-stat strong",
+    ".view.is-active .rank-item strong",
+    ".view.is-active .alert-item strong",
+    ".view.is-active .block > p",
+    ".view.is-active .rules-grid li",
     ".modal-backdrop:not(.is-hidden) .modal-card h2",
     ".modal-backdrop:not(.is-hidden) .modal-card h3",
     ".modal-backdrop:not(.is-hidden) .modal-card h4",
@@ -8746,25 +8992,21 @@ function customizableElements() {
   });
 }
 
+function clearCustomizationElementInteraction(element) {
+  removeCustomizationMiniTools(element);
+  element.classList.remove("is-admin-customizable-field", "is-customization-dragging", "is-customization-drop-target", "is-customization-resizing");
+}
+
 function applyFieldCustomizations() {
-  // 🌟 TỐI ƯU: Nếu không bật chế độ Tùy biến thì bỏ qua việc quét DOM để chuyển tab siêu nhanh
-  if (!customizationEnabled()) {
-    document.body.classList.remove("is-customize-mode");
-    return;
-  }
+  // Apply stored settings to the visible view; interactive controls only exist in customization mode.
   state.systemCustomization = normalizeSystemCustomization(state.systemCustomization);
-  document.querySelectorAll(".is-admin-customizable-field").forEach((element) => {
-    removeCustomizationMiniTools(element);
-    element.classList.remove("is-admin-customizable-field", "field-hidden-by-admin");
-    element.classList.remove("field-deleted-by-admin", "is-customization-dragging", "is-customization-drop-target", "is-customization-resizing");
-    element.style.gridColumn = "";
-    element.style.minWidth = "";
-    element.style.order = "";
-    element.style.minHeight = "";
-    element.style.width = "";
-    element.style.height = "";
-  });
+  customizationElementIndexCache = new WeakMap();
   const elements = customizableElements();
+  const elementSet = new Set(elements);
+  document.querySelectorAll(".is-admin-customizable-field").forEach((element) => {
+    if (!elementSet.has(element)) clearCustomizationElementInteraction(element);
+  });
+  const interactive = customizationEnabled();
   elements.forEach((element) => {
     const key = contentCustomizationKey(element);
     if (!key) return;
@@ -8779,32 +9021,38 @@ function applyFieldCustomizations() {
     element.dataset.defaultLabel = element.dataset.defaultLabel || textNode.textContent.trim();
     const override = state.systemCustomization.fieldOverrides[key] || (legacyKey ? state.systemCustomization.fieldOverrides[legacyKey] : null) || {};
     const labelSuffix = element.matches("label") && textNode.parentNode === element ? "\n" : "";
-    textNode.textContent = `${override.label || element.dataset.defaultLabel}${labelSuffix}`;
-    element.classList.toggle("is-admin-customizable-field", customizationEnabled());
+    const nextLabel = `${override.label || element.dataset.defaultLabel}${labelSuffix}`;
+    if (textNode.textContent !== nextLabel) textNode.textContent = nextLabel;
+    element.classList.toggle("is-admin-customizable-field", interactive);
     element.classList.toggle("field-hidden-by-admin", override.hidden === true || override.deleted === true);
     element.classList.toggle("field-deleted-by-admin", override.deleted === true);
     element.style.gridColumn = override.width ? `span ${override.width}` : "";
     const hasOverrideOrder = override.order || override.order === 0;
     element.style.order = hasOverrideOrder ? override.order : "";
-    if (!element.matches("label") && override.width) {
-      element.style.minWidth = `${Number(override.width) * 90}px`;
-    }
+    element.style.minWidth = !element.matches("label") && override.width ? `${Number(override.width) * 90}px` : "";
     const height = override.height ? `${override.height}px` : "";
-    if (height && !element.matches("label")) element.style.minHeight = height;
+    element.style.minHeight = height && !element.matches("label") ? height : "";
     element.style.width = override.pixelWidth ? `${override.pixelWidth}px` : "";
     element.style.height = override.pixelHeight ? `${override.pixelHeight}px` : "";
     element.querySelectorAll("input, select, textarea").forEach((fieldControl) => {
       if (fieldControl.dataset.originalRequired === undefined) {
         fieldControl.dataset.originalRequired = fieldControl.required ? "1" : "0";
       }
-      fieldControl.required = (override.hidden === true || override.deleted === true) && !customizationEnabled() ? false : fieldControl.dataset.originalRequired === "1";
+      fieldControl.required = (override.hidden === true || override.deleted === true) && !interactive ? false : fieldControl.dataset.originalRequired === "1";
       fieldControl.style.minHeight = height;
     });
   });
-  elements.forEach((element) => addCustomizationMiniTools(element, customizationElementKey(element)));
-  document.body.classList.toggle("is-customize-mode", customizationEnabled());
-  byId("toggleCustomizeMode")?.classList.toggle("is-active", customizationEnabled());
-  if (byId("toggleCustomizeMode")) byId("toggleCustomizeMode").textContent = customizationEnabled() ? "Đang tùy biến" : "Tùy biến";
+  if (elements.some((element) => {
+    const override = state.systemCustomization.fieldOverrides[customizationElementKey(element)] || {};
+    return override.parentKey || override.order || override.order === 0;
+  })) {
+    applyStoredCustomizationPlacements(elements);
+  }
+  if (!interactive && customizationHoverElement) hideCustomizationMiniTools(customizationHoverElement, { delayed: false });
+  markCustomizationDropContainers();
+  document.body.classList.toggle("is-customize-mode", interactive);
+  byId("toggleCustomizeMode")?.classList.toggle("is-active", interactive);
+  if (byId("toggleCustomizeMode")) byId("toggleCustomizeMode").textContent = interactive ? "Đang tùy biến" : "Tùy biến";
 }
 
 function renderViewCustomizationTools() {
@@ -8912,6 +9160,7 @@ function renderDirectCustomization() {
 function openModal(id) {
   byId(id).classList.remove("is-hidden");
   byId(id).setAttribute("aria-hidden", "false");
+  applyFieldCustomizations();
   applyPopupCustomizations();
   renderPopupCustomizationButtons();
 }
@@ -8977,7 +9226,7 @@ function renderAccountTable() {
     const person = personById(account.personId);
     const department = departmentById(account.departmentId || person?.departmentId);
     return normalizeSearchText([account.displayName, account.username, person?.name, department?.name, accountRoleLabels[account.role] || account.role].join(" ")).includes(searchText);
-  }).sort((left, right) => compareDirectoryMembers(personById(left.personId), personById(right.personId), left, right));
+  });
   if (!accounts.length) {
     tbody.innerHTML = searchText
       ? '<tr><td colspan="5" class="empty-cell">Không có tài khoản phù hợp.</td></tr>'
@@ -9006,6 +9255,7 @@ function renderAccountTable() {
             <span class="row-actions">
               ${canEdit ? `<button class="ghost" data-edit-account="${account.id}" type="button">Sửa</button>` : ""}
               ${canDelete ? `<button class="ghost" data-delete-account="${account.id}" type="button">Xóa</button>` : ""}
+              ${isSelf && !canDelete ? "<span class=\"muted\">Đang dùng</span>" : ""}
             </span>
           </td>
         </tr>
@@ -9051,26 +9301,10 @@ function renderCurrentUser() {
   const account = currentAccount();
   const person = currentPerson();
   const department = departmentById(currentDepartmentId());
-  const role = roleById(person?.roleId);
-
-  const displayName = account ? account.displayName : "Chưa đăng nhập";
-  const roleTitle = role?.name || accountRoleLabels[account?.role] || account?.role || "";
-  const metaText = account ? [roleTitle, department?.name].filter(Boolean).join(" · ") : "";
-
-  // Tính chữ cái viết tắt tên (Avatar)
-  const initials = displayName !== "Chưa đăng nhập"
-    ? displayName.split(" ").map(n => n[0]).join("").slice(-2).toUpperCase()
-    : "TV";
-
-  // Cập nhật lên Topbar
-  if (byId("currentUserLabel")) byId("currentUserLabel").textContent = displayName;
-  if (byId("currentUserMeta")) byId("currentUserMeta").textContent = metaText;
-  if (byId("currentUserAvatarMini")) byId("currentUserAvatarMini").textContent = initials;
-
-  // Cập nhật vào Dropdown Menu
-  if (byId("dropdownDisplayName")) byId("dropdownDisplayName").textContent = displayName;
-  if (byId("dropdownRoleLabel")) byId("dropdownRoleLabel").textContent = "Trang cá nhân của bạn";
-  if (byId("dropdownAvatarLarge")) byId("dropdownAvatarLarge").textContent = initials;
+  byId("currentUserLabel").textContent = account ? account.displayName : "Chưa đăng nhập";
+  byId("currentUserMeta").textContent = account
+    ? `${accountRoleLabels[account.role] || account.role}${department ? ` · ${department.name}` : ""}${person ? ` · ${person.name}` : ""}`
+    : "";
 }
 
 function applySidebarCollapsed(collapsed) {
@@ -9102,91 +9336,73 @@ function updateAccountFormAccess() {
   byId("accountCanSaveArchive").disabled = !canManageGrants;
 }
 
+function syncMobileNavigationAccess(activeViewId = document.querySelector(".view.is-active")?.id || "") {
+  const mobileViewButtons = document.querySelectorAll(".mobile-bottom-nav [data-view], #mobileMenuPopup [data-view]");
+  mobileViewButtons.forEach((button) => {
+    const allowed = canAccessView(button.dataset.view);
+    button.classList.toggle("is-access-hidden", !allowed);
+    button.disabled = !allowed;
+    button.tabIndex = allowed ? 0 : -1;
+    button.setAttribute("aria-hidden", String(!allowed));
+  });
+
+  document.querySelectorAll(".mobile-bottom-nav [data-view]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.view === activeViewId && canAccessView(activeViewId));
+  });
+}
+
 function applyAccessControls() {
   const account = currentAccount();
-  const isAuthenticated = Boolean(account);
+  document.body.classList.toggle("is-authenticated", Boolean(account));
 
-  // Ép trạng thái Đăng nhập vào HTML & Body
-  document.documentElement.classList.toggle("is-authenticated", isAuthenticated);
-  document.body.classList.toggle("is-authenticated", isAuthenticated);
-
-  // Khóa / Mở Màn hình Đăng nhập
+  // 🌟 KHẮC PHỤC LỖI TRẮNG TRANG: Xóa thuộc tính inline display:none khi đã đăng xuất
   const loginElem = byId("loginScreen");
   if (loginElem) {
-    loginElem.classList.toggle("is-hidden", isAuthenticated);
-    loginElem.style.setProperty("display", isAuthenticated ? "none" : "flex", "important");
+    loginElem.classList.toggle("is-hidden", Boolean(account));
+    if (!account) loginElem.style.display = ""; 
   }
 
-  // Khóa / Mở Thanh điều hướng & Khung nội dung
-  const topbarElem = document.querySelector(".topbar");
-if (topbarElem) {
-  topbarElem.classList.toggle("is-hidden", !isAuthenticated);
-  topbarElem.style.removeProperty("display");
-}
-
-const layoutElem = document.querySelector(".layout");
-if (layoutElem) {
-  layoutElem.classList.toggle("is-hidden", !isAuthenticated);
-  layoutElem.style.removeProperty("display");
-}
-
-  // 🔴 CHẶN ĐỨNG: Nếu Chưa đăng nhập -> Không vẽ giao diện bên trong
-  if (!isAuthenticated) {
+  document.querySelector(".topbar").classList.toggle("is-hidden", !account);
+  document.querySelector(".layout").classList.toggle("is-hidden", !account);
+  if (!account) {
+    syncMobileNavigationAccess();
     return;
   }
 
-  // 🟢 ĐÃ ĐĂNG NHẬP CHUẨN -> Nạp thông tin người dùng & Menu
   renderCurrentUser();
-
   document.querySelectorAll(".admin-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isDirector());
   });
-
-  const taskInboxPanel = document.querySelector(".task-inbox-panel");
-  if (taskInboxPanel) {
-    taskInboxPanel.classList.toggle("is-hidden", !canAssignTasks());
-  }
-
   document.querySelectorAll(".summary-action").forEach((element) => {
-    element.classList.toggle("is-hidden", !isAdmin());
+    element.classList.toggle("is-hidden", !canViewAllData());
   });
-
   document.querySelectorAll(".json-data-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isAdmin());
   });
-
   document.querySelectorAll(".customization-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isAdmin());
   });
-
   if (!isAdmin() && customizeMode) setCustomizeMode(false);
-
   document.querySelectorAll(".bulletin-admin-only").forEach((element) => {
-    element.classList.toggle("is-hidden", !canManageBulletins());
+    element.classList.toggle("is-hidden", !canPublishBulletins());
   });
-
   document.querySelectorAll(".archive-manager-only").forEach((element) => {
-    element.classList.toggle("is-hidden", !canManageArchive());
+    element.classList.toggle("is-hidden", !canSaveArchive());
   });
-
-  if (byId("personForm")) byId("personForm").classList.toggle("is-hidden", !canEditPeople());
-  if (byId("openDepartmentEvaluationFromPersonal")) {
-    byId("openDepartmentEvaluationFromPersonal").classList.toggle("is-hidden", !canAccessView("department-evaluations"));
-  }
-
+  byId("personForm").classList.toggle("is-hidden", !canEditPeople());
+  byId("openDepartmentEvaluationFromPersonal").classList.toggle("is-hidden", !canAccessView("department-evaluations"));
   updateAccountFormAccess();
-
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("is-hidden", !canAccessView(button.dataset.view));
   });
+  syncMobileNavigationAccess();
 
-  if (typeof renderMobileNavigation === "function") renderMobileNavigation();
-  if (typeof renderPcNavigation === "function") renderPcNavigation();
-
-  const savedView = localStorage.getItem("phuc-thinh-active-view");
+  // 🌟 ƯU TIÊN 1: Mở lại Tab đang xem dở trước khi F5
+  const savedView = localStorage.getItem(activeViewStorageKey());
   if (savedView && canAccessView(savedView)) {
     switchView(savedView);
   } else {
+    // ƯU TIÊN 2: Nếu không có bộ nhớ hoặc mất quyền, mới cho về mặc định
     switchView(firstAccessibleView());
   }
 }
@@ -9194,223 +9410,26 @@ if (layoutElem) {
 function switchView(viewId) {
   if (!canAccessView(viewId)) return;
   
-  localStorage.setItem("phuc-thinh-active-view", viewId);
+  // 🌟 CHÈN THÊM DÒNG NÀY: Lưu lại tên Tab đang xem vào máy
+  localStorage.setItem(activeViewStorageKey(), viewId);
 
-  // 🟢 Cập nhật sáng đèn active cho cả Sidebar, PC Nav và Mobile Bottom Nav
-  document.querySelectorAll(".nav-item, .pc-nav-item, .bottom-nav-item").forEach((item) => {
-    item.classList.toggle("is-active", item.dataset.view === viewId);
-  });
-  
+  document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === viewId));
   document.querySelectorAll(".view").forEach((item) => item.classList.toggle("is-active", item.id === viewId));
-  
+  syncMobileNavigationAccess(viewId);
   if (viewId === "dashboard") renderDashboard({ animate: true });
   if (viewId === "bulletin") renderBulletinBoard();
   if (viewId === "archive") renderArchive();
-  if (viewId === "accounts") renderAccountTable();
+  if (viewId === "accounts" && isAdmin()) {
+    renderAccountPresence();
+    requestAccountPresence();
+    requestAccountUsageHistory();
+  }
+  renderDirectCustomization();
 }
 
 function focusEditForm(formId, focusId) {
   byId(formId).scrollIntoView({ behavior: "smooth", block: "start" });
   byId(focusId)?.focus({ preventScroll: true });
-}
-
-// Compatibility bridge while the v3 project catalogue is being migrated.
-// Existing records continue to use `projectName`, so the current Supabase
-// payload and all historical tasks remain compatible with v2.3.
-function projectIdForTask(task) {
-  const directProject = projectById(task?.projectId);
-  if (directProject) return directProject.id;
-  const nameKey = projectCatalogNameKey(task?.projectName);
-  return (state.projectCatalog || []).find((project) => projectCatalogNameKey(project.name) === nameKey)?.id || "";
-}
-
-function ensureTaskProjectPicker() {
-  const select = byId("taskProjectId");
-  if (!select) return null;
-  let picker = byId("taskProjectPicker");
-  if (picker) return picker;
-
-  picker = document.createElement("div");
-  picker.id = "taskProjectPicker";
-  picker.className = "task-project-picker collaborator-picker";
-  picker.innerHTML = `
-    <button id="taskProjectTrigger" class="task-project-trigger collaborator-picker-toggle" type="button" aria-expanded="false" aria-controls="taskProjectPanel"><span id="taskProjectTriggerText">Chọn dự án</span><small aria-hidden="true">⌄</small></button>
-    <div id="taskProjectPanel" class="task-project-panel collaborator-picker-panel is-hidden">
-      <input id="taskProjectSearch" type="search" autocomplete="off" placeholder="Tìm tên dự án...">
-      <div id="taskProjectOptions" class="task-project-options" role="listbox"></div>
-      <p id="taskProjectSearchEmpty" class="collaborator-search-empty is-hidden">Không tìm thấy dự án phù hợp.</p>
-    </div>`;
-  select.before(picker);
-  select.classList.add("task-project-native-select");
-  return picker;
-}
-
-function setTaskProjectPickerOpen(open) {
-  const picker = byId("taskProjectPicker");
-  const panel = byId("taskProjectPanel");
-  const trigger = byId("taskProjectTrigger");
-  if (!picker || !panel || !trigger) return;
-  const shouldOpen = Boolean(open) && !trigger.disabled;
-  picker.classList.toggle("is-open", shouldOpen);
-  panel.classList.toggle("is-hidden", !shouldOpen);
-  trigger.setAttribute("aria-expanded", String(shouldOpen));
-  if (shouldOpen) requestAnimationFrame(() => byId("taskProjectSearch")?.focus());
-}
-
-function updateTaskProjectPickerSummary() {
-  const project = projectById(byId("taskProjectId")?.value);
-  const text = byId("taskProjectTriggerText");
-  if (text) text.textContent = project?.name || "Chọn dự án";
-}
-
-function filterTaskProjectOptions() {
-  const query = normalizeSearchText(byId("taskProjectSearch")?.value || "");
-  let visibleCount = 0;
-  byId("taskProjectOptions")?.querySelectorAll("[data-project-id]").forEach((option) => {
-    const matches = !query || normalizeSearchText(option.dataset.projectSearch || "").includes(query);
-    option.classList.toggle("is-hidden", !matches);
-    if (matches) visibleCount += 1;
-  });
-  byId("taskProjectSearchEmpty")?.classList.toggle("is-hidden", visibleCount > 0);
-}
-
-function renderTaskProjectOptions(selectedProjectId = "") {
-  const select = byId("taskProjectId");
-  if (!select) return;
-  ensureTaskProjectPicker();
-  const selected = String(selectedProjectId || "").trim();
-  const projects = [...(state.projectCatalog || [])].sort((a, b) => a.name.localeCompare(b.name, "vi"));
-  // Native select on mobile expands according to its longest option. Shorten
-  // only the visible option label; the project ID and stored project name stay intact.
-  const optionLabel = (name) => {
-    const value = String(name || "").trim();
-    return value.length > 34 ? `${value.slice(0, 33).trimEnd()}…` : value;
-  };
-  select.innerHTML = [
-    '<option value="">Chọn dự án</option>',
-    ...projects.map((project) => `<option value="${escapeHtml(project.id)}" title="${escapeHtml(project.name)}">${escapeHtml(optionLabel(project.name))}</option>`),
-  ].join("");
-  select.value = selected;
-  const options = byId("taskProjectOptions");
-  if (options) {
-    options.innerHTML = projects.length
-      ? projects.map((project) => `<button class="task-project-option${project.id === selected ? " is-selected" : ""}" type="button" role="option" aria-selected="${project.id === selected}" data-project-id="${escapeHtml(project.id)}" data-project-search="${escapeHtml(project.name)}">${escapeHtml(project.name)}</button>`).join("")
-      : '<span class="muted">Chưa có dự án trong danh mục.</span>';
-  }
-  updateTaskProjectPickerSummary();
-  filterTaskProjectOptions();
-}
-
-function projectCatalogOptions() {
-  return [...(state.projectCatalog || [])]
-    .sort((a, b) => a.name.localeCompare(b.name, "vi"))
-    .map((project) => ({ value: project.id, label: project.name }));
-}
-
-function resetTaskProjectCatalogForm() {
-  const form = byId("taskProjectCatalogForm");
-  if (!form) return;
-  form.reset();
-  byId("taskProjectCatalogId").value = "";
-}
-
-function renderTaskProjectCatalog() {
-  const panel = byId("taskProjectCatalogPanel");
-  if (!panel) return;
-  const canManage = canManageProjectCatalog();
-  panel.classList.toggle("is-hidden", !canManage);
-  if (!canManage) return;
-
-  const projects = projectCatalogOptions();
-  const search = normalizeSearchText(byId("taskProjectCatalogSearch")?.value || "");
-  const visibleProjects = search
-    ? projects.filter((project) => normalizeSearchText(project.label).includes(search))
-    : projects;
-  byId("taskProjectCatalogNote").textContent = projects.length
-    ? `${projects.length} dự án đang được dùng làm tên chuẩn cho công việc.`
-    : "Chưa có dự án. Thêm dự án để liên kết khi tạo công việc.";
-  byId("taskProjectCatalogList").innerHTML = visibleProjects.length
-    ? visibleProjects.map((project) => `
-        <div class="project-catalog-item">
-          <strong>${escapeHtml(project.label)}</strong>
-          <div class="project-catalog-actions">
-            <button class="ghost" type="button" data-edit-task-project="${escapeHtml(project.value)}">Sửa</button>
-            <button class="ghost danger-action" type="button" data-delete-task-project="${escapeHtml(project.value)}">Xóa</button>
-          </div>
-        </div>`).join("")
-    : '<p class="muted">Không tìm thấy dự án phù hợp.</p>';
-}
-
-function openTaskProjectCatalogDialog() {
-  if (!canManageProjectCatalog()) return;
-  byId("taskProjectCatalogSearch").value = "";
-  resetTaskProjectCatalogForm();
-  renderTaskProjectCatalog();
-  const dialog = byId("taskProjectCatalogDialog");
-  dialog.classList.remove("is-hidden");
-  dialog.setAttribute("aria-hidden", "false");
-  byId("taskProjectCatalogName").focus();
-}
-
-function closeTaskProjectCatalogDialog() {
-  const dialog = byId("taskProjectCatalogDialog");
-  if (!dialog) return;
-  dialog.classList.add("is-hidden");
-  dialog.setAttribute("aria-hidden", "true");
-  resetTaskProjectCatalogForm();
-}
-
-function editTaskProjectCatalog(projectId) {
-  const project = projectById(projectId);
-  if (!canManageProjectCatalog() || !project) return;
-  byId("taskProjectCatalogId").value = project.id;
-  byId("taskProjectCatalogName").value = project.name;
-  byId("taskProjectCatalogName").focus();
-}
-
-function deleteTaskProjectCatalog(projectId) {
-  const project = projectById(projectId);
-  if (!canManageProjectCatalog() || !project) return;
-  const linkedTaskCount = state.tasks.filter((task) => projectIdForTask(task) === project.id).length;
-  if (!confirm(`Xóa dự án "${project.name}" khỏi danh mục?${linkedTaskCount ? ` ${linkedTaskCount} công việc liên kết vẫn được giữ để tra cứu.` : ""}`)) return;
-  registerDeletedId(project.id);
-  state.projectCatalog = state.projectCatalog.filter((item) => item.id !== project.id);
-  logActivity({ action: "Xóa dự án khỏi danh mục", module: "Công việc", targetType: "project-catalog", targetId: project.id, title: project.name, details: "Xóa tên dự án chuẩn." });
-  saveState();
-  renderAll();
-  renderTaskProjectCatalog();
-}
-
-function saveTaskProjectCatalog(event) {
-  event.preventDefault();
-  if (!canManageProjectCatalog()) return;
-  const id = String(byId("taskProjectCatalogId").value || "").trim();
-  const name = normalizedProjectCatalogName(byId("taskProjectCatalogName").value);
-  if (!name) return;
-  const duplicate = (state.projectCatalog || []).find((project) => project.id !== id && projectCatalogNameKey(project.name) === projectCatalogNameKey(name));
-  if (duplicate) {
-    alert("Tên dự án này đã có trong danh mục.");
-    return;
-  }
-  const actor = currentActorInfo();
-  const now = new Date().toISOString();
-  const existing = id ? projectById(id) : null;
-  const saved = existing
-    ? { ...existing, name, updatedAt: now, updatedById: actor.id, updatedByName: actor.name }
-    : { id: uid("project"), name, createdAt: now, createdById: actor.id, createdByName: actor.name, updatedAt: now, updatedById: actor.id, updatedByName: actor.name };
-  state.projectCatalog = existing
-    ? state.projectCatalog.map((project) => project.id === existing.id ? saved : project)
-    : [...state.projectCatalog, saved];
-  if (existing) state.tasks = state.tasks.map((task) => projectIdForTask(task) === existing.id ? { ...task, projectName: name, updatedAt: now } : task);
-  logActivity({ action: existing ? "Cập nhật danh mục dự án" : "Thêm dự án vào danh mục", module: "Công việc", targetType: "project-catalog", targetId: saved.id, title: saved.name, details: existing ? "Đổi tên dự án chuẩn." : "Thêm tên dự án chuẩn." });
-  saveState();
-  resetTaskProjectCatalogForm();
-  renderAll();
-  renderTaskProjectCatalog();
-}
-
-function selectedTaskProjectName() {
-  return projectById(byId("taskProjectId")?.value)?.name || "";
 }
 
 function populatePersonForm(person) {
@@ -9438,9 +9457,9 @@ function populatePersonForm(person) {
 function populateTaskForm(task) {
   if (!task) return;
   byId("taskId").value = task.id;
-  byId("taskKind").value = normalizeTaskKind(task);
   byId("taskTitle").value = task.title;
-  renderTaskProjectOptions(projectIdForTask(task));
+  renderTaskProjectOptions();
+  byId("taskProjectId").value = projectIdForTask(task);
   byId("taskOwner").value = task.ownerId;
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
   updateTaskCategoryOptions(task.category);
@@ -9453,9 +9472,6 @@ function populateTaskForm(task) {
   byId("taskProgress").value = task.progress;
   byId("taskQualityPercent").value = normalizeTaskQualityInput(task.qualityPercent);
   byId("taskNote").value = !canEditTaskDetails(task) && canUpdateTaskProgress(task) && !taskHasQualityPercent(task) ? "" : task.note;
-  byId("taskAssignerLabel").value = task.assignedByName || task.createdBy || "";
-  byId("taskResponseStatus").value = task.responseStatus || "";
-  byId("taskResponseNote").value = task.responseNote || "";
   updateTaskResponseMeta(task);
   byId("taskAttachments").value = "";
   taskAttachmentDraft = [...(task.attachments || [])];
@@ -9484,11 +9500,20 @@ function taskProgressReportRowsHtml(task) {
         const transition = report.previousStatus && report.previousStatus !== reportStatus
           ? `Chuyển trạng thái: ${report.previousStatus} -> ${reportStatus}`
           : reportStatus;
-        const reviewResult = report.decision === "passed" ? "Đạt" : "Không đạt";
+        const reviewTiming = isCompletionReview && report.decision === "passed"
+          ? report.completionTiming || taskCompletionTimingStatus(task)
+          : "";
+        const reviewTimingLabel = reviewTiming === "ahead" ? "Vượt tiến độ" : reviewTiming === "late" ? "Chậm tiến độ" : "";
+        const reviewResult = report.decision === "passed"
+          ? `<span class="task-completion-review-value is-passed">Đạt${reviewTimingLabel ? `<span class="task-completion-timing is-${reviewTiming}">${reviewTimingLabel}</span>` : ""}</span>`
+          : "Không đạt";
+        const reviewTransition = isCompletionReview && report.previousStatus && report.previousStatus !== reportStatus
+          ? `<span><strong>${escapeHtml(transition)}</strong></span>`
+          : "";
         return `
           <div class="progress-report-row">
             <small>Lần ${reports.length - index} · ${escapeHtml(formatDateTime(report.createdAt) || "Chưa rõ thời gian")} · ${escapeHtml(report.createdBy || "Người cập nhật")}</small>
-            <span><strong>${escapeHtml(isCompletionReview ? `Đánh giá hoàn thành: ${reviewResult}` : transition)}</strong>${isCompletionReview ? "" : ` · Tiến độ ${formatScore(report.progress)}%`}</span>
+            ${isCompletionReview ? `<span><strong>Đánh giá hoàn thành:</strong> ${reviewResult}</span>${reviewTransition}` : `<span><strong>${escapeHtml(transition)}</strong> · Tiến độ ${formatScore(report.progress)}%</span>`}
             ${report.action ? `<span>${escapeHtml(report.action)}</span>` : ""}
             ${report.note ? `<span>${escapeHtml(report.note)}</span>` : ""}
           </div>
@@ -9510,6 +9535,21 @@ function renderTaskProgressReportList(targetId, task) {
 }
 
 function updateTaskResponseMeta(task) {
+  const taskProgressMeta = byId("taskProgressMeta");
+  if (!task) {
+    taskProgressMeta.textContent = "";
+    taskProgressMeta.dataset.baseText = "";
+    renderTaskProgressReportList("taskProgressReportList", null);
+    return;
+  }
+  const taskLatestReport = latestTaskProgressReport(task);
+  taskProgressMeta.textContent = taskLatestReport
+    ? `Cập nhật gần nhất lúc ${formatDateTime(taskLatestReport.createdAt)} bởi ${taskLatestReport.createdBy || "người thực hiện"}: ${formatScore(taskLatestReport.progress)}%.`
+    : "Chưa có cập nhật tiến độ.";
+  taskProgressMeta.dataset.baseText = taskProgressMeta.textContent;
+  renderTaskProgressReportList("taskProgressReportList", task);
+  return;
+
   const responseMeta = byId("taskResponseMeta");
   const progressMeta = byId("taskProgressMeta");
   if (!task) {
@@ -9543,10 +9583,7 @@ function updateTaskResponseMeta(task) {
 function updateTaskFormLock(task = null) {
   const existingTask = task || state.tasks.find((item) => item.id === byId("taskId").value);
   const adminOverride = isAdmin();
-  if (!existingTask && !canAssignTasks() && byId("taskKind").value === TASK_KIND_ASSIGNED) {
-    byId("taskKind").value = TASK_KIND_REGULAR;
-  }
-  const kind = existingTask ? normalizeTaskKind(existingTask) : normalizeTaskKind(byId("taskKind").value || (canAssignTasks() ? TASK_KIND_ASSIGNED : TASK_KIND_REGULAR));
+  const kind = TASK_KIND_REGULAR;
   const ownerId = byId("taskOwner").value;
   const canEditDetails = existingTask
     ? canEditTaskDetails(existingTask)
@@ -9555,12 +9592,9 @@ function updateTaskFormLock(task = null) {
       : canCreateRegularTasks();
   const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
   const canUpdateReport = existingTask ? !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
-  const statusUpdateLocked = isTaskStatusUpdateLocked(existingTask) && !adminOverride;
-  const canEditQuality = !!existingTask && (adminOverride || canAssessTaskQuality(existingTask));
+  const canUpdateCollaborators = existingTask ? !reportLockedByQuality && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
+  const canEditQuality = !!existingTask && adminOverride;
   const isReportOnly = !!existingTask && !canEditDetails && canUpdateTaskProgress(existingTask) && !reportLockedByQuality;
-  
-  byId("taskKind").value = kind;
-  byId("taskKind").disabled = !!existingTask || !canAssignTasks();
   byId("taskOwnerLabelText").textContent = kind === TASK_KIND_ASSIGNED ? "Người được giao" : "Người thực hiện";
   byId("taskNoteLabelText").textContent = isReportOnly ? "Nội dung công việc / Báo cáo tiến độ mới" : kind === TASK_KIND_ASSIGNED ? "Yêu cầu giao việc" : "Nội dung công việc / Báo cáo tiến độ";
   byId("taskNote").placeholder =
@@ -9569,113 +9603,47 @@ function updateTaskFormLock(task = null) {
       : kind === TASK_KIND_ASSIGNED
         ? "Nội dung yêu cầu, rủi ro, phối hợp, hồ sơ liên quan..."
         : "Nội dung công việc, tiến độ thực hiện, rủi ro, phối hợp, hồ sơ liên quan...";
-        
   document.querySelectorAll(".assignment-only").forEach((element) => {
     element.classList.toggle("is-hidden", kind !== TASK_KIND_ASSIGNED);
   });
   document.querySelectorAll(".regular-only").forEach((element) => {
     element.classList.toggle("is-hidden", kind !== TASK_KIND_REGULAR);
   });
-  
-  byId("taskAssignerLabel").value = existingTask?.assignedByName || existingTask?.createdBy || (kind === TASK_KIND_ASSIGNED && canAssignTasks() ? currentActorInfo().name : "");
-  
   byId("taskForm")
-    .querySelectorAll("#taskTitle, #taskProjectId, #taskCategory, #taskWorkType, #taskRecurrence, #taskStartDate, #taskDue, #taskDueTime")
+    .querySelectorAll("#taskTitle, #taskProjectId, #taskOwner, #taskCategory, #taskWorkType, #taskRecurrence, #taskStartDate, #taskDue, #taskDueTime")
     .forEach((input) => {
       input.disabled = !canEditDetails;
     });
-  const projectTrigger = byId("taskProjectTrigger");
-  if (projectTrigger) {
-    projectTrigger.disabled = !canEditDetails;
-    if (!canEditDetails) setTaskProjectPickerOpen(false);
-  }
-
-  // =========================================================================
-  // 🌟 KHÓA/MỞ QUYỀN CHO TÀI KHOẢN NHÂN VIÊN VÀ CẤP QUẢN LÝ
-  // =========================================================================
-  const isPureEmployee = currentAccount()?.role === "employee";
-  const collaboratorPicker = byId("taskCollaboratorPicker");
-
-  if (isPureEmployee) {
-    // 1. Nhân viên: Mặc định Người thực hiện là CHÍNH MÌNH & KHÓA
-    if (currentPerson() && !existingTask) {
-      byId("taskOwner").value = currentPerson().id;
-      const triggerText = byId("taskOwnerTriggerText");
-      if (triggerText) {
-        triggerText.textContent = `${currentPerson().name} - ${roleById(currentPerson().roleId)?.name || ""}`;
-      }
-    }
-    byId("taskOwner").disabled = true;
-    const ownerTrigger = byId("taskOwnerTrigger");
-    if (ownerTrigger) {
-      ownerTrigger.disabled = true;
-      ownerTrigger.style.pointerEvents = "none";
-      ownerTrigger.style.opacity = "0.65";
-      ownerTrigger.style.cursor = "not-allowed";
-    }
-
-    // 2. Nhân viên: KHÓA HOÀN TOÀN tính năng Người phối hợp
-    if (collaboratorPicker) {
-      collaboratorPicker.classList.add("is-disabled");
-      collaboratorPicker.setAttribute("aria-disabled", "true");
-      setTaskCollaboratorPickerOpen(false);
-    }
-    byId("taskCollaborators").querySelectorAll('input[type="checkbox"]').forEach((input) => {
-      input.disabled = true;
-    });
-    byId("taskCollaborators").classList.add("is-disabled");
-
-  } else {
-    // 3. Trưởng phòng, Phó phòng, Trưởng bộ phận, Ban giám đốc, Admin: MỞ KHÓA
-    byId("taskOwner").disabled = !canEditDetails;
-    const ownerTrigger = byId("taskOwnerTrigger");
-    if (ownerTrigger) {
-      ownerTrigger.disabled = !canEditDetails;
-      ownerTrigger.style.pointerEvents = canEditDetails ? "auto" : "none";
-      ownerTrigger.style.opacity = canEditDetails ? "1" : "0.65";
-      ownerTrigger.style.cursor = canEditDetails ? "pointer" : "not-allowed";
-    }
-
-    byId("taskCollaborators").querySelectorAll('input[type="checkbox"]').forEach((input) => {
-      input.disabled = !canEditDetails;
-    });
-    byId("taskCollaborators").classList.toggle("is-disabled", !canEditDetails);
-    if (collaboratorPicker) {
-      collaboratorPicker.classList.toggle("is-disabled", !canEditDetails);
-      collaboratorPicker.setAttribute("aria-disabled", String(!canEditDetails));
-      if (!canEditDetails) setTaskCollaboratorPickerOpen(false);
-    }
-  }
-
   byId("taskNote").disabled = reportLockedByQuality || (!canEditDetails && !canUpdateReport);
-  
-  if (statusUpdateLocked) {
-    byId("taskStartDate").disabled = true;
-    byId("taskDue").disabled = true;
-    byId("taskDueTime").disabled = true;
+  byId("taskCollaborators")
+    .querySelectorAll('input[type="checkbox"]')
+    .forEach((input) => {
+      input.disabled = !canUpdateCollaborators;
+    });
+  byId("taskCollaborators").classList.toggle("is-disabled", !canUpdateCollaborators);
+  const collaboratorPicker = byId("taskCollaboratorPicker");
+  if (collaboratorPicker) {
+    collaboratorPicker.classList.toggle("is-disabled", !canUpdateCollaborators);
+    collaboratorPicker.setAttribute("aria-disabled", String(!canUpdateCollaborators));
+    if (!canUpdateCollaborators) setTaskCollaboratorPickerOpen(false);
   }
-
-  byId("taskStatus").disabled = !canUpdateReport || statusUpdateLocked;
+  if (isEmployee() && kind === TASK_KIND_REGULAR) {
+    byId("taskOwner").disabled = true;
+  }
+  byId("taskStatus").disabled = !canUpdateReport;
   byId("taskForm")
     .querySelectorAll("#taskProgress, #taskAttachments")
     .forEach((input) => {
       input.disabled = !canUpdateReport;
     });
-
   const qualityInput = byId("taskQualityPercent");
   if (!taskCompletionIsApproved(existingTask) && !adminOverride) {
     qualityInput.value = "";
   }
   qualityInput.disabled = !canEditQuality;
   qualityInput.title = canEditQuality
-    ? adminOverride
-      ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
-      : "Nhập tỷ lệ chất lượng sau khi công việc được đánh giá Đạt. Điểm thực hiện KPI = tỷ lệ này / 100."
-    : "Chỉ mở sau khi Trưởng phòng/Phó phòng đánh giá công việc Đạt.";
-
-  byId("taskResponseStatus").disabled = !(kind === TASK_KIND_ASSIGNED && existingTask && !reportLockedByQuality && (adminOverride || canReportTask(existingTask)));
-  byId("taskResponseNote").disabled = !(kind === TASK_KIND_ASSIGNED && existingTask && !reportLockedByQuality && canUpdateReport);
-
+    ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
+    : "Đánh giá chất lượng được nhập cùng kết quả Đạt tại màn hình Duyệt hoàn thành.";
   if (reportLockedByQuality) {
     const progressMeta = byId("taskProgressMeta");
     if (progressMeta) {
@@ -9714,20 +9682,16 @@ function updateAssignmentTaskFormLock(task = null) {
   const canEditDetails = existingTask ? (!isClosed || adminOverride) && canEditTaskDetails(existingTask) : canAssignTaskToPerson(byId("assignmentTaskOwner").value) || canAssignTasks();
   const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
   const canUpdateReport = existingTask ? (!isClosed || adminOverride) && !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
-  const statusUpdateLocked = isTaskStatusUpdateLocked(existingTask) && !adminOverride;
-  const canEditQuality = (!isClosed || adminOverride) && !!existingTask && (adminOverride || canAssessTaskQuality(existingTask));
+  const canUpdateCollaborators = existingTask ? (!isClosed || adminOverride) && !reportLockedByQuality && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
+  const canEditQuality = (!!existingTask && adminOverride) && (!isClosed || adminOverride);
   byId("assignmentTaskAssignerLabel").value = existingTask?.assignedByName || existingTask?.createdBy || (canAssignTasks() ? currentActorInfo().name : "");
   byId("assignmentTaskForm")
-    .querySelectorAll("#assignmentTaskTitle, #assignmentTaskProjectName, #assignmentTaskOwner, #assignmentTaskCollaborator, #assignmentTaskCategory, #assignmentTaskStartDate, #assignmentTaskDue, #assignmentTaskDueTime, #assignmentTaskNote")
+    .querySelectorAll("#assignmentTaskTitle, #assignmentTaskProjectId, #assignmentTaskOwner, #assignmentTaskCategory, #assignmentTaskStartDate, #assignmentTaskDue, #assignmentTaskDueTime, #assignmentTaskNote")
     .forEach((input) => {
       input.disabled = !canEditDetails;
     });
-  if (statusUpdateLocked) {
-    byId("assignmentTaskStartDate").disabled = true;
-    byId("assignmentTaskDue").disabled = true;
-    byId("assignmentTaskDueTime").disabled = true;
-  }
-  byId("assignmentTaskStatus").disabled = !canUpdateReport || statusUpdateLocked;
+  byId("assignmentTaskCollaborator").disabled = !canUpdateCollaborators;
+  byId("assignmentTaskStatus").disabled = !canUpdateReport;
   byId("assignmentTaskForm")
     .querySelectorAll("#assignmentTaskProgress, #assignmentTaskAttachments")
     .forEach((input) => {
@@ -9739,16 +9703,16 @@ function updateAssignmentTaskFormLock(task = null) {
   }
   qualityInput.disabled = !canEditQuality;
   qualityInput.title = canEditQuality
-    ? adminOverride
-      ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
-      : "Nhập tỷ lệ chất lượng sau khi công việc được đánh giá Đạt. Điểm thực hiện KPI = tỷ lệ này / 100."
-    : "Chỉ mở sau khi Trưởng phòng/Phó phòng đánh giá công việc Đạt.";
+    ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
+    : "Đánh giá chất lượng được nhập cùng kết quả Đạt tại màn hình Duyệt hoàn thành.";
   const canRespondToAssignment = !!existingTask && (!isClosed || adminOverride) && !reportLockedByQuality && (adminOverride || canReportTask(existingTask));
   const collaboratorProgressOnly = !!existingTask && !canEditDetails && canCollaborateTask(existingTask) && !canReportTask(existingTask);
+  const departmentManagementProgressOnly = !!existingTask && !canEditDetails && canManageDepartmentTaskProgress(existingTask) && !canReportTask(existingTask);
+  const progressOnly = collaboratorProgressOnly || departmentManagementProgressOnly;
   byId("assignmentTaskResponseStatus").disabled = !canRespondToAssignment;
   byId("assignmentTaskResponseNote").disabled = !(existingTask && (!isClosed || adminOverride) && !reportLockedByQuality && canUpdateReport);
-  byId("assignmentTaskResponseNoteLabel").textContent = collaboratorProgressOnly ? "Báo cáo tiến độ mới" : "Nội dung phản hồi / Báo cáo tiến độ";
-  byId("assignmentTaskResponseNote").placeholder = collaboratorProgressOnly
+  byId("assignmentTaskResponseNoteLabel").textContent = progressOnly ? "Báo cáo tiến độ mới" : "Nội dung phản hồi / Báo cáo tiến độ";
+  byId("assignmentTaskResponseNote").placeholder = progressOnly
     ? "Nhập nội dung báo cáo tiến độ mới. Mỗi lần lưu sẽ tạo một dòng lịch sử riêng."
     : "Xác nhận nhận việc, lý do cần trao đổi hoặc báo cáo tiến độ thực hiện...";
   if (reportLockedByQuality) {
@@ -9769,7 +9733,8 @@ function populateAssignmentTaskForm(task) {
   if (!task) return;
   byId("assignmentTaskId").value = task.id;
   byId("assignmentTaskTitle").value = task.title || "";
-  byId("assignmentTaskProjectName").value = task.projectName || "";
+  renderTaskProjectOptions();
+  byId("assignmentTaskProjectId").value = projectIdForTask(task);
   byId("assignmentTaskOwner").value = task.ownerId || "";
   byId("assignmentTaskCollaborator").value = task.collaboratorId || "";
   renderPersonOptions();
@@ -9800,9 +9765,8 @@ function copiedTaskTitle(title) {
 
 function copyRegularTaskToForm(task) {
   resetTaskForm();
-  byId("taskKind").value = TASK_KIND_REGULAR;
   byId("taskTitle").value = copiedTaskTitle(task.title);
-  renderTaskProjectOptions(projectIdForTask(task));
+  byId("taskProjectId").value = projectIdForTask(task);
   byId("taskOwner").value = task.ownerId || "";
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
   updateTaskCategoryOptions(task.category);
@@ -9831,7 +9795,7 @@ function copyAssignmentTaskToForm(task) {
   byId("taskInboxDialog").classList.remove("is-hidden");
   byId("taskInboxDialog").setAttribute("aria-hidden", "false");
   byId("assignmentTaskTitle").value = copiedTaskTitle(task.title);
-  byId("assignmentTaskProjectName").value = task.projectName || "";
+  byId("assignmentTaskProjectId").value = projectIdForTask(task);
   byId("assignmentTaskOwner").value = task.ownerId || "";
   byId("assignmentTaskCollaborator").value = task.collaboratorId || "";
   updateTaskCategoryOptions(task.category, "assignmentTaskOwner", "assignmentTaskCategory");
@@ -9865,7 +9829,8 @@ function copyTaskToForm(task) {
 function resetAssignmentTaskForm() {
   byId("assignmentTaskForm").reset();
   byId("assignmentTaskId").value = "";
-  byId("assignmentTaskProjectName").value = "";
+  renderTaskProjectOptions();
+  byId("assignmentTaskProjectId").value = "";
   byId("assignmentTaskProgress").value = 0;
   byId("assignmentTaskQualityPercent").value = "";
   byId("assignmentTaskStatus").value = TASK_STATUS_PREPARING;
@@ -9899,6 +9864,20 @@ function endAssignmentTask(taskId = byId("assignmentTaskId").value) {
       closedAt: timestamp,
       closedBy: actor.name,
       closedById: actor.id,
+      progressReports: [
+        ...(task.progressReports || []),
+        {
+          id: uid("task-report"),
+          progress: Number(task.progress || 0),
+          status: TASK_STATUS_CLOSED,
+          previousStatus,
+          action: "Kết thúc công việc",
+          note: `Đóng công việc. Trạng thái trước đó: ${previousStatus}.`,
+          createdAt: timestamp,
+          createdById: actor.id,
+          createdBy: actor.name,
+        },
+      ],
     },
     task,
   );
@@ -9996,13 +9975,13 @@ function openHistoryTimelineTarget(target) {
       byId("taskInboxDialog").setAttribute("aria-hidden", "false");
       if (canOpenTask(task)) {
         populateAssignmentTaskForm(task);
-        const focusTarget = canAssessTaskQuality(task) && !canEditTaskDetails(task) && !canUpdateTaskProgress(task) ? byId("assignmentTaskQualityPercent") : byId("assignmentTaskNote");
+        const focusTarget = byId("assignmentTaskNote");
         focusTarget.scrollIntoView({ behavior: "smooth", block: "center" });
         focusTarget.focus({ preventScroll: true });
       }
     } else if (task && canOpenTask(task)) {
       populateTaskForm(task);
-      focusEditForm("taskForm", canAssessTaskQuality(task) && !canEditTaskDetails(task) && !canUpdateTaskProgress(task) ? "taskQualityPercent" : canEditTaskDetails(task) ? "taskTitle" : "taskNote");
+      focusEditForm("taskForm", canEditTaskDetails(task) ? "taskTitle" : "taskNote");
     } else {
       byId("taskBoard").scrollIntoView({ behavior: "smooth", block: "start" });
     }
@@ -10125,24 +10104,26 @@ function openDashboardTaskDetail(taskId) {
   if (!taskId || !canAccessView("tasks")) return;
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task || !canViewTaskRecord(task)) return;
-  clearDashboardDrillFilters();
-  openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
+  openTaskDetailDialog(taskId);
 }
 
 function openDashboardDetail(action) {
   if (action === "people" && canAccessView("people")) {
     clearDashboardDrillFilters();
+    byId("personSearch").value = "";
     renderPeopleTable();
     switchView("people");
+    byId("peopleTable").scrollIntoView({ behavior: "smooth", block: "start" });
     return;
   }
   if (action === "overdue" && canAccessView("tasks")) {
-    byId("taskStatusFilter").value = "Quá hạn";
     byId("taskSearch").value = "";
+    byId("taskStatusFilter").value = "";
     byId("taskProjectFilter").value = "";
     clearTaskTimeFilter();
     renderTaskBoard();
     switchView("tasks");
+    openTaskStatusDetailDialog("Quá hạn");
     return;
   }
   if ((action === "evaluations" || action === "reward") && canAccessView("evaluations")) {
@@ -10215,24 +10196,20 @@ function printSelectedSections(sectionIds) {
 function renderAll() {
   applySystemCustomization();
   applyAccessControls();
-  if (!currentAccount()) return;
   if (currentAccount()) ensureRecurringTasksForPeriod();
-  renderTaskProjectOptions();
-  renderTaskProjectCatalog();
   byId("activePeriod").value = state.activePeriod;
   byId("evalPeriod").value = state.activePeriod;
   byId("deptEvalPeriod").value = state.activePeriod;
   renderDepartmentEvaluationOptions();
+  renderTaskProjectCatalog();
   renderPersonOptions();
   updateTaskFormLock();
-  updateAssignmentTaskFormLock();
   renderAccountOptions();
   renderPeopleTable();
   renderBulletinBoard();
   renderArchiveOptions();
   renderArchive();
   renderTaskBoard();
-  renderTaskInbox();
   loadDepartmentEvaluationForSelection();
   loadEvaluationForSelection();
   renderDepartmentEvaluationTable();
@@ -10245,11 +10222,7 @@ function renderAll() {
   renderAccountPresence();
   renderDirectCustomization();
   applyAccessControls();
-
-  // 🌟 ĐOẠN MỚI CHÈN THÊM VÀO ĐÂY:
-  if (typeof requestAccountPresence === "function") {
-    requestAccountPresence();
-  }
+  renderBirthdayCelebration();
 }
 
 function resetPersonForm() {
@@ -10261,9 +10234,8 @@ function resetPersonForm() {
 function resetTaskForm() {
   byId("taskForm").reset();
   byId("taskId").value = "";
-  byId("taskKind").disabled = false;
-  byId("taskKind").value = TASK_KIND_REGULAR;
   renderTaskProjectOptions();
+  byId("taskProjectId").value = "";
   byId("taskCollaborators").innerHTML = "";
   setTaskCollaboratorPickerOpen(false);
   renderPersonOptions();
@@ -10274,9 +10246,6 @@ function resetTaskForm() {
   byId("taskStatus").value = TASK_STATUS_PREPARING;
   byId("taskStartDate").value = "";
   byId("taskDueTime").value = "";
-  byId("taskAssignerLabel").value = "";
-  byId("taskResponseStatus").value = "";
-  byId("taskResponseNote").value = "";
   updateTaskResponseMeta(null);
   byId("taskAttachments").value = "";
   taskAttachmentDraft = [];
@@ -10336,7 +10305,7 @@ function seedDemoData() {
       state.accounts.push({
         id: uid("account"),
         username,
-        password: "",
+        password: "123456",
         displayName,
         role,
         personId: person.id,
@@ -10413,97 +10382,51 @@ function seedDemoData() {
   renderAll();
 }
 
-// 🌟 ĐOẠN ĐĂNG NHẬP SỬA CHUẨN - TỰ ĐỘNG BỎ QUA LỖI CLOUD NẾU CÓ TÀI KHOẢN TRONG FILE JS
+// 🌟 Tự động kéo dữ liệu mây MỚI NHẤT ngay khi Đăng nhập thành công
 byId("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const username = byId("loginUsername").value.trim();
   const password = byId("loginPassword").value;
   byId("loginError").textContent = "";
-
-  // 1. Ép nạp Nhân sự & Tài khoản từ file people-data.js vào bộ nhớ nếu chưa có
-  if (typeof mergeImportedPeopleIntoState === "function") mergeImportedPeopleIntoState();
-  if (typeof mergeImportedAccountsIntoState === "function") mergeImportedAccountsIntoState();
-
-  // 2. Thử xác thực với Cloud
   const sharedLogin = await loginSharedSession(username, password);
-  const normalizedUsername = username.toLowerCase();
-
-  // 3. Tìm tài khoản trong bộ nhớ state hiện tại
-  let account = null;
-
-  // 4. Nếu Cloud báo lỗi nhưng tìm thấy tài khoản trong file people-data.js -> Nạp trực tiếp vào state
-  if (sharedLogin.mode === "remote") {
-    if (sharedLogin.error) {
-      const serverRejectedCredentials = sharedLogin.status === 401 || sharedLogin.status === 403;
-      if (!serverRejectedCredentials) account = await verifyOfflineLogin(username, password);
-      if (!account) {
-        byId("loginError").textContent = serverRejectedCredentials
-          ? "Sai tai khoan hoac mat khau."
-          : sharedLogin.error;
-        return;
-      }
-    } else {
-      // Cloud already authenticated the password. The returned account record
-      // intentionally has no password, so match the profile by username only.
-      account = state.accounts.find((item) =>
-        String(item.username || "").toLowerCase() === normalizedUsername
-      );
-      if (!account) {
-        logoutSharedSession();
-        byId("loginError").textContent = "May chu khong tra ve ho so tai khoan hop le.";
-        return;
-      }
-      await saveOfflineLoginProof(username, password);
-    }
-  } else {
-    account = state.accounts.find((item) =>
-      String(item.username || "").toLowerCase() === normalizedUsername &&
-      item.password === password
-    );
-
-    if (!account) {
-      const importedAccs = Array.isArray(window.PHUC_THINH_IMPORTED_ACCOUNTS) ? window.PHUC_THINH_IMPORTED_ACCOUNTS : [];
-      const matchImported = importedAccs.find((item) =>
-        String(item.username || "").toLowerCase() === normalizedUsername && item.password === password
-      );
-      if (matchImported) {
-        account = matchImported;
-        if (!state.accounts.some((item) => item.id === account.id)) {
-          state.accounts.push(account);
-          saveState();
-        }
-      }
-    }
+  if (sharedLogin.error) {
+    byId("loginError").textContent = sharedLogin.error;
+    return;
   }
-
+  if (sharedLogin.warning) alert(sharedLogin.warning);
+  const remoteSupabaseLogin = usingSupabaseSync() && sharedLogin.mode === "remote";
+  const offlineLogin = sharedLogin.mode === "offline";
+  const normalizedUsername = username.toLowerCase();
+  const account = offlineLogin
+    ? state.accounts.find((item) => String(item.id || "") === String(sharedLogin.offlineAccountId || ""))
+    : state.accounts.find((item) => String(item.username || "").toLowerCase() === normalizedUsername && (remoteSupabaseLogin || item.password === password));
   if (!account) {
     byId("loginError").textContent = "Sai tài khoản hoặc mật khẩu.";
     return;
   }
-
   if (account.disabled) {
     byId("loginError").textContent = "Tài khoản này đang bị vô hiệu hóa. Vui lòng liên hệ Admin.";
     return;
   }
-
-  // 🟢 Tìm đoạn localStorage.setItem(SESSION_KEY, account.id); trong loginForm và sửa thành:
-  localStorage.setItem(SESSION_KEY, account.id || account.username);
-  localStorage.setItem("phuc-thinh-user-name-temp", account.displayName || account.username);
-  localStorage.setItem("phuc-thinh-user-role-temp", account.role || "admin");
+  if (sharedLogin.mode !== "offline") await rememberOfflineLogin(account, password);
+  localStorage.setItem(SESSION_KEY, account.id);
+  birthdayCelebrationDisplayKey = "";
   byId("loginForm").reset();
   renderAll();
   startAccountPresenceMonitoring();
 });
 
-byId("logoutButton")?.addEventListener("click", () => {
+byId("logoutButton").addEventListener("click", () => {
   logoutSharedSession();
   localStorage.removeItem(SESSION_KEY);
-  localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-  location.reload();
+  renderAll();
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") requestAccountPresence();
+  if (document.visibilityState !== "visible") return;
+  requestAccountPresence();
+  refreshSharedState();
+  scheduleSharedStateRefresh({ immediate: true });
 });
 
 window.addEventListener("storage", (event) => {
@@ -10554,12 +10477,10 @@ document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
 });
 
-// 1. Sự kiện bật/tắt chế độ Tùy biến
-byId("toggleCustomizeMode")?.addEventListener("click", () => {
+byId("toggleCustomizeMode").addEventListener("click", () => {
   setCustomizeMode(!customizeMode);
 });
 
-// 🟢 2. CHÈN ĐOẠN CODE CỦA SẾP VÀO NGAY ĐÂY:
 document.addEventListener("click", (event) => {
   if (!customizationEnabled()) return;
   if (event.target.closest("#taskCollaboratorPicker")) return;
@@ -10568,14 +10489,6 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     return;
-  }
-  const btn = event.target.closest("[data-open-inbox-task]");
-  if (btn) {
-    const taskId = btn.dataset.openInboxTask;
-    if (taskId) {
-      markInboxTaskAsRead(taskId);
-      if (typeof renderTaskInbox === "function") renderTaskInbox();
-    }
   }
   const toolbarButton = event.target.closest("[data-open-custom-field]");
   if (toolbarButton) {
@@ -10606,6 +10519,17 @@ document.addEventListener("click", (event) => {
   }
 }, true);
 
+document.addEventListener("pointerover", (event) => {
+  if (!customizationEnabled()) return;
+  const element = event.target.closest(".is-admin-customizable-field");
+  if (element) showCustomizationMiniTools(element);
+});
+
+document.addEventListener("pointerout", (event) => {
+  const element = event.target.closest(".is-admin-customizable-field");
+  if (element && !element.contains(event.relatedTarget)) hideCustomizationMiniTools(element);
+});
+
 document.addEventListener("dragstart", (event) => {
   if (!customizationEnabled()) return;
   const handle = event.target.closest("[data-custom-drag-handle]");
@@ -10623,17 +10547,15 @@ document.addEventListener("dragover", (event) => {
   const dropTarget = customizationDropTargetFromEvent(event);
   if (!dropTarget) return;
   event.preventDefault();
-  document.querySelectorAll(".is-customization-drop-target, .is-customization-drop-container-active").forEach((element) => {
-    if (element !== dropTarget.target && element !== dropTarget.container) element.classList.remove("is-customization-drop-target", "is-customization-drop-container-active");
-  });
-  if (dropTarget.target) dropTarget.target.classList.add("is-customization-drop-target");
-  dropTarget.container.classList.add("is-customization-drop-container-active");
+  setCustomizationDropState(dropTarget);
   event.dataTransfer.dropEffect = "move";
 });
 
 document.addEventListener("dragleave", (event) => {
   const target = event.target.closest(".is-admin-customizable-field");
-  if (target) target.classList.remove("is-customization-drop-target");
+  if (target && customizationDropState.target === target) {
+    setCustomizationDropState({ target: null, container: customizationDropState.container });
+  }
 });
 
 document.addEventListener("drop", (event) => {
@@ -10676,22 +10598,36 @@ document.addEventListener("pointerdown", (event) => {
     startY: event.clientY,
     startWidth: rect.width,
     startHeight: rect.height,
+    nextWidth: rect.width,
+    nextHeight: rect.height,
   };
+  handle.setPointerCapture?.(event.pointerId);
   element.classList.add("is-customization-resizing");
   document.body.classList.add("is-customization-resizing");
 });
 
+function applyCustomizationResizePreview() {
+  customizationResizeFrame = 0;
+  if (!customizationResizeState) return;
+  const { element, nextWidth, nextHeight } = customizationResizeState;
+  element.style.width = `${Math.round(nextWidth)}px`;
+  element.style.height = `${Math.round(nextHeight)}px`;
+}
+
 document.addEventListener("pointermove", (event) => {
   if (!customizationResizeState) return;
   event.preventDefault();
-  const nextWidth = clamp(customizationResizeState.startWidth + event.clientX - customizationResizeState.startX, 40, 2400);
-  const nextHeight = clamp(customizationResizeState.startHeight + event.clientY - customizationResizeState.startY, 24, 1800);
-  customizationResizeState.element.style.width = `${Math.round(nextWidth)}px`;
-  customizationResizeState.element.style.height = `${Math.round(nextHeight)}px`;
+  customizationResizeState.nextWidth = clamp(customizationResizeState.startWidth + event.clientX - customizationResizeState.startX, 40, 2400);
+  customizationResizeState.nextHeight = clamp(customizationResizeState.startHeight + event.clientY - customizationResizeState.startY, 24, 1800);
+  if (!customizationResizeFrame) customizationResizeFrame = requestAnimationFrame(applyCustomizationResizePreview);
 });
 
 document.addEventListener("pointerup", () => {
   if (!customizationResizeState) return;
+  if (customizationResizeFrame) {
+    cancelAnimationFrame(customizationResizeFrame);
+    applyCustomizationResizePreview();
+  }
   const { element, key, legacyKey } = customizationResizeState;
   const rect = element.getBoundingClientRect();
   setCustomizationOverride(
@@ -10714,7 +10650,6 @@ document.addEventListener("pointerup", () => {
   element.classList.remove("is-customization-resizing");
   document.body.classList.remove("is-customization-resizing");
   customizationResizeState = null;
-  applyFieldCustomizations();
 });
 
 byId("fieldCustomizeForm").addEventListener("submit", (event) => {
@@ -10868,11 +10803,11 @@ byId("resetPopupCustomize").addEventListener("click", () => {
 
 byId("closePopupCustomize").addEventListener("click", () => closeModal("popupCustomizeDialog"));
 
-byId("sidebarToggle")?.addEventListener("click", () => {
+byId("sidebarToggle").addEventListener("click", () => {
   setSidebarCollapsed(!document.body.classList.contains("is-sidebar-collapsed"));
 });
 
-byId("activePeriod")?.addEventListener("change", (event) => {
+byId("activePeriod").addEventListener("change", (event) => {
   const shouldAnimateDashboard = document.querySelector(".view.is-active")?.id === "dashboard";
   state.activePeriod = event.target.value || currentMonth();
   persistState();
@@ -10884,10 +10819,6 @@ byId("activePeriod")?.addEventListener("change", (event) => {
 
 byId("bulletinForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!canManageBulletins()) {
-    alert("Chỉ tài khoản admin được đăng tải, cập nhật hoặc chỉnh sửa tin bài.");
-    return;
-  }
   const selectedMediaFiles = Array.from(byId("bulletinMedia").files || []);
   const pendingMediaSize =
     bulletinMediaDraft.reduce((sum, file) => sum + (Number(file.size) || 0), 0) +
@@ -10900,6 +10831,10 @@ byId("bulletinForm").addEventListener("submit", async (event) => {
   state.bulletins = Array.isArray(state.bulletins) ? state.bulletins : [];
   const index = state.bulletins.findIndex((item) => item.id === id);
   const existing = index >= 0 ? state.bulletins[index] : null;
+  if (!canPublishBulletins() || (existing && !canEditBulletin(existing))) {
+    alert("Tài khoản hiện tại không có quyền đăng hoặc cập nhật tin bài này.");
+    return;
+  }
   const category = byId("bulletinCategory").value;
   const voting = isVotingBulletinCategory(category);
   const voteOptions = voting ? parseBulletinVoteOptions(byId("bulletinVoteOptions").value, existing?.voteOptions || []) : [];
@@ -10998,26 +10933,19 @@ byId("bulletinMediaList").addEventListener("click", (event) => {
   bulletinMediaDraft = bulletinMediaDraft.filter((file) => file.id !== removeId);
   renderBulletinMediaDraft();
 });
-// ✅ SỬA LẠI: THÊM async / await KHI XÓA BẢNG TIN
-byId("bulletinList").addEventListener("click", async (event) => {
+byId("bulletinList").addEventListener("click", (event) => {
   const editId = event.target.closest("[data-edit-bulletin]")?.dataset.editBulletin;
   const deleteId = event.target.closest("[data-delete-bulletin]")?.dataset.deleteBulletin;
-  
   if (editId) {
-    if (!canManageBulletins()) return;
     const post = (state.bulletins || []).find((item) => item.id === editId);
+    if (!canEditBulletin(post)) return;
     populateBulletinForm(post);
     focusEditForm("bulletinForm", "bulletinTitle");
     return;
   }
-  
-  if (deleteId && canManageBulletins() && confirm("Xóa tin bài này?")) {
+  if (deleteId && canDeleteBulletin() && confirm("Xóa tin bài này?")) {
     registerDeletedId(deleteId);
     const post = (state.bulletins || []).find((item) => item.id === deleteId);
-
-    // 🔥 Chờ Supabase xóa xong hẳn trên Cloud
-    await deleteFromSupabase("bulletins", deleteId);
-
     state.bulletins = (state.bulletins || []).filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -11033,7 +10961,6 @@ byId("bulletinList").addEventListener("click", async (event) => {
     renderAll();
     return;
   }
-
   if (event.target.closest("a, video, audio, iframe, object, embed")) return;
   const openId = event.target.closest("[data-open-bulletin]")?.dataset.openBulletin;
   if (openId) openBulletinDetailDialog(openId);
@@ -11118,10 +11045,6 @@ byId("bulletinDetailVoting").addEventListener("submit", (event) => {
 
 byId("archiveForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!canManageArchive()) {
-    alert("Chỉ tài khoản admin được tải lên, chỉnh sửa hoặc xóa hồ sơ trong mục Lưu Trữ.");
-    return;
-  }
   const selectedFiles = Array.from(byId("archiveFiles").files || []);
   const pendingSize =
     archiveFileDraft.reduce((sum, file) => sum + (Number(file.size) || 0), 0) +
@@ -11143,6 +11066,10 @@ byId("archiveForm").addEventListener("submit", async (event) => {
   state.archiveRecords = Array.isArray(state.archiveRecords) ? state.archiveRecords : [];
   const index = state.archiveRecords.findIndex((record) => record.id === id);
   const existing = index >= 0 ? state.archiveRecords[index] : null;
+  if (!canSaveArchive() || (existing && !canEditArchive(existing))) {
+    alert("Tài khoản hiện tại không có quyền lưu hoặc cập nhật hồ sơ này.");
+    return;
+  }
   const files = [...archiveFileDraft, ...uploadedFiles];
   const totalFileSize = files.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
   if (totalFileSize > MAX_ARCHIVE_FILE_TOTAL_BYTES) {
@@ -11160,8 +11087,7 @@ byId("archiveForm").addEventListener("submit", async (event) => {
     recordDate: byId("archiveDate").value || todayInputDate(),
     departmentId: byId("archiveDepartment").value,
     personId: byId("archivePerson").value,
-    taskId: byId("archiveTask").value,
-    departmentEvaluationId: byId("archiveDepartmentEvaluation").value,
+    projectId: byId("archiveProject").value,
     tags: parseArchiveTags(byId("archiveTags").value),
     description: byId("archiveDescription").value.trim(),
     files,
@@ -11210,25 +11136,19 @@ byId("archiveFileList").addEventListener("click", (event) => {
   archiveFileDraft = archiveFileDraft.filter((file) => file.id !== removeId);
   renderArchiveFileDraft();
 });
-// ✅ SỬA LẠI: DỌN SẠCH CODE DƯ VÀ THÊM await XÓA CLOUD
-byId("archiveList").addEventListener("click", async (event) => {
+byId("archiveList").addEventListener("click", (event) => {
   const editId = event.target.closest("[data-edit-archive]")?.dataset.editArchive;
   const deleteId = event.target.closest("[data-delete-archive]")?.dataset.deleteArchive;
-  
   if (editId) {
-    if (!canManageArchive()) return;
-    populateArchiveForm(archiveById(editId));
+    const record = archiveById(editId);
+    if (!canEditArchive(record)) return;
+    populateArchiveForm(record);
     focusEditForm("archiveForm", "archiveTitle");
     return;
   }
-  
-  if (deleteId && canManageArchive() && confirm("Xóa hồ sơ lưu trữ này?")) {
-    registerDeletedId(deleteId);
+  if (deleteId && canDeleteArchive() && confirm("Xóa hồ sơ lưu trữ này?")) {
+    registerDeletedId(deleteId); // 🔥 THÊM DÒNG NÀY Ở ĐÂY
     const record = archiveById(deleteId);
-
-    // 🔥 Chờ Supabase xóa xong hẳn trên Cloud
-    await deleteFromSupabase("archive_records", deleteId);
-
     state.archiveRecords = (state.archiveRecords || []).filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -11246,7 +11166,6 @@ byId("archiveList").addEventListener("click", async (event) => {
     renderAll();
     return;
   }
-
   if (handleArchiveRelatedTarget(event)) return;
   if (event.target.closest("a, button, video, audio, object, embed")) return;
   const openId = event.target.closest("[data-open-archive-detail]")?.dataset.openArchiveDetail;
@@ -11261,13 +11180,25 @@ byId("archiveList").addEventListener("keydown", (event) => {
 });
 
 byId("closeArchiveDetail").addEventListener("click", closeArchiveDetailDialog);
-byId("archiveDetailDialog").addEventListener("click", (event) => {
-  // 🌟 Bổ sung đoạn này: Bắt sự kiện mở Tab mới xem PDF trực tiếp
-  const pdfTabBtn = event.target.closest("[data-open-pdf-tab]");
-  if (pdfTabBtn) {
+byId("archiveDetailDialog").addEventListener("click", async (event) => {
+  const downloadButton = event.target.closest("[data-download-archive-file]");
+  if (downloadButton) {
     event.preventDefault();
     event.stopPropagation();
-    openFileInNewTab(pdfTabBtn.dataset.openPdfTab);
+    downloadButton.disabled = true;
+    try {
+      await downloadArchiveFile(downloadButton.dataset.downloadArchiveFile);
+    } finally {
+      downloadButton.disabled = false;
+    }
+    return;
+  }
+
+  const openFileButton = event.target.closest("[data-open-archive-file], [data-open-pdf-tab]");
+  if (openFileButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    openFileInNewTab(openFileButton.dataset.openArchiveFile || openFileButton.dataset.openPdfTab);
     return;
   }
 
@@ -11289,12 +11220,6 @@ byId("clearPersonSearch").addEventListener("click", () => {
 });
 byId("clearPeoplePendingFilter").addEventListener("click", () => {
   peoplePendingEvaluationOnly = false;
-  renderPeopleTable();
-});
-byId("peopleDirectoryGroups")?.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-person-group]");
-  if (!button) return;
-  peopleDirectoryGroupFilter = button.dataset.personGroup || "";
   renderPeopleTable();
 });
 
@@ -11422,8 +11347,20 @@ byId("accountForm").addEventListener("submit", (event) => {
 });
 
 byId("resetAccountForm").addEventListener("click", resetAccountForm);
+byId("dismissBirthdayCelebration").addEventListener("click", closeBirthdayCelebration);
+byId("birthdayCelebration").addEventListener("click", (event) => {
+  if (event.target === byId("birthdayCelebration")) closeBirthdayCelebration();
+});
+byId("birthdayDayBanner").addEventListener("click", () => {
+  if (birthdayBannerCanCollapse()) setBirthdayBannerCollapsed(!birthdayBannerCollapsed);
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) renderBirthdayCelebration();
+});
 byId("refreshAccountPresence").addEventListener("click", () => {
-  if (isAdmin()) requestAccountPresence();
+  if (!isAdmin()) return;
+  requestAccountPresence();
+  requestAccountUsageHistory({ force: true });
 });
 
 byId("moduleAccessList").addEventListener("change", (event) => {
@@ -11487,27 +11424,19 @@ byId("systemThemeForm").addEventListener("submit", (event) => {
 
 byId("accountSearch").addEventListener("input", debounce(renderAccountTable, 160));
 
-// ✅ SỬA LẠI: BỔ SUNG LỆNH XÓA TÀI KHOẢN TRÊN SUPABASE CLOUD
-byId("accountTable").addEventListener("click", async (event) => {
+byId("accountTable").addEventListener("click", (event) => {
   const editId = event.target.dataset.editAccount;
   const deleteId = event.target.dataset.deleteAccount;
-
   if (editId) {
     if (!canManageAccounts() && !(canEditOwnAccount() && editId === currentAccount()?.id)) return;
     const account = accountById(editId);
     populateAccountForm(account);
     focusEditForm("accountForm", "accountDisplayName");
   }
-
   if (deleteId && canManageAccounts() && deleteId !== currentAccount()?.id && confirm("Xóa tài khoản này?")) {
-    registerDeletedId(deleteId);
     const account = accountById(deleteId);
     const linkedPerson = personById(account?.personId);
-
-    // 🔥 Xóa trực tiếp tài khoản trên Supabase Cloud
-    await deleteFromSupabase("accounts", deleteId);
-
-    state.accounts = state.accounts.filter((acc) => acc.id !== deleteId);
+    state.accounts = state.accounts.filter((account) => account.id !== deleteId);
     logActivity({
       action: "Xóa",
       module: "Tài khoản",
@@ -11523,25 +11452,35 @@ byId("accountTable").addEventListener("click", async (event) => {
   }
 });
 
-// ✅ SỬA LẠI: BỔ SUNG LỆNH XÓA NHÂN SỰ TRÊN SUPABASE CLOUD
-byId("peopleTable").addEventListener("click", async (event) => {
+byId("peopleTable").addEventListener("click", (event) => {
   const editId = event.target.dataset.editPerson;
   const deleteId = event.target.dataset.deletePerson;
   if ((editId || deleteId) && !canEditPeople()) return;
-
   if (editId) {
     const person = personById(editId);
-    populatePersonForm(person);
+    byId("personId").value = person.id;
+    byId("personName").value = person.name;
+    byId("personGender").value = person.gender || "";
+    byId("personDepartment").value = person.departmentId;
+    updateRoleOptions(person.roleId);
+    byId("personContract").value = person.contract;
+    byId("personQualification").value = person.qualification || "";
+    byId("personContractTerm").value = person.contractTerm || "";
+    byId("personContractSignedDate").value = person.contractSignedDate || "";
+    byId("personPhone").value = person.phone;
+    byId("personBirthDate").value = person.birthDate || "";
+    byId("personSalaryCoefficient").value = person.salaryCoefficient || "";
+    byId("personSalaryGrade").value = person.salaryGrade || "";
+    byId("personSalaryReviewDate").value = person.salaryReviewDate || "";
+    byId("personAddress").value = person.address || "";
+    byId("personNote").value = person.note;
+    renderCustomFieldsForScope("people");
+    applyFieldCustomizations();
     focusEditForm("personForm", "personName");
   }
-
   if (deleteId && confirm("Xóa nhân sự này? Công việc và đánh giá liên quan vẫn được giữ để tra cứu.")) {
-    registerDeletedId(deleteId);
+    registerDeletedId(deleteId); // 🔥 THÊM DÒNG NÀY Ở ĐÂY
     const person = personById(deleteId);
-
-    // 🔥 Xóa trực tiếp nhân sự trên Supabase Cloud
-    await deleteFromSupabase("people", deleteId);
-
     state.people = state.people.filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -11556,17 +11495,6 @@ byId("peopleTable").addEventListener("click", async (event) => {
     saveState();
     renderAll();
   }
-});
-
-// Kích đúp vào một dòng để mở nhanh hồ sơ, không chồng lên thao tác của các nút Sửa/Xóa.
-byId("peopleTable").addEventListener("dblclick", (event) => {
-  if (!canEditPeople() || event.target.closest("button, a, input, select, textarea")) return;
-  const row = event.target.closest("tr[data-person-id]");
-  if (!row) return;
-  const person = personById(row.dataset.personId);
-  if (!person) return;
-  populatePersonForm(person);
-  focusEditForm("personForm", "personName");
 });
 
 async function saveTaskRecord(record, fileInput, draftAttachments, responseStatus, responseNote, progressReportNote, resetCallback) {
@@ -11585,6 +11513,21 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     attachments: [...draftAttachments, ...uploadedAttachments],
     customFields: collectCustomFieldValues("tasks", existingTask?.customFields),
   };
+  const selectedProject = projectById(preparedRecord.projectId);
+  if (preparedRecord.projectId && !selectedProject) {
+    alert("Danh mục dự án đã chọn không còn tồn tại. Vui lòng chọn lại.");
+    return false;
+  }
+  if (!selectedProject) {
+    alert("Vui lòng chọn Danh mục dự án trước khi lưu công việc.");
+    return false;
+  }
+  if (!preparedRecord.startDate) {
+    alert("Vui lòng nhập Ngày bắt đầu trước khi lưu công việc.");
+    return false;
+  }
+  preparedRecord.projectId = selectedProject?.id || "";
+  preparedRecord.projectName = selectedProject?.name || "";
   const recordKind = existingTask ? normalizeTaskKind(existingTask) : normalizeTaskKind(preparedRecord.kind || TASK_KIND_REGULAR);
   preparedRecord.kind = recordKind;
   if (recordKind === TASK_KIND_REGULAR) {
@@ -11624,16 +11567,26 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
       : canCreateRegularTaskForPerson(preparedRecord.ownerId);
   const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
   const canUpdateReport = existingTask ? !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask)) : false;
+  const canUpdateCollaborators = !!existingTask && !reportLockedByQuality && (canEditDetails || canUpdateTaskCollaborators(existingTask));
   if (reportLockedByQuality) {
     preparedRecord.status = existingTask.status;
     preparedRecord.progress = existingTask.progress;
     preparedRecord.attachments = existingTask.attachments || [];
     preparedRecord.note = existingTask.note || "";
   }
+  if (existingTask && !canUpdateCollaborators) {
+    if (recordKind === TASK_KIND_REGULAR) {
+      preparedRecord.collaboratorIds = taskCollaboratorIds(existingTask);
+      preparedRecord.collaboratorId = "";
+    } else {
+      preparedRecord.collaboratorIds = [];
+      preparedRecord.collaboratorId = existingTask.collaboratorId || "";
+    }
+  }
   const submittedQuality = normalizeTaskQualityInput(preparedRecord.qualityPercent);
   const priorQuality = existingTask ? normalizeTaskQualityInput(existingTask.qualityPercent) : "";
   const nextStatusForQuality = normalizeTaskStatus(preparedRecord.status);
-  const canEditQuality = !!existingTask && (adminOverride || canAssessTaskQuality(existingTask, nextStatusForQuality));
+  const canEditQuality = !!existingTask && adminOverride;
   const nextQuality = adminOverride
     ? (canEditQuality ? submittedQuality : priorQuality)
     : nextStatusForQuality === TASK_STATUS_COMPLETED && taskCompletionIsApproved(existingTask)
@@ -11662,26 +11615,21 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     alert("Tài khoản hiện tại chỉ được tạo/sửa công việc thường kỳ trong phạm vi được xem.");
     return false;
   }
-  if (existingTask && isTaskStatusUpdateLocked(existingTask)) {
-    const statusChanged = normalizeTaskStatus(existingTask.status) !== normalizeTaskStatus(preparedRecord.status);
-    const deadlineChanged = (existingTask.startDate || "") !== (preparedRecord.startDate || "") || (existingTask.due || "") !== (preparedRecord.due || "") || (existingTask.dueTime || "") !== (preparedRecord.dueTime || "");
-    if (statusChanged || deadlineChanged) {
-      alert("Công việc đã quá hạn quá 24 giờ. Chỉ Ban lãnh đạo hoặc admin được cập nhật lại trạng thái hoặc thời hạn hoàn thành.");
-      return false;
-    }
-  }
-
   const timestamp = new Date().toISOString();
   const actor = currentActorInfo();
   const ownerChanged = existingTask && existingTask.ownerId !== preparedRecord.ownerId;
+  const collaboratorsChanged = !!existingTask && (
+    (existingTask.collaboratorId || "") !== (preparedRecord.collaboratorId || "") ||
+    !samePersonIdList(taskCollaboratorIds(existingTask), taskCollaboratorIds(preparedRecord))
+  );
   const detailsChanged =
     !existingTask ||
     ownerChanged ||
     normalizeTaskKind(existingTask) !== recordKind ||
     existingTask.title !== preparedRecord.title ||
+    projectIdForTask(existingTask) !== (preparedRecord.projectId || "") ||
     (existingTask.projectName || "") !== (preparedRecord.projectName || "") ||
-    (existingTask.collaboratorId || "") !== (preparedRecord.collaboratorId || "") ||
-    !samePersonIdList(taskCollaboratorIds(existingTask), taskCollaboratorIds(preparedRecord)) ||
+    collaboratorsChanged ||
     existingTask.category !== preparedRecord.category ||
     normalizeTaskWorkType(existingTask) !== preparedRecord.workType ||
     normalizeTaskRecurrence(existingTask) !== preparedRecord.recurrence ||
@@ -11694,7 +11642,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     ? {
         ...existingTask,
         ...preparedRecord,
-        progressReports: ownerChanged ? [] : existingTask?.progressReports || [],
+        progressReports: existingTask?.progressReports || [],
       }
     : canUpdateReport
       ? {
@@ -11706,6 +11654,15 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
       : {
           ...existingTask,
         };
+  if (!canEditDetails && canUpdateCollaborators) {
+    if (recordKind === TASK_KIND_REGULAR) {
+      mergedRecord.collaboratorIds = taskCollaboratorIds(preparedRecord);
+      mergedRecord.collaboratorId = "";
+    } else {
+      mergedRecord.collaboratorIds = [];
+      mergedRecord.collaboratorId = preparedRecord.collaboratorId || "";
+    }
+  }
   mergedRecord.qualityPercent = nextQuality;
   const completionResubmitted = nextStatusForQuality === TASK_STATUS_COMPLETED && (
     !existingTask ||
@@ -11786,16 +11743,32 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
   const statusChanged = existingTask && (previousStatus !== nextStatus || previousComputedStatus !== nextComputedStatus);
   const progressReportNoteText = String(progressReportNote || "").trim();
   const shouldAppendProgressNote = !!progressReportNoteText && (!canEditDetails || progressReportNoteText !== (existingTask?.note || ""));
-  if ((existingTask && !reportLockedByQuality && (canUpdateReport || canEditDetails)) && (shouldAppendProgressNote || progressChanged || statusChanged || uploadedAttachments.length)) {
+  const updateChangeLabels = existingTask ? taskUpdateChangeLabels(existingTask, mergedRecord) : [];
+  const hasTaskUpdate = updateChangeLabels.length > 0;
+  if ((existingTask && !reportLockedByQuality && (canUpdateReport || canEditDetails)) && (shouldAppendProgressNote || hasTaskUpdate)) {
+    const updateAction = statusChanged
+      ? "Chuyển trạng thái công việc"
+      : qualityChanged
+        ? "Cập nhật đánh giá chất lượng"
+        : collaboratorsChanged
+          ? "Cập nhật người phối hợp"
+          : progressChanged || shouldAppendProgressNote
+            ? "Cập nhật tiến độ công việc"
+            : "Cập nhật thông tin công việc";
+    const updateNote = shouldAppendProgressNote
+      ? progressReportNoteText
+      : hasTaskUpdate
+        ? `Đã thay đổi: ${updateChangeLabels.join(", ")}.`
+        : "Cập nhật công việc.";
     mergedRecord.progressReports = [
       ...(mergedRecord.progressReports || []),
       {
         id: uid("task-report"),
         progress: mergedRecord.progress,
-        status: nextComputedStatus,
-        previousStatus: previousComputedStatus,
-        action: statusChanged ? "Chuyển trạng thái công việc" : "Cập nhật tiến độ công việc",
-        note: shouldAppendProgressNote ? progressReportNoteText : "Cập nhật tiến độ công việc.",
+        status: nextStatus,
+        previousStatus,
+        action: updateAction,
+        note: updateNote,
         createdAt: timestamp,
         createdById: actor.id,
         createdBy: actor.name,
@@ -11836,6 +11809,10 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
       ? recordKind === TASK_KIND_ASSIGNED
         ? "Cập nhật giao việc"
         : "Cập nhật thường kỳ"
+      : updateChangeLabels.length
+        ? "Cập nhật công việc"
+      : collaboratorsChanged
+        ? "Cập nhật người phối hợp"
       : qualityAssessmentChanged
         ? "Đánh giá chất lượng"
       : recordKind === TASK_KIND_ASSIGNED
@@ -11878,7 +11855,6 @@ byId("taskForm").addEventListener("submit", async (event) => {
       kind: TASK_KIND_REGULAR,
       title: byId("taskTitle").value.trim(),
       projectId: byId("taskProjectId").value,
-      projectName: selectedTaskProjectName(),
       ownerId: byId("taskOwner").value,
       collaboratorIds: selectedTaskCollaboratorIds(),
       category: byId("taskCategory").value,
@@ -11905,7 +11881,7 @@ byId("taskForm").addEventListener("submit", async (event) => {
   }
 });
 
-byId("assignmentTaskForm").addEventListener("submit", async (event) => {
+byId("assignmentTaskForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const taskId = byId("assignmentTaskId").value || uid("task");
   const saved = await saveTaskRecord(
@@ -11913,7 +11889,7 @@ byId("assignmentTaskForm").addEventListener("submit", async (event) => {
       id: taskId,
       kind: TASK_KIND_ASSIGNED,
       title: byId("assignmentTaskTitle").value.trim(),
-      projectName: byId("assignmentTaskProjectName").value.trim(),
+      projectId: byId("assignmentTaskProjectId").value,
       ownerId: byId("assignmentTaskOwner").value,
       collaboratorId: byId("assignmentTaskCollaborator").value,
       category: byId("assignmentTaskCategory").value,
@@ -11942,26 +11918,29 @@ byId("assignmentTaskForm").addEventListener("submit", async (event) => {
 });
 
 byId("resetTaskForm").addEventListener("click", resetTaskForm);
-byId("openTaskProjectCatalog")?.addEventListener("click", openTaskProjectCatalogDialog);
-byId("closeTaskProjectCatalog")?.addEventListener("click", closeTaskProjectCatalogDialog);
-byId("taskProjectCatalogDialog")?.addEventListener("click", (event) => {
+byId("resetAssignmentTaskForm")?.addEventListener("click", resetAssignmentTaskForm);
+byId("endAssignmentTask")?.addEventListener("click", endAssignmentTaskFromForm);
+byId("openTaskProjectCatalog").addEventListener("click", openTaskProjectCatalogDialog);
+byId("closeTaskProjectCatalog").addEventListener("click", closeTaskProjectCatalogDialog);
+byId("taskProjectCatalogDialog").addEventListener("click", (event) => {
   if (event.target === byId("taskProjectCatalogDialog")) closeTaskProjectCatalogDialog();
 });
-byId("taskProjectCatalogForm")?.addEventListener("submit", saveTaskProjectCatalog);
-byId("resetTaskProjectCatalogForm")?.addEventListener("click", resetTaskProjectCatalogForm);
-byId("taskProjectCatalogSearch")?.addEventListener("input", renderTaskProjectCatalog);
-byId("taskProjectCatalogList")?.addEventListener("click", (event) => {
-  const editId = event.target.closest("[data-edit-task-project]")?.dataset.editTaskProject;
-  if (editId) return editTaskProjectCatalog(editId);
-  const deleteId = event.target.closest("[data-delete-task-project]")?.dataset.deleteTaskProject;
-  if (deleteId) deleteTaskProjectCatalog(deleteId);
-});
-byId("resetAssignmentTaskForm").addEventListener("click", resetAssignmentTaskForm);
-byId("endAssignmentTask").addEventListener("click", endAssignmentTaskFromForm);
-byId("taskKind").addEventListener("change", () => {
-  renderPersonOptions();
-  updateTaskCategoryOptions();
-  updateTaskFormLock();
+byId("taskProjectCatalogForm").addEventListener("submit", saveTaskProjectCatalog);
+byId("resetTaskProjectCatalogForm").addEventListener("click", resetTaskProjectCatalogForm);
+byId("taskProjectCatalogSearch").addEventListener("input", renderTaskProjectCatalog);
+byId("taskProjectCatalogList").addEventListener("click", (event) => {
+  const projectTaskListId = event.target.closest("[data-open-project-tasks]")?.dataset.openProjectTasks;
+  if (projectTaskListId) {
+    openProjectTaskList(projectTaskListId);
+    return;
+  }
+  const editProjectId = event.target.closest("[data-edit-task-project]")?.dataset.editTaskProject;
+  if (editProjectId) {
+    editTaskProjectCatalog(editProjectId);
+    return;
+  }
+  const deleteProjectId = event.target.closest("[data-delete-task-project]")?.dataset.deleteTaskProject;
+  if (deleteProjectId) deleteTaskProjectCatalog(deleteProjectId);
 });
 byId("taskOwner").addEventListener("change", () => {
   byId("taskCategory").value = "";
@@ -11969,70 +11948,13 @@ byId("taskOwner").addEventListener("change", () => {
   updateTaskCategoryOptions();
   updateTaskFormLock();
 });
-byId("taskOwnerSearch")?.addEventListener("input", filterTaskOwnerOptions);
-byId("taskOwnerSearch")?.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  setTaskOwnerPickerOpen(false);
-  byId("taskOwnerTrigger")?.focus();
-});
-byId("taskOwnerTrigger")?.addEventListener("click", () => setTaskOwnerPickerOpen(!isTaskOwnerPickerOpen()));
-byId("taskOwnerOptions")?.addEventListener("change", (event) => {
-  const personId = event.target.value;
-  if (!personId) return;
-  byId("taskOwner").value = personId;
-  updateTaskOwnerPickerSummary();
-  setTaskOwnerPickerOpen(false);
-  byId("taskOwner").dispatchEvent(new Event("change", { bubbles: true }));
-});
-
-document.addEventListener("click", (event) => {
-  const picker = byId("taskProjectPicker");
-  const trigger = event.target.closest("#taskProjectTrigger");
-  const option = event.target.closest("[data-project-id]");
-  if (trigger) {
-    setTaskProjectPickerOpen(byId("taskProjectPanel")?.classList.contains("is-hidden"));
-    return;
-  }
-  if (option) {
-    const select = byId("taskProjectId");
-    if (!select) return;
-    select.value = option.dataset.projectId;
-    updateTaskProjectPickerSummary();
-    setTaskProjectPickerOpen(false);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    return;
-  }
-  if (picker && !picker.contains(event.target)) setTaskProjectPickerOpen(false);
-});
-byId("taskProjectSearch")?.addEventListener("input", filterTaskProjectOptions);
-byId("taskProjectSearch")?.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  setTaskProjectPickerOpen(false);
-  byId("taskProjectTrigger")?.focus();
-});
-document.addEventListener("keydown", (event) => {
-  if (event.target?.id !== "taskProjectSearch" || event.key !== "Escape") return;
-  setTaskProjectPickerOpen(false);
-  byId("taskProjectTrigger")?.focus();
-});
-
 byId("taskCollaborators").addEventListener("change", updateTaskCollaboratorSummary);
-
-// 🟢 BỘ TÌM KIẾM NGƯỜI PHỐI HỢP MỚI
-const collaboratorSearchElem = byId("taskCollaboratorSearch");
-if (collaboratorSearchElem) {
-  collaboratorSearchElem.addEventListener("input", filterTaskCollaboratorOptions);
-  collaboratorSearchElem.addEventListener("keyup", filterTaskCollaboratorOptions);
-  collaboratorSearchElem.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault(); // Chống lưu nhầm form
-    } else if (event.key === "Escape") {
-      setTaskCollaboratorPickerOpen(false);
-      byId("taskCollaboratorToggle")?.focus();
-    }
-  });
-}
-
+byId("taskCollaboratorSearch").addEventListener("input", debounce(filterTaskCollaboratorOptions, 150));
+byId("taskCollaboratorSearch").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  setTaskCollaboratorPickerOpen(false);
+  byId("taskCollaboratorToggle")?.focus();
+});
 byId("taskCollaboratorToggle").addEventListener("click", () => {
   setTaskCollaboratorPickerOpen(!isTaskCollaboratorPickerOpen());
 });
@@ -12041,20 +11963,15 @@ document.addEventListener("pointerdown", (event) => {
   if (!isTaskCollaboratorPickerOpen() || picker?.contains(event.target)) return;
   setTaskCollaboratorPickerOpen(false);
 });
-document.addEventListener("pointerdown", (event) => {
-  const picker = byId("taskOwnerPickerWrapper");
-  if (!isTaskOwnerPickerOpen() || picker?.contains(event.target)) return;
-  setTaskOwnerPickerOpen(false);
-});
 byId("taskStatus").addEventListener("change", () => {
   updateTaskFormLock();
 });
-byId("assignmentTaskOwner").addEventListener("change", () => {
+byId("assignmentTaskOwner")?.addEventListener("change", () => {
   byId("assignmentTaskCategory").value = "";
   updateTaskCategoryOptions("", "assignmentTaskOwner", "assignmentTaskCategory");
   updateAssignmentTaskFormLock();
 });
-byId("assignmentTaskStatus").addEventListener("change", () => {
+byId("assignmentTaskStatus")?.addEventListener("change", () => {
   updateAssignmentTaskFormLock();
 });
 byId("taskSearch").addEventListener("input", debounce(renderTaskBoard, 200));
@@ -12071,9 +11988,9 @@ document.querySelectorAll("[data-scroll-page]").forEach((button) => button.addEv
   const top = button.dataset.scrollPage === "bottom" ? scrollRoot.scrollHeight : 0;
   window.scrollTo({ top, behavior: "smooth" });
 }));
-byId("taskInboxButton").addEventListener("click", openTaskInboxDialog);
-byId("closeTaskInbox").addEventListener("click", closeTaskInboxDialog);
-byId("taskInboxDialog").addEventListener("click", (event) => {
+byId("taskInboxButton")?.addEventListener("click", openTaskInboxDialog);
+byId("closeTaskInbox")?.addEventListener("click", closeTaskInboxDialog);
+byId("taskInboxDialog")?.addEventListener("click", (event) => {
   if (event.target === byId("taskInboxDialog")) {
     closeTaskInboxDialog();
   }
@@ -12081,10 +11998,8 @@ byId("taskInboxDialog").addEventListener("click", (event) => {
 byId("taskInboxList")?.addEventListener("click", (event) => {
   const taskId = event.target.closest("[data-open-inbox-task]")?.dataset.openInboxTask;
   if (!taskId) return;
-  
-  openedTaskDetailFromInbox = true; // 🌟 Đánh dấu là mở từ Hộp thư thông báo
   closeTaskInboxDialog();
-  openTaskDetailDialog(taskId);
+  openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
 });
 byId("closeTaskStatusDetail").addEventListener("click", closeTaskStatusDetailDialog);
 byId("taskStatusDetailDialog").addEventListener("click", (event) => {
@@ -12099,6 +12014,7 @@ byId("taskCompletionReviewDialog").addEventListener("click", (event) => {
     closeTaskCompletionReviewDialog();
   }
 });
+byId("taskCompletionReviewStatus").addEventListener("change", updateTaskCompletionReviewQualityField);
 byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const taskId = byId("taskCompletionReviewTaskId").value;
@@ -12107,8 +12023,9 @@ byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
     alert("Chọn kết quả Đạt hoặc Không đạt trước khi lưu.");
     return;
   }
-  const qualityPercent = byId("taskCompletionReviewQualityPercent").value;
-  if (decision === "passed" && normalizeTaskQualityInput(qualityPercent) === "") {
+  const qualityPercent = normalizeTaskQualityInput(byId("taskCompletionReviewQualityPercent").value);
+  if (decision === "passed" && qualityPercent === "") {
+    alert("Nhập Đánh giá chất lượng trước khi lưu kết quả Đạt.");
     byId("taskCompletionReviewQualityPercent").focus();
     return;
   }
@@ -12116,7 +12033,6 @@ byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
     closeTaskCompletionReviewDialog();
   }
 });
-byId("taskCompletionReviewStatus").addEventListener("change", updateTaskCompletionReviewQualityField);
 byId("closeTaskDetail").addEventListener("click", closeTaskDetailDialog);
 byId("taskDetailDialog").addEventListener("click", (event) => {
   if (event.target === byId("taskDetailDialog")) {
@@ -12138,10 +12054,6 @@ byId("taskDetailActions").addEventListener("click", (event) => {
   }
   if (action === "report" && canUpdateTaskProgress(task)) {
     openTaskDetailInlineEditor(taskId, isAssignedTask(task) ? "assignmentTaskResponseNote" : "taskNote");
-    return;
-  }
-  if (action === "assess" && canAssessTaskQuality(task)) {
-    openTaskDetailInlineEditor(taskId, isAssignedTask(task) ? "assignmentTaskQualityPercent" : "taskQualityPercent");
     return;
   }
   if (action === "copy" && canCopyTask(task)) {
@@ -12186,7 +12098,7 @@ byId("taskAttachmentList").addEventListener("click", (event) => {
   taskAttachmentDraft = taskAttachmentDraft.filter((file) => file.id !== removeId);
   renderTaskAttachmentDraft();
 });
-byId("assignmentTaskAttachmentList").addEventListener("click", (event) => {
+byId("assignmentTaskAttachmentList")?.addEventListener("click", (event) => {
   const removeId = event.target.dataset.removeAssignmentAttachment;
   if (!removeId) return;
   assignmentAttachmentDraft = assignmentAttachmentDraft.filter((file) => file.id !== removeId);
@@ -12200,17 +12112,8 @@ byId("taskBoard").addEventListener("click", (event) => {
   const copyId = event.target.closest("[data-copy-task]")?.dataset.copyTask;
   const respondId = event.target.closest("[data-respond-task]")?.dataset.respondTask;
   const reviewId = event.target.closest("[data-review-task]")?.dataset.reviewTask;
-  const assessId = event.target.closest("[data-assess-task]")?.dataset.assessTask;
   const deleteId = event.target.closest("[data-delete-task]")?.dataset.deleteTask;
   if (statusButton) {
-    if (window.matchMedia("(max-width: 768px)").matches) {
-      const column = statusButton.closest(".task-column");
-      const willExpand = !column?.classList.contains("is-mobile-expanded");
-      mobileExpandedTaskStatus = willExpand ? statusButton.dataset.openTaskStatus : "";
-      byId("taskBoard").querySelectorAll(".task-column.is-mobile-expanded").forEach((item) => item.classList.remove("is-mobile-expanded"));
-      if (willExpand) column?.classList.add("is-mobile-expanded");
-      return;
-    }
     openTaskStatusDetailDialog(statusButton.dataset.openTaskStatus);
     return;
   }
@@ -12255,21 +12158,6 @@ byId("taskBoard").addEventListener("click", (event) => {
   if (reviewId) {
     openTaskCompletionReviewDialog(reviewId);
     return;
-  }
-  if (assessId) {
-    const task = state.tasks.find((item) => item.id === assessId);
-    if (!task || !canAssessTaskQuality(task)) return;
-    if (isAssignedTask(task)) {
-      renderTaskInboxDialog();
-      byId("taskInboxDialog").classList.remove("is-hidden");
-      byId("taskInboxDialog").setAttribute("aria-hidden", "false");
-      populateAssignmentTaskForm(task);
-      byId("assignmentTaskQualityPercent").scrollIntoView({ behavior: "smooth", block: "center" });
-      byId("assignmentTaskQualityPercent").focus({ preventScroll: true });
-      return;
-    }
-    populateTaskForm(task);
-    focusEditForm("taskForm", "taskQualityPercent");
   }
   if (deleteId) deleteTaskRecord(deleteId);
 });
@@ -12369,7 +12257,7 @@ byId("departmentEvaluationForm").addEventListener("submit", (event) => {
 
 byId("resetDeptEvalForm").addEventListener("click", resetDepartmentEvaluationForm);
 
-byId("departmentEvaluationTable").addEventListener("click", async (event) => {
+byId("departmentEvaluationTable").addEventListener("click", (event) => {
   const editId = event.target.dataset.editDeptEval;
   const deleteId = event.target.dataset.deleteDeptEval;
   if (editId) {
@@ -12381,11 +12269,6 @@ byId("departmentEvaluationTable").addEventListener("click", async (event) => {
   if (deleteId && confirm("Xóa phiếu KPI phòng này? Điểm phòng trong các phiếu cá nhân đã lưu sẽ được giữ nguyên.")) {
     const evaluation = state.departmentEvaluations.find((item) => item.id === deleteId);
     if (!evaluation || !canEditDepartmentEvaluation(evaluation.departmentId, evaluation.period)) return;
-    
-    registerDeletedId(deleteId);
-    // 🔥 Xóa KPI phòng trên Supabase Cloud
-    await deleteFromSupabase("department_evaluations", deleteId);
-
     state.departmentEvaluations = state.departmentEvaluations.filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -12503,8 +12386,7 @@ byId("clearEvaluationGradeFilter").addEventListener("click", () => {
   renderEvaluationTable();
 });
 
-// ✅ SỬA THÀNH:
-byId("evaluationTable").addEventListener("click", async (event) => {
+byId("evaluationTable").addEventListener("click", (event) => {
   const editId = event.target.dataset.editEval;
   const deleteId = event.target.dataset.deleteEval;
   if (editId) {
@@ -12526,11 +12408,6 @@ byId("evaluationTable").addEventListener("click", async (event) => {
     const evaluation = state.evaluations.find((item) => item.id === deleteId);
     if (!evaluation || !canEditEvaluation(evaluation.personId, evaluation.period)) return;
     const person = personById(evaluation.personId);
-    
-    registerDeletedId(deleteId);
-    // 🔥 Xóa KPI cá nhân trên Supabase Cloud
-    await deleteFromSupabase("evaluations", deleteId);
-
     state.evaluations = state.evaluations.filter((item) => item.id !== deleteId);
     logActivity({
       action: "Xóa",
@@ -12640,6 +12517,19 @@ async function stateForExport() {
       }
     }
   }
+  for (const task of exported.tasks || []) {
+    if (!Array.isArray(task.attachments)) continue;
+    for (const file of task.attachments) {
+      if (file.dataUrl) continue;
+      const sourceFile = taskAttachmentByKey(storedFileKey(file)) || file;
+      try {
+        const dataUrl = await readStoredFileDataUrl(sourceFile);
+        if (dataUrl) file.dataUrl = dataUrl;
+      } catch {
+        // Keep metadata even if the stored task attachment cannot be read during export.
+      }
+    }
+  }
   return exported;
 }
 
@@ -12680,6 +12570,7 @@ function splitStateForExport(exported) {
         ...metadata,
         group: "operations",
         tasks: exported.tasks || [],
+        projectCatalog: exported.projectCatalog || [],
         evaluations: exported.evaluations || [],
         departmentEvaluations: exported.departmentEvaluations || [],
         moduleSettings: exported.moduleSettings || {},
@@ -12824,9 +12715,11 @@ function mergePeopleAndAccounts(target, data, timestamp, allowMissing = false) {
 
 function mergeOperations(target, data, timestamp, allowMissing = false) {
   const tasks = Array.isArray(data.tasks) ? data.tasks : allowMissing ? null : requireImportArray(data, "tasks", "operations");
+  const projectCatalog = Array.isArray(data.projectCatalog) ? data.projectCatalog : null;
   const evaluations = Array.isArray(data.evaluations) ? data.evaluations : allowMissing ? null : requireImportArray(data, "evaluations", "operations");
   const departmentEvaluations = Array.isArray(data.departmentEvaluations) ? data.departmentEvaluations : allowMissing ? null : requireImportArray(data, "departmentEvaluations", "operations");
   if (tasks) target.tasks = mergeImportedRecords(target.tasks, tasks, timestamp);
+  if (projectCatalog) target.projectCatalog = mergeImportedRecords(target.projectCatalog, projectCatalog, timestamp);
   if (evaluations) target.evaluations = mergeImportedRecords(target.evaluations, evaluations, timestamp);
   if (departmentEvaluations) target.departmentEvaluations = mergeImportedRecords(target.departmentEvaluations, departmentEvaluations, timestamp);
   if (data.activePeriod) target.activePeriod = data.activePeriod;
@@ -12882,18 +12775,13 @@ async function importSeparatedJsonData(files) {
   const nextState = cloneStatePayload(state);
   const timestamp = new Date().toISOString();
   bundles.forEach((bundle) => mergeImportBundle(nextState, bundle, timestamp));
-  Object.assign(state, nextState);
-  logActivity({
-  action: "Nhập JSON",
-  module: "Hệ thống",
-  targetType: "jsonImport",
-  targetId: "json-import",
-  period: state.activePeriod,
-  title: "Nhập dữ liệu JSON hệ thống",
-  details: `Đã nạp/gộp thành công ${files.length} tệp: ${files.map((f) => f.name).join(", ")}`,
-});
+  Object.assign(state, normalizeStatePayload(nextState));
   migrateDepartmentTermLabels({ persist: false });
   syncPersonnelAccounts();
+  // Keep one-way verifiers for every imported credential. This makes an
+  // Admin's local recovery copy usable for offline account testing without
+  // keeping those passwords in the synced browser state.
+  scheduleLocalOfflineLoginProofCache(state.accounts);
   const localPersist = persistState();
   sharedSync.localChangeVersion += 1;
   await markSharedStateDirty();
@@ -12952,23 +12840,122 @@ byId("jsonExportDialog").addEventListener("click", (event) => {
   if (event.target === byId("jsonExportDialog")) closeJsonExportDialog();
 });
 
-// =========================================================================
-// 🟢 QUẢN LÝ XUẤT / NHẬP DỮ LIỆU JSON
-// =========================================================================
+byId("exportData").textContent = "Xu\u1ea5t JSON";
+byId("exportData").title = "Ch\u1ecdn nh\u00f3m d\u1eef li\u1ec7u c\u1ea7n xu\u1ea5t";
 
-byId("exportData").textContent = "Xuất JSON";
-byId("exportData").title = "Chọn nhóm dữ liệu cần xuất";
-byId("exportData")?.addEventListener("click", () => {
-  openJsonExportDialog();
+byId("exportData").addEventListener("click", async () => {
+  return openJsonExportDialog();
+  if (!isAdmin()) {
+    alert("Chỉ tài khoản admin được xuất dữ liệu JSON.");
+    return;
+  }
+  let exported;
+  try {
+    exported = await stateForExport();
+  } catch (error) {
+    alert(`Không thể chuẩn bị dữ liệu xuất: ${error.message}`);
+    return;
+  }
+  const blob = new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `du-lieu-kpi-phuc-thinh-${state.activePeriod}.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
 });
 
 byId("importData").addEventListener("change", (event) => {
   const selectedFiles = Array.from(event.target.files || []);
   event.target.value = "";
-  importSeparatedJsonData(selectedFiles).catch((error) => {
-    alert(`Không thể nhập dữ liệu: ${error.message}`);
+  return importSeparatedJsonData(selectedFiles).catch((error) => {
+    alert(`Khong the nhap du lieu: ${error.message}`);
   });
+  if (!isAdmin()) {
+    event.target.value = "";
+    alert("Chỉ tài khoản admin được nhập dữ liệu JSON.");
+    return;
+  }
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const imported = JSON.parse(reader.result);
+      if (!Array.isArray(imported.people) || !Array.isArray(imported.tasks) || !Array.isArray(imported.evaluations)) {
+        throw new Error("Sai cấu trúc dữ liệu JSON");
+      }
+
+      const nowTimestamp = new Date().toISOString();
+
+      // 🔥 Ép mốc updatedAt mới nhất cho toàn bộ dữ liệu Import
+      const touchUpdatedAt = (arr) => {
+        if (!Array.isArray(arr)) return [];
+        return arr.map(item => (item && typeof item === 'object') ? { ...item, updatedAt: nowTimestamp } : item);
+      };
+
+      imported.people = touchUpdatedAt(imported.people);
+      imported.tasks = touchUpdatedAt(imported.tasks);
+      imported.evaluations = touchUpdatedAt(imported.evaluations);
+      imported.accounts = touchUpdatedAt(imported.accounts);
+      imported.bulletins = touchUpdatedAt(imported.bulletins);
+      imported.archiveRecords = touchUpdatedAt(imported.archiveRecords);
+      imported.departmentEvaluations = touchUpdatedAt(imported.departmentEvaluations);
+
+      state.activePeriod = imported.activePeriod || currentMonth();
+
+      const combineAndSort = (localArr, importedArr) => {
+        const map = new Map();
+        (localArr || []).forEach(item => { if (item?.id) map.set(item.id, item); });
+        (importedArr || []).forEach(item => { if (item?.id) map.set(item.id, item); });
+        
+        const list = Array.from(map.values());
+        const timeCache = new Map();
+        list.forEach(item => {
+          timeCache.set(item.id, new Date(item.createdAt || item.assignedAt || 0).getTime() || 0);
+        });
+        return list.sort((a, b) => timeCache.get(a.id) - timeCache.get(b.id));
+      };
+
+      state.people = combineAndSort(state.people, imported.people);
+      state.tasks = combineAndSort(state.tasks, imported.tasks); 
+      state.evaluations = combineAndSort(state.evaluations, imported.evaluations);
+      
+      const mergedAccounts = combineAndSort(state.accounts, imported.accounts);
+      state.accounts = mergedAccounts;
+
+      if (imported.bulletins?.length) state.bulletins = combineAndSort(state.bulletins, imported.bulletins);
+      if (imported.archiveRecords?.length) state.archiveRecords = combineAndSort(state.archiveRecords, imported.archiveRecords);
+      if (imported.departmentEvaluations?.length) state.departmentEvaluations = combineAndSort(state.departmentEvaluations, imported.departmentEvaluations);
+
+      if (imported.moduleSettings) state.moduleSettings = normalizeModuleSettings(imported.moduleSettings);
+      if (imported.systemCustomization) state.systemCustomization = normalizeSystemCustomization(imported.systemCustomization);
+      if (imported.activityLog) state.activityLog = Array.isArray(imported.activityLog) ? imported.activityLog : [];
+
+      migrateDepartmentTermLabels({ persist: false });
+      syncPersonnelAccounts();
+
+      // Cất media vào IndexedDB dưới máy Admin
+      await migrateBulletinMediaToIndexedDb();
+      await migrateArchiveFilesToIndexedDb();
+      await migrateTaskAttachmentsToIndexedDb();
+      
+      persistState();
+      sharedSync.localChangeVersion += 1;
+      queueSharedStateSync();
+      if (sharedSync.session && sharedSync.available) await flushSharedStateSync();
+      
+      renderAll();
+      alert("Đã gộp dữ liệu thành công và đồng bộ theo phiên đăng nhập hiện tại.");
+
+    } catch (error) {
+      alert(`Không thể nhập dữ liệu: ${error.message}`);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = "";
 });
+
 
 window.addEventListener("resize", () => {
   if (document.querySelector(".view.is-active")?.id !== "bulletin" || bulletinResizeRefreshQueued) return;
@@ -12990,1030 +12977,607 @@ migrateBulletinMediaToIndexedDb();
 migrateArchiveFilesToIndexedDb();
 migrateTaskAttachmentsToIndexedDb();
 
+// =========================================================================
+// ⏳ KÍCH HOẠT CHU KỲ ĐỒNG BỘ NỀN SUPABASE STORAGE DIRECT (8 GIÂY/LẦN)
+// =========================================================================
+
+// Kịch bản kích hoạt Service Worker chạy Offline ngầm của trình duyệt
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("service-worker.js").catch(() => {});
   });
 }
-
-// Tự động ghi nhớ & khôi phục vị trí cuộn chuột
+// 🌟 TỰ ĐỘNG GHI NHỚ VỊ TRÍ CUỘN CHUỘT TRƯỚC KHI F5
 window.addEventListener("beforeunload", () => {
   localStorage.setItem("phuc-thinh-scroll-y", window.scrollY);
 });
 
+// 🌟 KHÔI PHỤC VỊ TRÍ CUỘN CHUỘT SAU KHI GIAO DIỆN VẼ XONG
 setTimeout(() => {
   const savedScrollY = localStorage.getItem("phuc-thinh-scroll-y");
   if (savedScrollY) {
     window.scrollTo(0, parseInt(savedScrollY, 10));
   }
-}, 200);
-
-// Khôi phục phiên làm việc & Đồng bộ Cloud
-if (!window.__phucThinhSecureSyncBooted) {
-  window.__phucThinhSecureSyncBooted = true;
-  window.addEventListener("focus", refreshSharedState);
-  window.addEventListener("online", refreshSharedState);
-  setInterval(refreshSharedState, SHARED_SYNC_REFRESH_MS);
-  restoreSharedSession();
-}
-
-// Nạp tài khoản mặc định nếu chưa có
-setTimeout(() => {
-  if (typeof defaultAccounts === "function") {
-    let changed = false;
-    const defaults = defaultAccounts();
-    defaults.forEach(defAcc => {
-      const exists = state.accounts.some(a => String(a.username).toLowerCase() === String(defAcc.username).toLowerCase());
-      if (!exists) {
-        state.accounts.push(defAcc);
-        changed = true;
-      }
-    });
-    if (changed) {
-      persistState();
-      console.log("✅ Đã bổ sung tài khoản mặc định còn thiếu.");
-    }
-  }
-}, 500);
-
+}, 200); // Trì hoãn 200ms chờ hệ thống vẽ xong việc là cuộn xuống ngay
 // =========================================================================
-// 📱 BỘ ĐIỀU KHIỂN MENU & BOTTOM NAV MOBILE
+// 🌟 XỬ LÝ ĐÓNG / MỞ MENU TRƯỢT MOBILE KIỂU FACEBOOK
 // =========================================================================
+document.addEventListener("click", (event) => {
+  const isMobile = window.innerWidth <= 768;
+  if (!isMobile) return;
 
-function toggleMobileMenu(show) {
-  const popup = document.getElementById("mobileMenuPopup");
-  if (!popup) return;
-  const isActive = show !== undefined ? show : !popup.classList.contains("is-active");
-
-  if (isActive) {
-    const account = currentAccount();
-    const displayName = account ? account.displayName : "Tài khoản";
-    const initials = displayName !== "Chưa đăng nhập"
-      ? displayName.split(" ").map(n => n[0]).join("").slice(-2).toUpperCase()
-      : "ĐH";
-
-    const labelEl = document.getElementById("mobileUserLabel");
-    const avatarEl = document.getElementById("mobileUserAvatarLarge");
-    if (labelEl) labelEl.textContent = displayName;
-    if (avatarEl) avatarEl.textContent = initials;
-  }
-  popup.classList.toggle("is-active", isActive);
-  document.body.classList.toggle("mobile-menu-open", isActive);
-}
-
-// =========================================================================
-// 📱 BỘ ĐIỀU KHIỂN BẢNG NÚT DƯỚI ĐÁY MOBILE (FIX LỖI NÚT X ĐÓNG MENU)
-// =========================================================================
-
-function renderMobileNavigation() {
-  const bottomNav = document.getElementById("mobileBottomNav");
-  const menuList = document.getElementById("mobileMenuList");
-  if (!bottomNav || !menuList) return;
-
-  const admin = typeof isAdmin === "function" ? isAdmin() : false;
-  const leadership = !admin && typeof isDirector === "function" && (isDirector() || isManager() || isDeputyManager() || isSectionHead());
-  const employee = !admin && !leadership;
-
-  const assignedTasks = typeof assignedTasksForInbox === "function" ? assignedTasksForInbox() : [];
-  const pendingCount = assignedTasks.filter((t) => typeof isTaskFinishedStatus === "function" && !isTaskFinishedStatus(getDueStatus(t))).length;
-  const badgeHtml = pendingCount > 0 ? `<span class="mobile-nav-badge">${pendingCount > 99 ? '99+' : pendingCount}</span>` : '';
-
-  // 1. GIAO DIỆN BOTTOM NAV DÀNH CHO NHÂN VIÊN
-  if (employee) {
-    bottomNav.innerHTML = `
-      <button type="button" class="bottom-nav-item" data-view="bulletin">
-        <span class="nav-icon">▤</span>
-        <span>Bảng tin</span>
-      </button>
-      <button type="button" class="bottom-nav-item" id="mobileNavNotifBtn">
-        <span class="nav-icon" style="position:relative;">🔔${badgeHtml}</span>
-        <span>Thông báo</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="tasks">
-        <span class="nav-icon">☑</span>
-        <span>Công việc</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="evaluations">
-        <span class="nav-icon">◇</span>
-        <span>KPI cá nhân</span>
-      </button>
-      <button type="button" class="bottom-nav-item" id="openMobileMenuBtn">
-        <span class="nav-icon">☰</span>
-        <span>Menu</span>
-      </button>
-    `;
-
-    menuList.innerHTML = `
-      <button type="button" class="mobile-menu-item" id="mobileProfileItem">
-        <div class="mobile-icon-box">👤</div>
-        <span class="mobile-menu-text">Trang cá nhân <small class="muted">(Đang bảo trì)</small></span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="archive">
-        <div class="mobile-icon-box">▧</div>
-        <span class="mobile-menu-text">Lưu Trữ</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="rules">
-        <div class="mobile-icon-box">§</div>
-        <span class="mobile-menu-text">Quy chế</span>
-      </button>
-      <button type="button" class="mobile-menu-item" id="mobileSettingsItem">
-        <div class="mobile-icon-box">⚙️</div>
-        <span class="mobile-menu-text">Cài đặt & Quyền riêng tư</span>
-      </button>
-    `;
-  } 
-  // 2. GIAO DIỆN BOTTOM NAV DÀNH CHO BAN LÃNH ĐẠO / TRƯỞNG PHÒNG
-  else if (leadership) {
-    bottomNav.innerHTML = `
-      <button type="button" class="bottom-nav-item" data-view="dashboard">
-        <span class="nav-icon">▦</span>
-        <span>Tổng quan</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="bulletin">
-        <span class="nav-icon">▤</span>
-        <span>Bảng tin</span>
-      </button>
-      <button type="button" class="bottom-nav-item" id="mobileNavNotifBtn">
-        <span class="nav-icon" style="position:relative;">🔔${badgeHtml}</span>
-        <span>Thông báo</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="tasks">
-        <span class="nav-icon">☑</span>
-        <span>Công việc</span>
-      </button>
-      <button type="button" class="bottom-nav-item" id="openMobileMenuBtn">
-        <span class="nav-icon">☰</span>
-        <span>Menu</span>
-      </button>
-    `;
-
-    menuList.innerHTML = `
-      <button type="button" class="mobile-menu-item" id="mobileProfileItem">
-        <div class="mobile-icon-box">👤</div>
-        <span class="mobile-menu-text">Trang cá nhân <small class="muted">(Đang bảo trì)</small></span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="people">
-        <div class="mobile-icon-box">◉</div>
-        <span class="mobile-menu-text">Nhân sự</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="archive">
-        <div class="mobile-icon-box">▧</div>
-        <span class="mobile-menu-text">Lưu Trữ</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="department-evaluations">
-        <div class="mobile-icon-box">▥</div>
-        <span class="mobile-menu-text">KPI phòng</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="evaluations">
-        <div class="mobile-icon-box">◇</div>
-        <span class="mobile-menu-text">KPI cá nhân</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="rules">
-        <div class="mobile-icon-box">§</div>
-        <span class="mobile-menu-text">Quy chế</span>
-      </button>
-      <button type="button" class="mobile-menu-item" id="mobileSettingsItem">
-        <div class="mobile-icon-box">⚙️</div>
-        <span class="mobile-menu-text">Cài đặt & Quyền riêng tư</span>
-      </button>
-    `;
-  } 
-  // 3. GIAO DIỆN BOTTOM NAV DÀNH CHO ADMIN
-  else if (admin) {
-    bottomNav.innerHTML = `
-      <button type="button" class="bottom-nav-item" data-view="dashboard">
-        <span class="nav-icon">▦</span>
-        <span>Tổng quan</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="bulletin">
-        <span class="nav-icon">▤</span>
-        <span>Bảng tin</span>
-      </button>
-      <button type="button" class="bottom-nav-item" id="mobileNavNotifBtn">
-        <span class="nav-icon" style="position:relative;">🔔${badgeHtml}</span>
-        <span>Thông báo</span>
-      </button>
-      <button type="button" class="bottom-nav-item" data-view="tasks">
-        <span class="nav-icon">☑</span>
-        <span>Công việc</span>
-      </button>
-      <button type="button" class="bottom-nav-item" id="openMobileMenuBtn">
-        <span class="nav-icon">☰</span>
-        <span>Menu</span>
-      </button>
-    `;
-
-    menuList.innerHTML = `
-      <button type="button" class="mobile-menu-item" id="mobileProfileItem">
-        <div class="mobile-icon-box">👤</div>
-        <span class="mobile-menu-text">Trang cá nhân <small class="muted">(Đang bảo trì)</small></span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="people">
-        <div class="mobile-icon-box">◉</div>
-        <span class="mobile-menu-text">Nhân sự</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="archive">
-        <div class="mobile-icon-box">▧</div>
-        <span class="mobile-menu-text">Lưu Trữ</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="department-evaluations">
-        <div class="mobile-icon-box">▥</div>
-        <span class="mobile-menu-text">KPI phòng</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="evaluations">
-        <div class="mobile-icon-box">◇</div>
-        <span class="mobile-menu-text">KPI cá nhân</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="accounts">
-        <div class="mobile-icon-box">◫</div>
-        <span class="mobile-menu-text">Tài khoản</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="history">
-        <div class="mobile-icon-box">◷</div>
-        <span class="mobile-menu-text">Lịch sử</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="rules">
-        <div class="mobile-icon-box">§</div>
-        <span class="mobile-menu-text">Quy chế</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="settings">
-        <div class="mobile-icon-box">⚙</div>
-        <span class="mobile-menu-text">Cấu Hình Hệ Thống</span>
-      </button>
-      <button type="button" class="mobile-menu-item" id="mobileSettingsItem">
-        <div class="mobile-icon-box">⚙️</div>
-        <span class="mobile-menu-text">Cài đặt & Quyền riêng tư</span>
-      </button>
-    `;
-  }
-
-  // 🟢 4. GÁN SỰ KIỆN NÚT 'X' ĐÓNG POPUP (FIX LỖI KẸT POPUP)
-  const closeBtn = document.getElementById("closeMobileMenuBtn");
-  if (closeBtn) {
-    closeBtn.onclick = function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (typeof toggleMobileMenu === "function") toggleMobileMenu(false);
-    };
-  }
-
-  // 🟢 5. BẤM NÚT MENU Ở BOTTOM NAV ĐỂ BẬT/TẮT TỰ ĐỘNG
-  const openBtn = document.getElementById("openMobileMenuBtn");
-  if (openBtn) {
-    openBtn.onclick = function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (typeof toggleMobileMenu === "function") toggleMobileMenu();
-    };
-  }
-
-  const notifBtn = document.getElementById("mobileNavNotifBtn");
-  if (notifBtn) {
-    notifBtn.onclick = function (e) {
-      e.preventDefault();
-      if (typeof openTaskInboxDialog === "function") openTaskInboxDialog();
-    };
-  }
-
-  const profileItem = document.getElementById("mobileProfileItem");
-  if (profileItem) {
-    profileItem.onclick = function () {
-      if (typeof toggleMobileMenu === "function") toggleMobileMenu(false);
-      alert("⚙️ Tính năng Trang cá nhân đang được bảo trì nâng cấp. Vui lòng quay lại sau!");
-    };
-  }
-
-  const settingsItem = document.getElementById("mobileSettingsItem");
-  if (settingsItem) {
-    settingsItem.onclick = function () {
-      if (typeof toggleMobileMenu === "function") toggleMobileMenu(false);
-      if (typeof openUserSettingsModal === "function") openUserSettingsModal();
-    };
-  }
-
-  document.querySelectorAll("#mobileBottomNav [data-view], #mobileMenuPopup [data-view]").forEach((btn) => {
-    btn.onclick = function (e) {
-      e.preventDefault();
-      const viewId = this.getAttribute("data-view");
-      if (viewId && typeof switchView === "function") switchView(viewId);
-      if (typeof toggleMobileMenu === "function") toggleMobileMenu(false);
-    };
-  });
-
-  const activeView = typeof activeViewId === "function" ? activeViewId() : "";
-  document.querySelectorAll("#mobileBottomNav .bottom-nav-item").forEach((nav) => {
-    nav.classList.toggle("is-active", nav.getAttribute("data-view") === activeView);
-  });
-}
-
-function openUserSettingsModal() {
-  const account = currentAccount();
-  if (!account) return;
-
-  const passForm = byId("changePasswordForm");
-  if (passForm) passForm.reset();
-
-  const errEl = byId("changePasswordError");
-  if (errEl) errEl.textContent = "";
-
-  const succEl = byId("changePasswordSuccess");
-  if (succEl) {
-    succEl.textContent = "";
-    succEl.style.display = "none";
-  }
-
-  renderUserAccessHistory();
-  openModal("userSettingsDialog");
-}
-
-function closeUserSettingsModal() {
-  closeModal("userSettingsDialog");
-}
-
-async function renderUserAccessHistory() {
-  const account = currentAccount();
-  const tbody = byId("userAccessHistoryTableBody");
-  if (!tbody || !account) return;
-
-  tbody.innerHTML = '<tr><td colspan="3" class="empty-cell">Đang tải lịch sử...</td></tr>';
-
-  let logs = [];
-  const supabase = window.supabaseClient;
-
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from("access_logs")
-        .select("*")
-        .eq("account_id", account.id)
-        .order("accessed_at", { ascending: false })
-        .limit(20);
-
-      if (!error && Array.isArray(data) && data.length) {
-        logs = data.map((item) => ({
-          time: item.accessed_at || item.created_at,
-          type: item.access_type === "active_session" ? "Đăng nhập / Truy cập hệ thống" : item.access_type || "Truy cập",
-          status: "Thành công",
-        }));
-      }
-    } catch (e) {
-      console.warn("⚠️ Chưa thể nạp access_logs từ Supabase:", e);
-    }
-  }
-
-  if (!logs.length && Array.isArray(state.activityLog)) {
-    const userActivities = state.activityLog.filter(
-      (act) => act.actorId === account.id || act.actorName === account.displayName || act.actorName === account.username
-    );
-
-    logs = userActivities.slice(0, 20).map((act) => ({
-      time: act.timestamp,
-      type: `${act.action || "Thao tác"} - ${act.module || "Hệ thống"}`,
-      status: act.details || "Thành công",
-    }));
-  }
-
-  if (!logs.length) {
-    tbody.innerHTML = '<tr><td colspan="3" class="empty-cell">Chưa có dữ liệu lịch sử truy cập.</td></tr>';
+  // 1. Bấm nút Mở / Đóng Menu
+  const toggleBtn = event.target.closest("#sidebarToggle");
+  if (toggleBtn) {
+    event.preventDefault();
+    event.stopPropagation();
+    document.body.classList.toggle("mobile-menu-open");
     return;
   }
 
-  tbody.innerHTML = logs
-    .map(
-      (item) => `
-        <tr>
-          <td><strong>${escapeHtml(formatDateTime(item.time))}</strong></td>
-          <td>${escapeHtml(item.type)}</td>
-          <td><span class="badge good">${escapeHtml(item.status)}</span></td>
-        </tr>
-      `
-    )
-    .join("");
-}
+  // 2. Bấm vào bất kỳ mục chuyển Tab nào -> Tự động đóng Menu trượt
+  const navItem = event.target.closest(".nav-item");
+  if (navItem) {
+    document.body.classList.remove("mobile-menu-open");
+    return;
+  }
 
+  // 3. Bấm ra ngoài khoảng tối màn hình -> Tự động đóng Menu
+  if (document.body.classList.contains("mobile-menu-open") && !event.target.closest(".sidebar")) {
+    document.body.classList.remove("mobile-menu-open");
+  }
+});
 // =========================================================================
-// 🖥️ BỘ ĐIỀU KHIỂN NẠP THANH ĐIỀU HƯỚNG PC THEO 4 NHÓM QUYỀN
+// 📱 BỘ ĐIỀU KHIỂN GIAO DIỆN MOBILE CHUẨN APP FACEBOOK
 // =========================================================================
+document.addEventListener("click", (event) => {
+  const isMobile = window.innerWidth <= 768;
+  if (!isMobile) return;
 
-function closeAccountDropdown() {
-  const dropdown = document.getElementById("accountDropdownMenu");
-  if (dropdown) dropdown.classList.add("is-hidden");
-  const trigger = document.getElementById("userDropdownTrigger");
-  if (trigger) trigger.setAttribute("aria-expanded", "false");
-}
-
-function closePcMenuPopover() {
-  const popover = document.getElementById("pcMenuPopover");
-  if (popover) popover.classList.add("is-hidden");
-}
-
-function renderPcNavigation() {
-  const pcNav = document.getElementById("pcTopNav");
-  const dropdownList = document.getElementById("accountDropdownList");
-  if (!pcNav || !dropdownList) return;
-
-  const admin = typeof isAdmin === "function" ? isAdmin() : false;
-  const leadership = !admin && typeof isDirector === "function" && (isDirector() || isManager() || isDeputyManager());
-  const sectionHead = !admin && !leadership && typeof isSectionHead === "function" && isSectionHead();
-  const employee = !admin && !leadership && !sectionHead;
-
-  const assignedTasks = typeof assignedTasksForInbox === "function" ? assignedTasksForInbox() : [];
-  const pendingCount = assignedTasks.filter((t) => typeof isTaskFinishedStatus === "function" && !isTaskFinishedStatus(getDueStatus(t))).length;
-  const badgeHtml = pendingCount > 0 ? `<span class="pc-nav-badge">${pendingCount > 99 ? '99+' : pendingCount}</span>` : '';
-
-  if (employee) {
-    pcNav.innerHTML = `
-      <button type="button" class="pc-nav-item" data-view="bulletin" title="Bảng tin">
-        <span class="pc-nav-icon">▤</span>
-        <span class="pc-nav-label">Bảng tin</span>
-      </button>
-      <button type="button" class="pc-nav-item" id="pcNavNotifBtn" title="Thông báo công việc">
-        <span class="pc-nav-icon" style="position:relative;">🔔 ${badgeHtml}</span>
-        <span class="pc-nav-label">Thông báo</span>
-      </button>
-      <button type="button" class="pc-nav-item" data-view="tasks" title="Công việc">
-        <span class="pc-nav-icon">☑</span>
-        <span class="pc-nav-label">Công việc</span>
-      </button>
-      <button type="button" class="pc-nav-item" data-view="evaluations" title="KPI cá nhân">
-        <span class="pc-nav-icon">◇</span>
-        <span class="pc-nav-label">KPI cá nhân</span>
-      </button>
-      <button type="button" class="pc-nav-item" data-view="archive" title="Lưu Trữ">
-        <span class="pc-nav-icon">▧</span>
-        <span class="pc-nav-label">Lưu Trữ</span>
-      </button>
-    `;
-
-    dropdownList.innerHTML = `
-      <li>
-        <button type="button" class="dropdown-menu-item" data-view="rules">
-          <span class="menu-item-icon">§</span>
-          <span class="menu-item-text">Quy chế</span>
-        </button>
-      </li>
-      <li>
-        <button type="button" class="dropdown-menu-item" id="menuBtnSettings">
-          <span class="menu-item-icon">⚙️</span>
-          <span class="menu-item-text">Cài đặt & Quyền riêng tư</span>
-        </button>
-      </li>
-      <li>
-        <a href="https://zalo.me/0703611114" target="_blank" rel="noopener" class="dropdown-menu-item">
-          <span class="menu-item-icon">💬</span>
-          <div class="menu-item-stack">
-            <span class="menu-item-text">Hỗ trợ kỹ thuật</span>
-            <small class="menu-item-sub">Zalo/Hotline: 070.36.1111.4</small>
-          </div>
-          <span class="menu-item-arrow">›</span>
-        </a>
-      </li>
-      <div class="dropdown-divider"></div>
-      <li>
-        <button type="button" class="dropdown-menu-item logout-item" id="menuBtnLogout">
-          <span class="menu-item-icon">🚪</span>
-          <span class="menu-item-text">Đăng xuất</span>
-        </button>
-      </li>
-    `;
-  } else if (sectionHead) {
-    const popoverMenuItems = [
-      { view: "department-evaluations", icon: "▥", label: "KPI phòng" },
-      { view: "evaluations", icon: "◇", label: "KPI cá nhân" },
-      { view: "archive", icon: "▧", label: "Lưu Trữ" },
-      { view: "rules", icon: "§", label: "Quy chế" }
-    ];
-    renderPcHeaderWithPopover(pcNav, popoverMenuItems, badgeHtml);
-    renderStandardAccountDropdown(dropdownList);
-  } else if (leadership) {
-    const popoverMenuItems = [
-      { view: "people", icon: "◉", label: "Nhân sự" },
-      { view: "department-evaluations", icon: "▥", label: "KPI phòng" },
-      { view: "evaluations", icon: "◇", label: "KPI cá nhân" },
-      { view: "history", icon: "◷", label: "Lịch sử" },
-      { view: "archive", icon: "▧", label: "Lưu Trữ" },
-      { view: "rules", icon: "§", label: "Quy chế" }
-    ];
-    renderPcHeaderWithPopover(pcNav, popoverMenuItems, badgeHtml);
-    renderStandardAccountDropdown(dropdownList);
-  } else if (admin) {
-    const popoverMenuItems = [
-      { view: "people", icon: "◉", label: "Nhân sự" },
-      { view: "department-evaluations", icon: "▥", label: "KPI phòng" },
-      { view: "evaluations", icon: "◇", label: "KPI cá nhân" },
-      { view: "accounts", icon: "◫", label: "Tài khoản" },
-      { view: "history", icon: "◷", label: "Lịch sử" },
-      { view: "archive", icon: "▧", label: "Lưu Trữ" },
-      { view: "rules", icon: "§", label: "Quy chế" },
-      { view: "settings", icon: "⚙", label: "Cấu hình hệ thống" }
-    ];
-    renderPcHeaderWithPopover(pcNav, popoverMenuItems, badgeHtml);
-    renderStandardAccountDropdown(dropdownList);
+  // 1. Bấm nút "Menu ☰" ở đáy màn hình -> Bật trang Menu Lối tắt (Ảnh 2)
+  if (event.target.closest("#openMobileMenuBtn")) {
+    event.preventDefault();
+    document.body.classList.add("mobile-menu-open");
+    return;
   }
 
-  const notifBtn = document.getElementById("pcNavNotifBtn");
-  if (notifBtn) {
-    notifBtn.onclick = function (e) {
+  // 2. Chuyển Tab từ Bottom Nav hoặc từ Trang Menu -> Đổi View & Cập nhật Active Icon
+  const navBtn = event.target.closest("[data-view]");
+  if (navBtn) {
+    const viewId = navBtn.dataset.view;
+    if (!canAccessView(viewId)) {
+      event.preventDefault();
+      return;
+    }
+    
+    // Cập nhật trạng thái Active nút Bottom Nav
+    document.querySelectorAll(".bottom-nav-item").forEach(btn => {
+      btn.classList.toggle("is-active", btn.dataset.view === viewId);
+    });
+
+    // Tự động đóng trang Menu sau khi chọn chức năng
+    document.body.classList.remove("mobile-menu-open");
+  }
+});
+/* =========================================================================
+   📱 KẾT NỐI DỮ LIỆU & CHUYỂN TAB MƯỢT MÀ CHO THANH BOTTOM NAV (MOBILE)
+   ========================================================================= */
+
+document.addEventListener('DOMContentLoaded', function() {
+  // 1. Quét tất cả nút điều hướng Mobile (Thanh đáy + Popup Menu)
+  const mobileNavButtons = document.querySelectorAll('.mobile-bottom-nav [data-view], #mobileMenuPopup [data-view]');
+  const popupMenu = document.getElementById('mobileMenuPopup');
+
+  mobileNavButtons.forEach(btn => {
+    btn.addEventListener('click', function(e) {
       e.preventDefault();
-      if (typeof openTaskInboxDialog === "function") openTaskInboxDialog();
-    };
+      const viewId = this.getAttribute('data-view');
+      if (!viewId || !canAccessView(viewId)) return;
+
+      // Use the same permission-aware navigation path as the main sidebar.
+      switchView(viewId);
+
+      // 3. Đổi trạng thái "sáng đèn" (is-active) cho 4 nút dưới thanh đáy Mobile
+      document.querySelectorAll('.mobile-bottom-nav .bottom-nav-item').forEach(navBtn => {
+        if (navBtn.getAttribute('data-view') === viewId) {
+          navBtn.classList.add('is-active');
+        } else {
+          navBtn.classList.remove('is-active');
+        }
+      });
+
+      // 4. Nếu bấm từ trong Popup Menu -> Tự động khép Popup lại
+      if (popupMenu) {
+        popupMenu.classList.remove('is-active');
+      }
+    });
+  });
+});
+/* =========================================================================
+   📱 LOGIC DỮ LIỆU & ĐĂNG XUẤT CHO POPUP MENU MOBILE
+   ========================================================================= */
+
+document.addEventListener('DOMContentLoaded', function() {
+  const openBtn = document.getElementById('openMobileMenuBtn');
+  const closeBtn = document.getElementById('closeMobileMenuBtn');
+  const popup = document.getElementById('mobileMenuPopup');
+  const logoutBtn = document.getElementById('mobileLogoutBtn');
+
+  // 1. Đồng bộ thông tin Tên + Chức vụ vào Popup mỗi khi mở Menu
+  function syncUserProfile() {
+    const mainUserLabel = document.getElementById('currentUserLabel');
+    const mainUserMeta = document.getElementById('currentUserMeta');
+    const mobileUserLabel = document.getElementById('mobileUserLabel');
+    const mobileUserMeta = document.getElementById('mobileUserMeta');
+
+    if (mainUserLabel && mobileUserLabel) {
+      mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
+    }
+    if (mainUserMeta && mobileUserMeta) {
+      mobileUserMeta.textContent = mainUserMeta.textContent || "";
+    }
   }
 
-  const settingsBtn = document.getElementById("menuBtnSettings");
-  if (settingsBtn) {
-    settingsBtn.onclick = function (e) {
-      e.preventDefault();
-      closeAccountDropdown();
-      if (typeof openUserSettingsModal === "function") openUserSettingsModal();
-    };
+  // 2. Mở / Đóng Popup Menu
+  if (openBtn && popup) {
+    openBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      syncUserProfile();
+      popup.classList.toggle('is-active');
+    });
   }
 
-  const profileHeaderBtn = document.getElementById("dropdownProfileItem");
-  if (profileHeaderBtn) {
-    profileHeaderBtn.onclick = function (e) {
-      e.preventDefault();
-      closeAccountDropdown();
-      alert("⚙️ Tính năng Trang cá nhân đang được bảo trì nâng cấp. Vui lòng quay lại sau!");
-    };
+  if (closeBtn && popup) {
+    closeBtn.addEventListener('click', () => popup.classList.remove('is-active'));
   }
 
-  const logoutBtn = document.getElementById("menuBtnLogout");
+  // 3. Xử lý bấm Đăng xuất từ Popup Mobile
   if (logoutBtn) {
-    logoutBtn.onclick = function (e) {
-      e.preventDefault();
-      closeAccountDropdown();
-      if (typeof logoutSharedSession === "function") logoutSharedSession();
-      localStorage.removeItem(SESSION_KEY);
-      localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-      location.reload();
-    };
+    logoutBtn.addEventListener('click', function() {
+      const mainLogoutBtn = document.getElementById('logoutButton');
+      if (mainLogoutBtn) {
+        mainLogoutBtn.click(); // Gọi hàm Đăng xuất gốc của hệ thống
+      } else {
+        logoutSharedSession();
+        localStorage.removeItem(SESSION_KEY);
+        renderAll();
+      }
+    });
+  }
+});
+/* =========================================================================
+   📱 BẤM VÀO TÊN NHÂN SỰ ĐỂ MỞ POPUP XEM TOÀN BỘ THÔNG TIN CHI TIẾT
+   ========================================================================= */
+
+document.addEventListener('DOMContentLoaded', function() {
+  const peopleTable = document.getElementById('peopleTable');
+  const dialog = document.getElementById('personDetailDialog');
+  const closeBtn = document.getElementById('closePersonDetail');
+  const detailName = document.getElementById('personDetailName');
+  const detailContent = document.getElementById('personDetailContent');
+
+  if (!peopleTable || !dialog) return;
+  return; // Replaced by the state-backed detail dialog below.
+
+  // Lắng nghe cú bấm vào bất kỳ dòng nào trong bảng Nhân sự
+  peopleTable.addEventListener('click', function(e) {
+    const row = e.target.closest('tr');
+    if (!row || row.querySelector('td.empty-cell')) return;
+
+    // Lấy tất cả dữ liệu từ các ô trong hàng
+    const tds = row.querySelectorAll('td');
+    if (tds.length < 4) return;
+
+    // Đọc thông tin từ dòng
+    const nameText = tds[0]?.childNodes[0]?.textContent?.trim() || tds[0]?.textContent?.trim();
+    const phoneText = tds[0]?.querySelector('small, .muted')?.textContent?.trim() || 'Chưa cập nhật';
+    const genderText = tds[1]?.textContent?.trim() || 'Chưa cập nhật';
+    const deptText = tds[2]?.textContent?.trim() || 'Chưa chọn';
+    const roleText = tds[3]?.textContent?.trim() || 'Chưa chọn';
+    const qualText = tds[4]?.textContent?.trim() || 'Chưa cập nhật';
+    const birthText = tds[5]?.textContent?.trim() || 'Chưa cập nhật';
+    const addressText = tds[6]?.textContent?.trim() || 'Chưa cập nhật';
+    const contractText = tds[7]?.textContent?.trim() || 'Chưa cập nhật';
+    const salaryText = tds[8]?.textContent?.trim() || 'Chưa cập nhật';
+    const kpiText = tds[9]?.textContent?.trim() || 'Chưa có';
+
+    // Cập nhật thông tin vào Popup
+    if (detailName) detailName.textContent = nameText;
+    
+    if (detailContent) {
+      detailContent.innerHTML = `
+        <div class="person-detail-item"><span>Điện thoại</span><strong>${phoneText}</strong></div>
+        <div class="person-detail-item"><span>Giới tính</span><strong>${genderText}</strong></div>
+        <div class="person-detail-item"><span>Phòng ban</span><strong>${deptText}</strong></div>
+        <div class="person-detail-item"><span>Chức vụ</span><strong>${roleText}</strong></div>
+        <div class="person-detail-item"><span>Trình độ chuyên môn</span><strong>${qualText}</strong></div>
+        <div class="person-detail-item"><span>Ngày sinh</span><strong>${birthText}</strong></div>
+        <div class="person-detail-item"><span>Loại hợp đồng</span><strong>${contractText}</strong></div>
+        <div class="person-detail-item"><span>Hệ số / Bậc lương</span><strong>${salaryText}</strong></div>
+        <div class="person-detail-item"><span>KPI kỳ này</span><strong>${kpiText}</strong></div>
+        <div class="person-detail-item full-width"><span>Địa chỉ cư trú</span><strong>${addressText}</strong></div>
+      `;
+    }
+
+    // Hiển thị Popup
+    dialog.classList.remove('is-hidden');
+    dialog.setAttribute('aria-hidden', 'false');
+  });
+
+  // Đóng Popup
+  if (closeBtn) {
+    closeBtn.addEventListener('click', function() {
+      dialog.classList.add('is-hidden');
+      dialog.setAttribute('aria-hidden', 'true');
+    });
   }
 
-  document.querySelectorAll("#pcTopNav [data-view], #accountDropdownMenu [data-view], #pcMenuPopover [data-view]").forEach((btn) => {
-    btn.onclick = function (e) {
-      e.preventDefault();
-      const viewId = this.getAttribute("data-view");
-      if (viewId && typeof switchView === "function") switchView(viewId);
-      closeAccountDropdown();
-      closePcMenuPopover();
-    };
+  // Chạm ra ngoài vùng xám để đóng Popup
+  dialog.addEventListener('click', function(e) {
+    if (e.target === dialog) {
+      dialog.classList.add('is-hidden');
+      dialog.setAttribute('aria-hidden', 'true');
+    }
   });
+});
 
-  const activeView = typeof activeViewId === "function" ? activeViewId() : "";
-  document.querySelectorAll("#pcTopNav .pc-nav-item").forEach((nav) => {
-    nav.classList.toggle("is-active", nav.getAttribute("data-view") === activeView);
-  });
-}
+document.addEventListener("DOMContentLoaded", () => {
+  const peopleTable = byId("peopleTable");
+  const dialog = byId("personDetailDialog");
+  const detailName = byId("personDetailName");
+  const detailMeta = byId("personDetailMeta");
+  const detailContent = byId("personDetailContent");
+  const editButton = byId("editPersonDetail");
+  const deleteButton = byId("deletePersonDetail");
+  const closeButton = byId("closePersonDetail");
+  if (!peopleTable || !dialog || !detailContent) return;
 
-function renderPcHeaderWithPopover(pcNav, menuItems, badgeHtml) {
-  const popoverHtml = menuItems.map(item => `
-    <button type="button" class="pc-popover-item" data-view="${item.view}">
-      <span class="pc-popover-icon">${item.icon}</span>
-      <span class="pc-popover-text">${item.label}</span>
-    </button>
-  `).join("");
-
-  pcNav.innerHTML = `
-    <button type="button" class="pc-nav-item" data-view="dashboard" title="Tổng quan">
-      <span class="pc-nav-icon">▦</span>
-      <span class="pc-nav-label">Tổng quan</span>
-    </button>
-    <button type="button" class="pc-nav-item" data-view="bulletin" title="Bảng tin">
-      <span class="pc-nav-icon">▤</span>
-      <span class="pc-nav-label">Bảng tin</span>
-    </button>
-    <button type="button" class="pc-nav-item" id="pcNavNotifBtn" title="Thông báo công việc">
-      <span class="pc-nav-icon" style="position:relative;">🔔 ${badgeHtml}</span>
-      <span class="pc-nav-label">Thông báo</span>
-    </button>
-    <button type="button" class="pc-nav-item" data-view="tasks" title="Công việc">
-      <span class="pc-nav-icon">☑</span>
-      <span class="pc-nav-label">Công việc</span>
-    </button>
-    <div class="pc-menu-popover-wrapper">
-      <button type="button" class="pc-nav-item" id="pcMenuPopoverBtn" title="Danh mục chức năng">
-        <span class="pc-nav-icon">☰</span>
-        <span class="pc-nav-label">Menu</span>
-      </button>
-      <div id="pcMenuPopover" class="pc-menu-popover is-hidden">
-        <div class="pc-popover-grid">
-          ${popoverHtml}
-        </div>
-      </div>
+  const detailValue = (label, value, wide = false) => `
+    <div class="person-detail-field${wide ? " person-detail-field-wide" : ""}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value || "Chưa cập nhật")}</strong>
     </div>
   `;
-
-  const popoverBtn = document.getElementById("pcMenuPopoverBtn");
-  if (popoverBtn) {
-    popoverBtn.onclick = function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const popover = document.getElementById("pcMenuPopover");
-      if (popover) popover.classList.toggle("is-hidden");
-    };
-  }
-}
-
-// =========================================================================
-// 🟢 NẠP DROPDOWN MENU TINH GỌN (CHUẨN 100% THEO MẪU ĐÃ RÚT GỌN)
-// =========================================================================
-
-function renderStandardAccountDropdown(dropdownList) {
-  if (!dropdownList) return;
-
-  dropdownList.innerHTML = `
-    <li>
-      <button type="button" class="dropdown-menu-item" id="menuBtnSettings">
-        <span class="menu-item-icon">⚙️</span>
-        <span class="menu-item-text">Cài đặt & Quyền riêng tư</span>
-      </button>
-    </li>
-    <li>
-      <a href="https://zalo.me/0703611114" target="_blank" rel="noopener" class="dropdown-menu-item">
-        <span class="menu-item-icon">💬</span>
-        <div class="menu-item-stack">
-          <span class="menu-item-text">Hỗ trợ kỹ thuật</span>
-          <small class="menu-item-sub">Zalo/Hotline: 070.36.1111.4</small>
-        </div>
-        <span class="menu-item-arrow">›</span>
-      </a>
-    </li>
-    <div class="dropdown-divider"></div>
-    <li>
-      <button type="button" class="dropdown-menu-item logout-item" id="menuBtnLogout">
-        <span class="menu-item-icon">🚪</span>
-        <span class="menu-item-text">Đăng xuất</span>
-      </button>
-    </li>
+  const detailSection = (title, content, wide = false) => `
+    <section class="person-detail-section${wide ? " person-detail-section-wide" : ""}">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="person-detail-fields">${content}</div>
+    </section>
   `;
+  const closePersonDetail = () => {
+    // Return the shared form before hiding the dialog so the main Personnel screen remains usable.
+    restorePersonDetailInlineEditor({ reset: true });
+    dialog.classList.add("is-hidden");
+    dialog.setAttribute("aria-hidden", "true");
+    delete dialog.dataset.personId;
+  };
+  const populatePersonForm = (person) => {
+    byId("personId").value = person.id;
+    byId("personName").value = person.name || "";
+    byId("personGender").value = person.gender || "";
+    byId("personDepartment").value = person.departmentId || "";
+    updateRoleOptions(person.roleId);
+    byId("personContract").value = person.contract || "";
+    byId("personQualification").value = person.qualification || "";
+    byId("personContractTerm").value = person.contractTerm || "";
+    byId("personContractSignedDate").value = person.contractSignedDate || "";
+    byId("personPhone").value = person.phone || "";
+    byId("personBirthDate").value = person.birthDate || "";
+    byId("personSalaryCoefficient").value = person.salaryCoefficient || "";
+    byId("personSalaryGrade").value = person.salaryGrade || "";
+    byId("personSalaryReviewDate").value = person.salaryReviewDate || "";
+    byId("personAddress").value = person.address || "";
+    byId("personNote").value = person.note || "";
+    renderCustomFieldsForScope("people");
+    applyFieldCustomizations();
+    focusEditForm("personForm", "personName");
+  };
+  const restorePersonDetailInlineEditor = ({ reset = false } = {}) => {
+    if (!personDetailInlineEditor) return;
+    const { form, anchor } = personDetailInlineEditor;
+    if (anchor?.parentNode) {
+      anchor.parentNode.insertBefore(form, anchor.nextSibling);
+      anchor.remove();
+    }
+    form.classList.remove("person-detail-inline-form");
+    personDetailInlineEditor = null;
+    if (reset) resetPersonForm();
+    editButton.textContent = "Sửa hồ sơ";
+    closeButton.textContent = "×";
+    closeButton.classList.remove("person-detail-cancel");
+    closeButton.title = "Đóng";
+    closeButton.setAttribute("aria-label", "Đóng hồ sơ chi tiết");
+  };
+  const openPersonDetailInlineEditor = (person) => {
+    if (!person || !canEditPeople()) return;
+    restorePersonDetailInlineEditor({ reset: true });
+    const form = byId("personForm");
+    const anchor = document.createElement("span");
+    anchor.className = "person-detail-form-anchor";
+    form.parentNode.insertBefore(anchor, form);
+    personDetailInlineEditor = { personId: person.id, form, anchor };
+    detailName.textContent = person.name || "Hồ sơ nhân sự";
+    detailMeta.textContent = "Chỉnh sửa trực tiếp trong màn hình hồ sơ chi tiết.";
+    detailContent.className = "person-detail-editor";
+    detailContent.innerHTML = '<section><h3>Chỉnh sửa hồ sơ</h3><div id="personDetailEditorSlot"></div></section>';
+    byId("personDetailEditorSlot").append(form);
+    form.classList.add("person-detail-inline-form");
+    editButton.classList.add("is-hidden");
+    deleteButton.classList.add("is-hidden");
+    closeButton.textContent = "Hủy";
+    closeButton.classList.add("person-detail-cancel");
+    closeButton.title = "Hủy chỉnh sửa";
+    closeButton.setAttribute("aria-label", "Hủy chỉnh sửa hồ sơ");
+    populatePersonForm(person);
+  };
+  const deletePerson = (person) => {
+    if (!canEditPeople()) return;
+    if (!confirm("Xóa nhân sự này? Công việc và đánh giá liên quan vẫn được giữ để tra cứu.")) return;
+    registerDeletedId(person.id);
+    state.people = state.people.filter((item) => item.id !== person.id);
+    logActivity({
+      action: "Xóa",
+      module: "Nhân sự",
+      targetType: "person",
+      targetId: person.id,
+      personId: person.id,
+      departmentId: person.departmentId || "",
+      title: person.name || "Nhân sự đã xóa",
+      details: departmentById(person.departmentId)?.name || "",
+    });
+    closePersonDetail();
+    saveState();
+    renderAll();
+  };
+  const openPersonDetail = (personId) => {
+    restorePersonDetailInlineEditor({ reset: true });
+    const person = personById(personId);
+    if (!person) return;
+    const department = departmentById(person.departmentId)?.name || "Chưa cập nhật";
+    const role = roleById(person.roleId)?.name || "Chưa cập nhật";
+    const evaluation = latestEvaluation(person.id);
+    const account = state.accounts.find((item) => item.personId === person.id);
+    const salary = [
+      person.salaryCoefficient ? `Hệ số ${person.salaryCoefficient}` : "",
+      person.salaryGrade ? `Bậc ${person.salaryGrade}` : "",
+    ].filter(Boolean).join(" · ");
+    const kpi = evaluation
+      ? `${formatScore(evaluation.finalScore)} điểm · ${evaluation.grade}`
+      : "Chưa có kết quả KPI trong kỳ";
 
-  // 🟢 Nút mở Modal "Cài đặt & Quyền riêng tư"
-  const settingsBtn = byId("menuBtnSettings");
-  if (settingsBtn) {
-    settingsBtn.onclick = (e) => {
-      e.preventDefault();
-      closeAccountDropdown();
-      if (typeof openUserSettingsModal === "function") {
-        openUserSettingsModal();
-      }
-    };
-  }
+    detailName.textContent = person.name || "Hồ sơ nhân sự";
+    detailMeta.textContent = `${department} · ${role}`;
+    detailContent.className = "person-detail-grid";
+    detailContent.innerHTML = [
+      detailSection("Thông tin cá nhân", [
+        detailValue("Giới tính", person.gender),
+        detailValue("Ngày sinh", formatDate(person.birthDate)),
+        detailValue("Điện thoại", person.phone),
+        detailValue("Địa chỉ cư trú", person.address, true),
+      ].join("")),
+      detailSection("Công tác", [
+        detailValue("Phòng", department),
+        detailValue("Vị trí", role),
+        detailValue("Trình độ chuyên môn", person.qualification, true),
+        detailValue("KPI kỳ này", kpi, true),
+      ].join("")),
+      detailSection("Hợp đồng và lương", [
+        detailValue("Loại hợp đồng", person.contract),
+        detailValue("Ngày ký hợp đồng", formatDate(person.contractSignedDate)),
+        detailValue("Thời hạn hợp đồng", person.contractTerm, true),
+        detailValue("Hệ số / bậc lương", salary),
+        detailValue("Thời điểm xét nâng lương", formatDate(person.salaryReviewDate)),
+      ].join("")),
+      detailSection("Tài khoản hệ thống", [
+        detailValue("Tên đăng nhập", account?.username || "Chưa liên kết"),
+        detailValue("Vai trò", account ? accountRoleLabels[account.role] || account.role : "Chưa liên kết"),
+      ].join("")),
+      person.note
+        ? detailSection("Ghi chú", detailValue("Thông tin bổ sung", person.note, true), true)
+        : "",
+    ].join("");
 
-  // 🟢 Nút Đăng xuất
-  const logoutBtn = byId("menuBtnLogout");
-  if (logoutBtn) {
-    logoutBtn.onclick = (e) => {
-      e.preventDefault();
-      closeAccountDropdown();
-      if (typeof logoutSharedSession === "function") logoutSharedSession();
-      localStorage.removeItem(SESSION_KEY);
-      localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-      location.reload();
-    };
-  }
-}
+    dialog.dataset.personId = person.id;
+    const canManage = canEditPeople();
+    editButton.classList.toggle("is-hidden", !canManage);
+    deleteButton.classList.toggle("is-hidden", !canManage);
+    dialog.classList.remove("is-hidden");
+    dialog.setAttribute("aria-hidden", "false");
+    closeButton.focus({ preventScroll: true });
+  };
 
-// 🟢 Tự động khôi phục Chế độ Tối khi load lại trang
-if (localStorage.getItem("phuc-thinh-dark-mode") === "1") {
-  document.body.classList.add("dark-mode");
-}
-
-document.addEventListener("click", (e) => {
-  if (!e.target.closest(".pc-menu-popover-wrapper")) closePcMenuPopover();
+  peopleTable.addEventListener("click", (event) => {
+    if (event.target.closest("button, a, input, select, textarea, label")) return;
+    const personId = event.target.closest("tr[data-person-id]")?.dataset.personId;
+    if (personId) openPersonDetail(personId);
+  });
+  editButton.addEventListener("click", () => {
+    const person = personById(dialog.dataset.personId);
+    if (!person || !canEditPeople()) return;
+    openPersonDetailInlineEditor(person);
+  });
+  deleteButton.addEventListener("click", () => {
+    const person = personById(dialog.dataset.personId);
+    if (person) deletePerson(person);
+  });
+  closeButton.addEventListener("click", closePersonDetail);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) closePersonDetail();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !dialog.classList.contains("is-hidden")) closePersonDetail();
+  });
+  document.addEventListener("person-record-saved", (event) => {
+    const personId = event.detail?.personId;
+    if (!personId || personDetailInlineEditor?.personId !== personId) return;
+    restorePersonDetailInlineEditor();
+    openPersonDetail(personId);
+  });
 });
+/* =========================================================================
+   ⚡ FIX LỖI BẤM MENU MOBILE (DÙNG ONCLICK TRỰC TIẾP CHỐNG XUNG ĐỘT)
+   ========================================================================= */
 
-// =========================================================================
-// 🟢 TỔNG HỢP KHỞI TẠO DUY NHẤT KHI TRANG TẢI XONG (DOM CONTENT LOADED)
-// =========================================================================
-document.addEventListener("DOMContentLoaded", () => {
-  const searchBtn = byId("toggleContactSearchBtn");
-  const searchBox = byId("contactSearchBox");
-  const searchInput = byId("contactSearchInput");
+document.addEventListener('DOMContentLoaded', function() {
+  const openBtn = document.getElementById('openMobileMenuBtn');
+  const closeBtn = document.getElementById('closeMobileMenuBtn');
+  const popup = document.getElementById('mobileMenuPopup');
 
-  if (searchBtn && searchBox) {
-    searchBtn.onclick = () => {
-      searchBox.classList.toggle("is-hidden");
-      if (!searchBox.classList.contains("is-hidden") && searchInput) {
-        searchInput.focus();
+  if (openBtn && popup) {
+    // Ghi đè trực tiếp sự kiện click, ngăn chặn mọi xung đột chồng chéo
+    openBtn.onclick = function(e) {
+      e.preventDefault();
+      e.stopPropagation(); // Chặn sự kiện lan ra ngoài làm đóng menu
+
+      // Đồng bộ thông tin người dùng đang đăng nhập
+      const mainUserLabel = document.getElementById('currentUserLabel');
+      const mainUserMeta = document.getElementById('currentUserMeta');
+      const mobileUserLabel = document.getElementById('mobileUserLabel');
+      const mobileUserMeta = document.getElementById('mobileUserMeta');
+
+      if (mainUserLabel && mobileUserLabel) mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
+      if (mainUserMeta && mobileUserMeta) mobileUserMeta.textContent = mainUserMeta.textContent || "";
+
+      // Bật / Tắt Popup Menu
+      popup.classList.toggle('is-active');
+    };
+  }
+
+  if (closeBtn && popup) {
+    closeBtn.onclick = function(e) {
+      e.preventDefault();
+      popup.classList.remove('is-active');
+    };
+  }
+
+  // Bấm chạm ra ngoài vùng Popup thì mới đóng Menu
+  document.addEventListener('click', function(e) {
+    if (popup && popup.classList.contains('is-active')) {
+      if (!popup.contains(e.target) && openBtn && !openBtn.contains(e.target)) {
+        popup.classList.remove('is-active');
       }
-    };
+    }
+  });
+});
+/* =========================================================================
+   📱 LOGIC DỮ LIỆU & ĐĂNG XUẤT CHO POPUP MENU MOBILE
+   ========================================================================= */
+
+document.addEventListener('DOMContentLoaded', function() {
+  const openBtn = document.getElementById('openMobileMenuBtn');
+  const closeBtn = document.getElementById('closeMobileMenuBtn');
+  const popup = document.getElementById('mobileMenuPopup');
+  const logoutBtn = document.getElementById('mobileLogoutBtn');
+
+  // 1. Đồng bộ thông tin Tên + Chức vụ vào Popup mỗi khi mở Menu
+  function syncUserProfile() {
+    const mainUserLabel = document.getElementById('currentUserLabel');
+    const mainUserMeta = document.getElementById('currentUserMeta');
+    const mobileUserLabel = document.getElementById('mobileUserLabel');
+    const mobileUserMeta = document.getElementById('mobileUserMeta');
+
+    if (mainUserLabel && mobileUserLabel) {
+      mobileUserLabel.textContent = mainUserLabel.textContent || "Tài khoản";
+    }
+    if (mainUserMeta && mobileUserMeta) {
+      mobileUserMeta.textContent = mainUserMeta.textContent || "";
+    }
   }
 
-  if (searchInput) {
-    searchInput.oninput = () => {
-      renderActiveStatusBar();
-    };
-  }
-
-  const userTrigger = byId("userDropdownTrigger");
-  const accountDropdown = byId("accountDropdownMenu");
-
-  if (userTrigger && accountDropdown) {
-    userTrigger.addEventListener("click", (e) => {
+  // 2. Mở / Đóng Popup Menu
+  if (openBtn && popup) {
+    openBtn.addEventListener('click', function(e) {
       e.stopPropagation();
-      const isHidden = accountDropdown.classList.contains("is-hidden");
-      accountDropdown.classList.toggle("is-hidden", !isHidden);
-      userTrigger.setAttribute("aria-expanded", String(isHidden));
-    });
-
-    document.addEventListener("click", (e) => {
-      if (!accountDropdown.contains(e.target) && !userTrigger.contains(e.target)) {
-        accountDropdown.classList.add("is-hidden");
-        userTrigger.setAttribute("aria-expanded", "false");
-      }
+      syncUserProfile();
+      popup.classList.toggle('is-active');
     });
   }
 
-  const closeUserSettingsBtn = byId("closeUserSettings");
-  if (closeUserSettingsBtn) closeUserSettingsBtn.onclick = closeUserSettingsModal;
-
-  const userSettingsModal = byId("userSettingsDialog");
-  if (userSettingsModal) {
-    userSettingsModal.onclick = (e) => {
-      if (e.target === userSettingsModal) closeUserSettingsModal();
-    };
+  if (closeBtn && popup) {
+    closeBtn.addEventListener('click', () => popup.classList.remove('is-active'));
   }
 
-  const passForm = byId("changePasswordForm");
-  if (passForm) {
-    passForm.onsubmit = async (e) => {
-      e.preventDefault();
-      const account = currentAccount();
-      const errEl = byId("changePasswordError");
-      const succEl = byId("changePasswordSuccess");
-
-      if (errEl) errEl.textContent = "";
-      if (succEl) {
-        succEl.textContent = "";
-        succEl.style.display = "none";
-      }
-
-      if (!account) return;
-
-      const currPass = byId("currentPasswordInput").value;
-      const newPass = byId("newPasswordInput").value;
-      const confirmPass = byId("confirmPasswordInput").value;
-
-      if (currPass !== account.password) {
-        if (errEl) errEl.textContent = "Mật khẩu hiện tại không chính xác.";
-        return;
-      }
-      if (newPass.length < 6) {
-        if (errEl) errEl.textContent = "Mật khẩu mới phải có tối thiểu 6 ký tự.";
-        return;
-      }
-      if (newPass !== confirmPass) {
-        if (errEl) errEl.textContent = "Mật khẩu mới và Xác nhận mật khẩu không khớp.";
-        return;
-      }
-
-      account.password = newPass;
-      account.updatedAt = new Date().toISOString();
-
-      const accIndex = state.accounts.findIndex((a) => a.id === account.id);
-      if (accIndex >= 0) {
-        state.accounts[accIndex].password = newPass;
-        state.accounts[accIndex].updatedAt = account.updatedAt;
-      }
-      saveState();
-      logActivity({
-        action: "Cập nhật",
-        module: "Cài đặt cá nhân",
-        targetType: "account",
-        targetId: account.id,
-        title: "Đổi mật khẩu tài khoản",
-        details: `Tài khoản ${account.username} đã đổi mật khẩu thành công.`,
-      });
-      if (succEl) {
-        succEl.textContent = "✅ Đã đổi mật khẩu thành công!";
-        succEl.style.display = "block";
-      }
-      passForm.reset();
-    };
-  }
-  const activeBar = byId("activeStatusBar");
-  const toggleOnlineBtn = byId("toggleActiveStatusBtn");
-  const floatOnlineBtn = byId("openActiveStatusFloatingBtn");
-  if (toggleOnlineBtn) {
-    toggleOnlineBtn.addEventListener("click", () => {
-      if (activeBar) {
-        activeBar.classList.add("is-hidden");
-        if (floatOnlineBtn) floatOnlineBtn.classList.remove("is-hidden");
+  // 3. Xử lý bấm Đăng xuất từ Popup Mobile
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', function() {
+      const mainLogoutBtn = document.getElementById('logoutButton');
+      if (mainLogoutBtn) {
+        mainLogoutBtn.click(); // Gọi hàm Đăng xuất gốc của hệ thống
+      } else {
+        logoutSharedSession();
+        localStorage.removeItem(SESSION_KEY);
+        renderAll();
       }
     });
   }
-  if (floatOnlineBtn) {
-    floatOnlineBtn.addEventListener("click", () => {
-      if (activeBar) {
-        activeBar.classList.remove("is-hidden");
-        floatOnlineBtn.classList.add("is-hidden");
-      }
-    });
-  }
-  if (typeof initSearchableTaskOwner === "function") {
-  setTimeout(initSearchableTaskOwner, 300);
-}
 });
 
-// Mobile: hide the bottom navigation while reading, then show it again when
-// the user scrolls up or interacts with the navigation.
+// Keep the mobile navigation available without permanently covering the
+// working area. It returns as soon as the user scrolls up or interacts with it.
 let mobileBottomNavLastScrollY = 0;
 let mobileBottomNavScrollFrame = 0;
+
+function setMobileBottomNavHidden(hidden) {
+  if (window.innerWidth > 768) {
+    document.body.classList.remove("mobile-bottom-nav-hidden");
+    return;
+  }
+  document.body.classList.toggle("mobile-bottom-nav-hidden", Boolean(hidden));
+}
+
 function updateMobileBottomNavOnScroll() {
   mobileBottomNavScrollFrame = 0;
   if (window.innerWidth > 768) {
-    document.body.classList.remove("mobile-bottom-nav-hidden");
+    setMobileBottomNavHidden(false);
     return;
   }
   const scrollY = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
   const delta = scrollY - mobileBottomNavLastScrollY;
   const modalOpen = Boolean(document.querySelector(".modal-backdrop:not(.is-hidden)"));
-  document.body.classList.toggle("mobile-bottom-nav-hidden", !modalOpen && scrollY > 84 && delta > 8);
-  if (modalOpen || scrollY < 28 || delta < -8) document.body.classList.remove("mobile-bottom-nav-hidden");
+  if (modalOpen || document.body.classList.contains("mobile-menu-open") || scrollY < 28 || delta < -8) {
+    setMobileBottomNavHidden(false);
+  } else if (scrollY > 84 && delta > 8) {
+    setMobileBottomNavHidden(true);
+  }
   mobileBottomNavLastScrollY = scrollY;
 }
-window.addEventListener("scroll", () => {
-  if (!mobileBottomNavScrollFrame) mobileBottomNavScrollFrame = requestAnimationFrame(updateMobileBottomNavOnScroll);
-}, { passive: true });
-window.addEventListener("resize", updateMobileBottomNavOnScroll);
+
+function queueMobileBottomNavScrollUpdate() {
+  if (mobileBottomNavScrollFrame) return;
+  mobileBottomNavScrollFrame = window.requestAnimationFrame(updateMobileBottomNavOnScroll);
+}
+
+window.addEventListener("scroll", queueMobileBottomNavScrollUpdate, { passive: true });
+window.addEventListener("resize", () => {
+  mobileBottomNavLastScrollY = Math.max(0, window.scrollY || 0);
+  setMobileBottomNavHidden(false);
+});
 document.addEventListener("pointerdown", (event) => {
-  if (event.target.closest(".mobile-bottom-nav")) document.body.classList.remove("mobile-bottom-nav-hidden");
+  if (event.target.closest(".mobile-bottom-nav, #mobileMenuPopup")) setMobileBottomNavHidden(false);
 });
-// 🟢 HÀM GÁN SỰ KIỆN AN TOÀN (CHỐNG CRASH FILE JS)
-function safeAddEventListener(elementId, eventType, handler) {
-  const elem = typeof elementId === "string" ? byId(elementId) : elementId;
-  if (elem && typeof elem.addEventListener === "function") {
-    elem.addEventListener(eventType, handler);
-  }
+document.addEventListener("focusin", (event) => {
+  if (window.innerWidth <= 768 && event.target.matches("input, textarea, select")) setMobileBottomNavHidden(true);
+});
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    mobileBottomNavLastScrollY = Math.max(0, window.scrollY || 0);
+    updateMobileBottomNavOnScroll();
+  });
+} else {
+  mobileBottomNavLastScrollY = Math.max(0, window.scrollY || 0);
+  updateMobileBottomNavOnScroll();
 }
 
-// Sửa các dòng gán sự kiện ở cuối file script.js bằng safeAddEventListener:
-safeAddEventListener("activePeriod", "change", (event) => {
-  const shouldAnimateDashboard = document.querySelector(".view.is-active")?.id === "dashboard";
-  state.activePeriod = event.target.value || currentMonth();
-  persistState();
-  renderAll();
-  if (shouldAnimateDashboard && document.querySelector(".view.is-active")?.id === "dashboard") {
-    renderDashboard({ animate: true });
-  }
-});
 
-safeAddEventListener("sidebarToggle", "click", () => {
-  setSidebarCollapsed(!document.body.classList.contains("is-sidebar-collapsed"));
-});
 
-safeAddEventListener("exportData", "click", () => {
-  openJsonExportDialog();
-});
-
-safeAddEventListener("taskInboxButton", "click", openTaskInboxDialog);
-safeAddEventListener("closeTaskInbox", "click", closeTaskInboxDialog);
-// 🟢 BỘ NHỚ LƯU DANH SÁCH THÔNG BÁO ĐÃ ĐỌC
-function getReadInboxTaskIds() {
-  try {
-    return new Set(JSON.parse(localStorage.getItem("phuc-thinh-read-inbox-tasks-v1") || "[]"));
-  } catch {
-    return new Set();
-  }
-}
-
-function markInboxTaskAsRead(taskId) {
-  if (!taskId) return;
-  const readSet = getReadInboxTaskIds();
-  readSet.add(taskId);
-  localStorage.setItem("phuc-thinh-read-inbox-tasks-v1", JSON.stringify(Array.from(readSet)));
-}
-/* =========================================================================
-   📱 BẮT SỰ KIỆN ĐĂNG XUẤT CHO NÚT MOBILE MENU (ĐÃ FIX ĐÚNG KEY & ID)
-   ========================================================================= */
-document.addEventListener("DOMContentLoaded", () => {
-  const mobileLogoutBtn = document.querySelector(".mobile-logout-button, #mobileLogoutBtn, .logout-item");
-
-  if (mobileLogoutBtn) {
-    mobileLogoutBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-
-      // 1. Cho nút Mobile bấm hộ nút Đăng xuất PC (#menuBtnLogout) nếu có
-      const pcLogoutBtn = document.querySelector("#menuBtnLogout");
-      if (pcLogoutBtn && pcLogoutBtn !== mobileLogoutBtn) {
-        pcLogoutBtn.click();
-        return;
-      }
-
-      // 2. Nếu không có nút PC, tự gọi hàm dọn dẹp và xóa ĐÚNG KEY phiên đăng nhập
-      if (typeof logoutSharedSession === "function") {
-        logoutSharedSession();
-      }
-      
-      // Xóa đúng SESSION_KEY của hệ thống
-      localStorage.removeItem(SESSION_KEY);
-      localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-      localStorage.removeItem("phuc-thinh-user-name-temp");
-      localStorage.removeItem("phuc-thinh-user-role-temp");
-      sessionStorage.clear();
-
-      // Tải lại trang để quay về màn hình Đăng nhập
-      window.location.reload();
-    });
-  }
-});
-// 1. Thuật toán băm mật khẩu mã hóa PBKDF2 bằng Web Crypto API
-const OFFLINE_LOGIN_PBKDF2_ITERATIONS = 120000;
-
-async function offlineCredentialDigest(password, saltBytes, iterations = OFFLINE_LOGIN_PBKDF2_ITERATIONS) {
-  if (!window.crypto?.subtle || !password || !saltBytes?.length) return "";
-  const material = await window.crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(String(password)),
-    "PBKDF2",
-    false,
-    ["deriveBits"]
-  );
-  const bits = await window.crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt: saltBytes, iterations, hash: "SHA-256" },
-    material,
-    256
-  );
-  return btoa(String.fromCharCode(...new Uint8Array(bits)));
-}
-
-// 2. Lưu bản băm mật khẩu khi Đăng nhập thành công (Online)
-async function saveOfflineLoginProof(username, password) {
-  if (!window.crypto?.subtle || !password) return;
-  const salt = window.crypto.getRandomValues(new Uint8Array(16));
-  const verifier = await offlineCredentialDigest(password, salt);
-  const proofs = JSON.parse(localStorage.getItem("phuc-thinh-offline-proofs-v1") || "{}");
-  proofs[username.toLowerCase()] = {
-    salt: Array.from(salt),
-    verifier,
-    iterations: OFFLINE_LOGIN_PBKDF2_ITERATIONS
+// Secure cloud synchronization retained from the production baseline.
+if (!window.__phucThinhSecureSyncBooted) {
+  window.__phucThinhSecureSyncBooted = true;
+  const resumeSharedSync = () => {
+    refreshSharedState();
+    scheduleSharedStateRefresh({ immediate: true });
   };
-  localStorage.setItem("phuc-thinh-offline-proofs-v1", JSON.stringify(proofs));
-}
-
-// 3. Xác thực Đăng nhập khi Mất mạng (Offline)
-async function verifyOfflineLogin(username, password) {
-  const proofs = JSON.parse(localStorage.getItem("phuc-thinh-offline-proofs-v1") || "{}");
-  const proof = proofs[username.toLowerCase()];
-  if (!proof) return null;
-
-  const saltBytes = new Uint8Array(proof.salt);
-  const computedVerifier = await offlineCredentialDigest(password, saltBytes, proof.iterations);
-  
-  if (computedVerifier && computedVerifier === proof.verifier) {
-    return state.accounts.find(a => String(a.username).toLowerCase() === username.toLowerCase() && !a.disabled);
-  }
-  return null;
-}
-// 📊 Tính toán tài khoản chưa đăng nhập & Lịch sử trực tiếp từ Supabase DB
-async function requestAccountUsageHistory() {
-  const supabase = window.supabaseClient;
-  if (!supabase) return;
-
-  const now = new Date();
-  const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-
-  try {
-    // 1. Lấy danh sách tài khoản đang hoạt động
-    const activeAccounts = (state.accounts || []).filter(a => !a.disabled);
-
-    // 2. Truy vấn nhật ký truy cập 30 ngày gần nhất từ Supabase Table
-    const { data: logs, error } = await supabase
-      .from("access_logs")
-      .select("account_id, accessed_at")
-      .gte("accessed_at", oneMonthAgo);
-
-    if (error) throw error;
-
-    const loggedInWeekSet = new Set((logs || []).filter(l => l.accessed_at >= oneWeekAgo).map(l => l.account_id));
-    const loggedInMonthSet = new Set((logs || []).map(l => l.account_id));
-
-    // 3. Lọc ra tài khoản CHƯA đăng nhập
-    const inactiveWeekAccounts = activeAccounts.filter(a => !loggedInWeekSet.has(a.id));
-    const inactiveMonthAccounts = activeAccounts.filter(a => !loggedInMonthSet.has(a.id));
-
-    // 4. Render kết quả ra bảng
-    renderInactiveAccountLists(inactiveWeekAccounts, inactiveMonthAccounts);
-  } catch (err) {
-    console.warn("⚠️ Chưa thể tải báo cáo tài khoản chưa đăng nhập:", err.message || err);
-  }
-}
-
-// 🟢 Hàm vẽ danh sách tài khoản chưa đăng nhập lên HTML
-function renderInactiveAccountLists(inactiveWeek, inactiveMonth) {
-  const weekListEl = byId("accountInactiveWeekList");
-  const monthListEl = byId("accountInactiveMonthList");
-  
-  if (weekListEl) {
-    weekListEl.innerHTML = inactiveWeek.length
-      ? inactiveWeek.map(a => `<div class="account-presence-row"><strong>${escapeHtml(a.displayName || a.username)}</strong> <span class="muted">(${escapeHtml(a.username)})</span></div>`).join("")
-      : '<p class="muted">Tất cả tài khoản đều đã đăng nhập trong tuần này.</p>';
-  }
-
-  if (monthListEl) {
-    monthListEl.innerHTML = inactiveMonth.length
-      ? inactiveMonth.map(a => `<div class="account-presence-row"><strong>${escapeHtml(a.displayName || a.username)}</strong> <span class="muted">(${escapeHtml(a.username)})</span></div>`).join("")
-      : '<p class="muted">Tất cả tài khoản đều đã đăng nhập trong tháng này.</p>';
-  }
+  window.addEventListener("focus", resumeSharedSync);
+  window.addEventListener("online", resumeSharedSync);
+  restoreSharedSession();
 }

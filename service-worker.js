@@ -1,4 +1,4 @@
-const CACHE_NAME = "phuc-thinh-kpi-v247";
+const CACHE_NAME = "phuc-thinh-kpi-v269";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -8,6 +8,8 @@ const APP_SHELL = [
   "./script.js",
   "./manifest.webmanifest",
   "./app-icon-phuc-thinh.png",
+  "./assets/birthday-cake.png",
+  "./assets/birthday-bouquet.png",
 ];
 
 self.addEventListener("install", (event) => {
@@ -29,20 +31,21 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname.includes("/api/")) return;
-  if (event.request.mode === "navigate") {
-    event.respondWith(
-      fetch(event.request).catch(() => caches.match("./index.html")),
-    );
-    return;
-  }
 
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        if (response.ok && response.type === "basic") {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
         return response;
       })
-      .catch(() => caches.match(event.request).then((cached) => cached || caches.match("./index.html"))),
+      .catch(() =>
+        caches.match(event.request).then((cached) => {
+          if (cached) return cached;
+          return event.request.mode === "navigate" ? caches.match("./index.html") : Response.error();
+        }),
+      ),
   );
 });
