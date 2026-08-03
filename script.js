@@ -843,13 +843,14 @@ function syncPersonnelAccounts() {
     if (matchingAccount) {
       // Nếu đã có tài khoản -> Cập nhật nối personId và departmentId
       const shouldSyncRole = isPersonnelAccountRole(matchingAccount.role) || matchingAccount.autoCreated || !matchingAccount.role;
+      const shouldSyncDepartment = isPersonnelAccountRole(matchingAccount.role) || matchingAccount.autoCreated || !matchingAccount.departmentId;
       const needsUpdate =
         matchingAccount.personId !== person.id ||
-        matchingAccount.departmentId !== (person.departmentId || "") ||
+        (shouldSyncDepartment && matchingAccount.departmentId !== (person.departmentId || "")) ||
         (shouldSyncRole && matchingAccount.role !== expectedRole);
       if (needsUpdate) {
         matchingAccount.personId = person.id;
-        matchingAccount.departmentId = person.departmentId || "";
+        if (shouldSyncDepartment) matchingAccount.departmentId = person.departmentId || "";
         if (shouldSyncRole) matchingAccount.role = expectedRole;
         matchingAccount.updatedAt = new Date().toISOString();
         changed = true;
@@ -2364,6 +2365,10 @@ async function requestAccountPresence() {
       if (!response.ok) throw new Error(payload?.error || "Không thể lấy trạng thái trực tuyến.");
       accountPresence.payload = payload;
       renderAccountPresence();
+      renderAccountUsageDetails(
+        Array.isArray(payload.usageLogs) ? payload.usageLogs : [],
+        payload.generatedAt ? new Date(payload.generatedAt) : new Date(),
+      );
     } catch (error) {
       console.warn("Edge presence request failed:", error);
     }
@@ -3217,7 +3222,11 @@ function departmentById(id) {
 }
 
 function roleById(id) {
-  return roles.find((item) => item.id === id);
+  const leadershipRoles = {
+    "giam-doc": { id: "giam-doc", departmentId: "", name: "Giám Đốc", criteria: [] },
+    "pho-giam-doc": { id: "pho-giam-doc", departmentId: "", name: "Phó Giám Đốc", criteria: [] },
+  };
+  return roles.find((item) => item.id === id) || leadershipRoles[id];
 }
 
 function personById(id) {
@@ -4797,7 +4806,8 @@ function renderPeopleTable() {
   tbody.innerHTML = people
     .map((person) => {
       const evaluation = latestEvaluation(person.id);
-      const department = departmentById(person.departmentId)?.name || "";
+      const isLeadership = ["giam-doc", "pho-giam-doc"].includes(person.roleId);
+      const department = isLeadership ? "" : departmentById(person.departmentId)?.name || "";
       const role = roleById(person.roleId)?.name || "";
       const contractDetails = [
         person.contractTerm,
@@ -4817,9 +4827,9 @@ function renderPeopleTable() {
           </td>
           <td class="people-gender"><span class="people-tag">${escapeHtml(person.gender || "-")}</span></td>
           <td class="people-role-cell"><span class="people-role">${escapeHtml(role || "Chưa cập nhật")}</span></td>
-          <td class="people-department-cell"><span class="people-department">${escapeHtml(department || "Chưa cập nhật")}</span></td>
-          <td><span class="people-detail-text">${escapeHtml(person.qualification || "Chưa cập nhật")}</span></td>
-          <td class="people-birth-date"><span class="people-date">${escapeHtml(formatDate(person.birthDate) || "-")}</span></td>
+          <td class="people-department-cell"><span class="people-department">${escapeHtml(department || (isLeadership ? "" : "Chưa cập nhật"))}</span></td>
+          <td><span class="people-detail-text">${escapeHtml(isLeadership ? "" : person.qualification || "Chưa cập nhật")}</span></td>
+          <td class="people-birth-date"><span class="people-date">${escapeHtml(formatDate(person.birthDate) || (isLeadership ? "" : "-"))}</span></td>
           <td><span class="people-address">${escapeHtml(person.address || "Chưa cập nhật")}</span></td>
           <td><div class="people-info-stack">${contractHtml}</div></td>
           <td>
