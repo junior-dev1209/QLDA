@@ -765,6 +765,7 @@ function ensureDefaultAccounts(accounts, { bootstrap = false } = {}) {
 
 function accountRoleForPerson(person) {
   const roleId = person?.roleId || "";
+  if (roleId === "giam-doc" || roleId === "pho-giam-doc") return "director";
   if (roleId.startsWith("truong-phong-")) return "manager";
   if (roleId.startsWith("pho-phong-")) return "deputy_manager";
   if (roleId.startsWith("truong-bo-phan-")) return "section_head";
@@ -826,7 +827,11 @@ function syncPersonnelAccounts() {
     const expectedRole = accountRoleForPerson(person);
 
     // 1. Tìm tài khoản hiện có khớp Tên đăng nhập hoặc Tên hiển thị
-    let matchingAccount = state.accounts.find((account) => account.personId === person.id);
+    const linkedAccounts = state.accounts.filter((account) => account.personId === person.id);
+    let matchingAccount =
+      linkedAccounts.find((account) => !account.autoCreated && !isPersonnelAccountRole(account.role)) ||
+      linkedAccounts.find((account) => !account.autoCreated) ||
+      linkedAccounts[0];
     if (!matchingAccount) {
       matchingAccount = state.accounts.find((account) => {
         const accountUsername = String(account.username || "").toLowerCase();
@@ -856,6 +861,23 @@ function syncPersonnelAccounts() {
       changed = true;
     }
   });
+
+  // Remove obsolete auto-created accounts when a manually managed account
+  // already represents the same person or username. This prevents a duplicate
+  // employee account from shadowing a director/manager account at login.
+  const managedAccounts = state.accounts.filter((account) => !account.autoCreated);
+  const filteredAccounts = state.accounts.filter((account) => {
+    if (!account.autoCreated) return true;
+    const username = String(account.username || "").trim().toLowerCase();
+    const duplicate = managedAccounts.some((candidate) => {
+      const samePerson = account.personId && candidate.personId === account.personId;
+      const sameUsername = username && String(candidate.username || "").trim().toLowerCase() === username;
+      return samePerson || sameUsername;
+    });
+    if (duplicate) changed = true;
+    return !duplicate;
+  });
+  if (filteredAccounts.length !== state.accounts.length) state.accounts = filteredAccounts;
 
   return changed;
 }
