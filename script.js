@@ -16,6 +16,8 @@ const SHARED_SYNC_CONFLICT_KEY = "phuc-thinh-shared-sync-conflict-v1";
 const SHARED_SYNC_REQUIRED_KEY = "phuc-thinh-shared-sync-required-v1";
 const SHARED_SYNC_SESSION_TOKEN_KEY = "phuc-thinh-shared-sync-session-v1";
 const SHARED_SYNC_DIRTY_KEY = "phuc-thinh-shared-sync-dirty-v1";
+const SHARED_SYNC_BUCKET = "kpi-files";
+const SHARED_SYNC_PROXY_UPLOAD_LIMIT = 10 * 1024 * 1024;
 const STATE_SAVED_AT_KEY = "phuc-thinh-state-saved-at-v1";
 const SHARED_SYNC_REFRESH_MS = 10000;
 const MAX_DELETED_ID_HISTORY = 2000;
@@ -2567,6 +2569,29 @@ function persistSharedConflictBackup(snapshot) {
   }
 }
 
+async function uploadSharedBinaryFileDirect(key, blob) {
+  const supabase = window.supabaseClient;
+  if (!supabase) throw new Error("Supabase Storage chua san sang.");
+  const { response, payload } = await sharedJsonRequest("file-upload-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  if (!response.ok || !payload?.token) {
+    const error = new Error(payload?.error || "Khong the cap quyen tai tep len Storage.");
+    error.status = response.status;
+    throw error;
+  }
+  const { error } = await supabase.storage
+    .from(SHARED_SYNC_BUCKET)
+    .uploadToSignedUrl(key, payload.token, blob, {
+      contentType: blob.type || "application/octet-stream",
+      cacheControl: "3600",
+    });
+  if (error) throw new Error(error.message || "Khong the tai tep lon len Storage.");
+  return key;
+}
+
 async function uploadSharedBinaryFile(file) {
   const key = storedFileKey(file);
   if (!key || file?.remoteKey) return file?.remoteKey || "";
@@ -2576,9 +2601,13 @@ async function uploadSharedBinaryFile(file) {
     console.warn(`Đã bỏ qua tệp không tìm thấy dữ liệu: ${file?.name || key}`);
     return file?.remoteKey || "";
   }
+  const blob = dataUrlToBlob(dataUrl, file?.type || "application/octet-stream");
+  if (usingSupabaseSync() && blob.size > SHARED_SYNC_PROXY_UPLOAD_LIMIT) {
+    return uploadSharedBinaryFileDirect(key, blob);
+  }
   const formData = new FormData();
   formData.append("key", key);
-  formData.append("file", dataUrlToBlob(dataUrl, file?.type || "application/octet-stream"), file?.name || key);
+  formData.append("file", blob, file?.name || key);
   const response = await fetch(sharedEndpoint("file"), {
     method: "POST",
     body: formData,
@@ -2593,6 +2622,9 @@ async function uploadSharedBinaryFile(file) {
     // The status check below supplies a useful fallback error.
   }
   if (!response.ok || !payload?.key) {
+    if (usingSupabaseSync() && response.status === 413) {
+      return uploadSharedBinaryFileDirect(key, blob);
+    }
     const error = new Error(payload?.error || "Khong the tai tep len may chu.");
     error.status = response.status;
     throw error;
