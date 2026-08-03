@@ -13,7 +13,6 @@
   <link rel="icon" href="app-icon-phuc-thinh.png" type="image/png">
   <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png">
   <link rel="stylesheet" href="styles.css">
-  <!-- 🔥 CHẶN ĐỨNG MÀN ĐĂNG NHẬP TRƯỚC KHI TRÌNH DUYỆT BẮT ĐẦU VẼ GIAO DIỆN -->
   <script>
     if (localStorage.getItem("phuc-thinh-current-account-v1")) {
       document.documentElement.classList.add("is-authenticated");
@@ -24,13 +23,13 @@
   </style>
 </head>
 <body>
-  <!-- 🟢 POPUP CÀI ĐẶT TÀI KHOẢN CÁ NHÂN (ĐỔI MẬT KHẨU & LỊCH SỬ TRUY CẬP) -->
+  <!-- 🟢 POPUP CÀI ĐẶT & QUYỀN RIÊNG TƯ CÁ NHÂN -->
   <section id="userSettingsDialog" class="modal-backdrop is-hidden" aria-hidden="true">
     <div class="modal-card user-settings-modal" role="dialog" aria-modal="true">
       <div class="section-head">
         <div>
           <p class="eyebrow">Tài khoản cá nhân</p>
-          <h2>Cài đặt tài khoản</h2>
+          <h2>Cài đặt & Quyền riêng tư</h2>
         </div>
         <button id="closeUserSettings" class="ghost" type="button">Đóng</button>
       </div>
@@ -48,18 +47,31 @@
           <label>Xác nhận mật khẩu mới
             <input id="confirmPasswordInput" type="password" required placeholder="Nhập lại mật khẩu mới">
           </label>
-          <p id="changePasswordError" class="form-error wide" role="alert" style="margin: 0;"></p>
-          <p id="changePasswordSuccess" class="form-success wide" role="alert" style="margin: 0; display: none;"></p>
+          <p id="changePasswordError" class="form-error wide" role="alert"></p>
+          <p id="changePasswordSuccess" class="form-success wide is-hidden" role="alert"></p>
           <div class="form-actions wide">
             <button type="submit">Cập nhật mật khẩu</button>
           </div>
         </form>
       </section>
 
-      <!-- 2. KHỐI LỊCH SỬ TRUY CẬP & ĐĂNG NHẬP -->
+      <!-- 2. KHỐI TÙY CHỈNH GIAO DIỆN & NGÔN NGỮ (BÁO BẢO TRÌ) -->
+      <section class="block settings-section">
+        <h3>🎨 Giao diện & Ngôn ngữ</h3>
+        <div class="form-grid change-password-grid">
+          <label>Giao diện Sáng / Tối
+            <input type="text" value="🌙 Tự động (Đang bảo trì nâng cấp)" disabled style="background: #f1f5f9; color: #94a3b8; cursor: not-allowed;">
+          </label>
+          <label>Ngôn ngữ hiển thị
+            <input type="text" value="🇻🇳 Tiếng Việt (English đang bảo trì)" disabled style="background: #f1f5f9; color: #94a3b8; cursor: not-allowed;">
+          </label>
+        </div>
+      </section>
+
+      <!-- 3. KHỐI LỊCH SỬ TRUY CẬP & ĐĂNG NHẬP -->
       <section class="block settings-section">
         <h3>🕒 Lịch sử truy cập & đăng nhập</h3>
-        <p class="section-note" style="margin-bottom: 8px;">Nhật ký 20 lần hoạt động gần nhất của tài khoản này.</p>
+        <p class="section-note">Nhật ký 20 lần hoạt động gần nhất của tài khoản này.</p>
         <div class="table-wrap user-access-history-table">
           <table>
             <thead>
@@ -78,7 +90,7 @@
     </div>
   </section>
 
-  <section id="loginScreen" class="login-screen">
+  <section id="loginScreen" class="login-screen is-hidden">
     <div class="login-card">
       <form id="loginForm" class="login-form">
         <p class="eyebrow">Đăng nhập</p>
@@ -98,87 +110,45 @@
     </div>
   </section>
 
+  <!-- 🖥️ TOPBAR HEADER (KHÔNG SỬ DỤNG LOGO) -->
   <header class="topbar">
-    <div>
-      <p class="unit">
+    <!-- 1. GÓC TRÁI: TÊN BAN (2 DÒNG NẰM NGỌN BÊN TRÁI PC) -->
+    <div class="topbar-brand">
+      <div class="unit">
         <span class="unit-main">BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG</span>
         <span class="unit-sub">XÃ PHÚC THỊNH</span>
-      </p>
+      </div>
     </div>
 
-    <!-- 3. GÓC PHẢI: THÔNG TIN TÀI KHOẢN & DROPDOWN MENU -->
+    <!-- 2. CĂN GIỮA: THANH ĐIỀU HƯỚNG TAB PC -->
+    <nav id="pcTopNav" class="pc-top-nav desktop-only"></nav>
+
+    <!-- 3. GÓC PHẢI: TÀI KHOẢN & POPUP DROPDOWN MENU -->
     <div class="top-actions">
-      <input id="activePeriod" type="month" style="display: none !important;">
-      
-      <!-- Nút kích hoạt Menu Tài khoản -->
       <div class="user-dropdown-wrapper">
         <button type="button" id="userDropdownTrigger" class="user-chip-btn" aria-haspopup="true" aria-expanded="false">
           <div id="currentUserAvatarMini" class="user-avatar-mini">ĐH</div>
-          <div class="user-chip-info">
+          <div class="user-chip-info desktop-only">
             <strong id="currentUserLabel">Chưa đăng nhập</strong>
             <span id="currentUserMeta"></span>
           </div>
           <span class="user-chip-arrow">▾</span>
         </button>
-
         <!-- DROPDOWN POPUP TÀI KHOẢN -->
         <div id="accountDropdownMenu" class="account-dropdown-menu is-hidden">
-          <!-- Header Avatar & Tên -->
-          <div class="dropdown-user-header">
-            <div id="dropdownAvatarLarge" class="dropdown-avatar-large">ĐH</div>
-            <strong id="dropdownDisplayName">Người dùng</strong>
-            <p class="dropdown-subtext">Trang cá nhân của bạn</p>
+          <!-- Khung thẻ Profile mới (X xếp dọc căn giữa) -->
+          <div id="dropdownProfileItem" class="dropdown-profile-header">
+            <div id="dropdownAvatarLarge" class="dropdown-avatar-circle">TV</div>
+            <div class="dropdown-user-details">
+              <strong id="dropdownDisplayName">Kỹ Thuật Viên</strong>
+              <span id="dropdownRoleLabel" class="dropdown-subtext">Trang cá nhân của bạn</span>
+            </div>
           </div>
 
           <div class="dropdown-divider"></div>
-
-          <!-- Danh sách chức năng -->
-          <ul class="dropdown-menu-list">
-            <li>
-              <button type="button" class="dropdown-menu-item" id="menuBtnSettings">
-                <span class="menu-item-icon icon-settings">⚙️</span>
-                <span class="menu-item-text">Cài đặt</span>
-              </button>
-            </li>
-            <li>
-              <button type="button" class="dropdown-menu-item" id="menuBtnEditProfile">
-                <span class="menu-item-icon icon-edit">👤</span>
-                <span class="menu-item-text">Chỉnh sửa thông tin</span>
-              </button>
-            </li>
-            <li>
-              <button type="button" class="dropdown-menu-item" id="menuBtnLanguage">
-                <span class="menu-item-icon icon-lang">🇻🇳</span>
-                <span class="menu-item-text">Ngôn ngữ</span>
-                <span id="currentLangText" class="menu-item-extra">Tiếng Việt ▾</span>
-              </button>
-            </li>
-            <li>
-              <a href="https://zalo.me/0703611114" target="_blank" rel="noopener" class="dropdown-menu-item">
-                <span class="menu-item-icon icon-support">💬</span>
-                <div class="menu-item-stack">
-                  <span class="menu-item-text">Hỗ trợ kỹ thuật</span>
-                  <small class="menu-item-sub">Zalo/Hotline: 070.36.1111.4</small>
-                </div>
-                <span class="menu-item-arrow">›</span>
-              </a>
-            </li>
-          </ul>
-
-          <div class="dropdown-divider"></div>
-
-          <!-- Đăng xuất -->
-          <div class="dropdown-footer">
-            <button type="button" class="dropdown-menu-item logout-item" id="menuBtnLogout">
-              <span class="menu-item-icon icon-logout">🚪</span>
-              <span class="menu-item-text">Đăng xuất</span>
-            </button>
-            <div class="dropdown-version-tag">KPI Phúc Thịnh phiên bản 1.1.14</div>
-          </div>
+          <ul class="dropdown-menu-list" id="accountDropdownList"></ul>
         </div>
       </div>
-
-      <button id="logoutButton" class="is-hidden" type="button" style="display:none !important;"></button>
     </div>
   </header>
 
@@ -360,7 +330,7 @@
                 </select>
               </label>
 
-              <label class="checkbox-field col-span-1" style="margin-top: 22px;">
+              <label class="checkbox-field col-span-1">
                 <input type="checkbox" id="bulletinPinned">
                 <span>Ghim đầu bảng tin</span>
               </label>
@@ -369,7 +339,7 @@
                 <textarea id="bulletinContent" rows="3" required placeholder="Nhập nội dung tin tức, thông báo, hoạt động, phong trào hoặc chương trình bình chọn..."></textarea>
               </label>
 
-              <section id="bulletinVoteSettings" class="bulletin-vote-settings col-span-4 is-hidden" style="display:grid; grid-template-columns: 1fr 1fr 2fr; gap:12px; background:#f8fafc; padding:10px; border-radius:8px;">
+              <section id="bulletinVoteSettings" class="bulletin-vote-settings col-span-4 is-hidden">
                 <label>Kết thúc bình chọn
                   <input type="datetime-local" id="bulletinVoteEndsAt">
                 </label>
@@ -385,14 +355,14 @@
                 <span class="compact-upload-title">Tải lên hình ảnh / video clip / âm thanh / PDF</span>
                 <div class="compact-upload-row">
                   <label class="file-button compact-file-button">Chọn media
-                    <input type="file" id="bulletinMedia" multiple accept="image/*,video/*,audio/*,application/pdf" class="is-hidden" style="display: none;">
+                    <input type="file" id="bulletinMedia" multiple accept="image/*,video/*,audio/*,application/pdf" class="is-hidden">
                   </label>
-                  <span class="field-note" style="display:block; margin-top:6px;">Tối đa 20MB/tệp, tổng media 120MB.</span>
+                  <span class="field-note">Tối đa 20MB/tệp, tổng media 120MB.</span>
                 </div>
               </div>
 
               <div class="col-span-2 form-actions-right">
-                <div id="bulletinMediaList" class="attachment-list bulletin-media-draft" style="width: 100%;">
+                <div id="bulletinMediaList" class="attachment-list bulletin-media-draft">
                   <span class="muted">Chưa có media đính kèm.</span>
                 </div>
                 <button type="submit" class="primary">Lưu tin bài</button>
@@ -575,13 +545,23 @@
           </label>
           <div class="form-actions wide">
             <button type="submit">Lưu tài khoản</button>
-            <button id="toggleDisableAccountBtn" class="ghost warn-action is-hidden" type="button" style="color: #d97706; border-color: #fde68a; background: #fffbeb;">Vô hiệu hóa tài khoản</button>
+            <button id="toggleDisableAccountBtn" class="ghost warn-action is-hidden" type="button">Vô hiệu hóa tài khoản</button>
+            <button id="deleteAccountBtn" class="ghost danger-action is-hidden" type="button">Xóa tài khoản</button>
             <button id="resetPersonForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
         <div class="filter-row">
           <input id="personSearch" placeholder="Tìm kiếm nhân sự theo tên, phòng, vị trí, điện thoại, trình độ, địa chỉ...">
           <button id="clearPersonSearch" class="ghost" type="button">Xóa tìm kiếm</button>
+        </div>
+        <div id="peopleDirectoryGroups" class="people-directory-groups" aria-label="Lọc nhân sự theo nhóm">
+          <button class="is-active" data-person-group="" type="button">Tất cả</button>
+          <button data-person-group="director" type="button">Ban Giám đốc</button>
+          <button data-person-group="ke-hoach" type="button">Kế hoạch tổng hợp</button>
+          <button data-person-group="du-an-1" type="button">Dự án 1</button>
+          <button data-person-group="du-an-2" type="button">Dự án 2</button>
+          <button data-person-group="gpmb" type="button">Giải phóng mặt bằng</button>
+          <button data-person-group="ha-tang" type="button">Quản lý hạ tầng</button>
         </div>
         <div id="peopleFilterNote" class="filter-note is-hidden">
           <span id="peopleFilterText"></span>
@@ -593,14 +573,12 @@
               <tr>
                 <th>Nhân sự</th>
                 <th class="people-gender">Giới tính</th>
-                <th>Phòng</th>
                 <th>Vị trí</th>
+                <th>Phòng</th>
                 <th>Trình độ</th>
                 <th class="people-birth-date">Ngày sinh</th>
                 <th>Địa chỉ</th>
                 <th>Hợp đồng</th>
-                <th>Lương</th>
-                <th>KPI kỳ này</th>
                 <th></th>
               </tr>
             </thead>
@@ -627,6 +605,14 @@
             <span id="taskInboxBadge" class="task-inbox-badge">0</span>
           </button>
         </section>
+        <section id="taskProjectCatalogPanel" class="project-catalog-trigger block is-hidden" aria-labelledby="taskProjectCatalogTitle">
+          <div>
+            <p class="eyebrow">Danh mục dự án</p>
+            <h3 id="taskProjectCatalogTitle">Quản lý tên dự án chuẩn</h3>
+            <p id="taskProjectCatalogNote" class="muted"></p>
+          </div>
+          <button id="openTaskProjectCatalog" class="ghost" type="button">Quản lý dự án</button>
+        </section>
         <form id="taskForm" class="form-grid" autocomplete="off">
           <input type="hidden" id="taskId">
           <input id="taskDueTime" type="hidden" value="">
@@ -640,7 +626,9 @@
             <input id="taskTitle" required placeholder="Hoàn thiện hồ sơ dự án..." autocomplete="do-not-autofill" autocorrect="off" autocapitalize="none" spellcheck="false">
           </label>
           <label class="task-project-field">Tên dự án
-            <input id="taskProjectName" placeholder="Nhập tên dự án liên quan..." autocomplete="do-not-autofill" autocorrect="off" autocapitalize="none" spellcheck="false">
+            <select id="taskProjectId" required>
+              <option value="">Chọn dự án</option>
+            </select>
           </label>
           <label class="task-category-field">Danh mục KPI cá nhân
             <select id="taskCategory" required>
@@ -648,6 +636,14 @@
             </select>
           </label>
           <label class="task-owner-field"><span id="taskOwnerLabelText">Người được giao</span>
+            <div id="taskOwnerPickerWrapper" class="task-owner-picker-container collaborator-picker">
+              <button id="taskOwnerTrigger" class="task-owner-trigger collaborator-picker-toggle" type="button" aria-expanded="false" aria-controls="taskOwnerPanel"><span id="taskOwnerTriggerText">Chọn cán bộ thực hiện</span><small aria-hidden="true">⌄</small></button>
+              <div id="taskOwnerPanel" class="task-owner-panel collaborator-picker-panel is-hidden">
+                <input id="taskOwnerSearch" class="task-owner-search" type="search" autocomplete="off" placeholder="Gõ tên người thực hiện...">
+                <div id="taskOwnerOptions" class="checkbox-list" role="radiogroup"></div>
+                <p id="taskOwnerSearchEmpty" class="collaborator-search-empty is-hidden">Không tìm thấy cán bộ phù hợp.</p>
+              </div>
+            </div>
             <select id="taskOwner" required></select>
           </label>
           <div id="taskCollaboratorField" class="regular-only task-collaborator-field">
@@ -746,13 +742,13 @@
             <option>Hoàn thành</option>
             <option>Quá hạn</option>
           </select>
-          
+
           <div class="date-range-group">
             <span class="date-label">Từ</span>
             <input id="taskDateFrom" type="date" class="filter-date" aria-label="Lọc công việc từ ngày">
             <span class="date-label">Đến</span>
             <input id="taskDateTo" type="date" class="filter-date" aria-label="Lọc công việc đến ngày">
-            <button id="clearTaskTimeFilter" class="ghost btn-clear-date" type="button">Bỏ lọc</button>
+            <button id="clearTaskTimeFilter" class="ghost btn-clear-date" type="button" aria-label="Bỏ lọc thời gian" title="Bỏ lọc thời gian"><span class="btn-clear-date-label">Bỏ lọc</span><svg class="btn-clear-date-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"/></svg></button>
           </div>
         </div>
         <div id="taskBoard" class="task-board"></div>
@@ -983,7 +979,7 @@
         </section>
       </section>
 
-      <!-- 🟢 9. TÀI KHOẢN (TRANG MÀN HÌNH ĐỘC LẬP - CHỈ XUẤT HIỆN Ở GIAO DIỆN ADMIN) -->
+      <!-- 9. TÀI KHOẢN -->
       <section id="accounts" class="view">
         <div class="section-head">
           <div>
@@ -1017,6 +1013,25 @@
             </div>
           </div>
           <div id="accountPresenceList" class="account-presence-list"></div>
+          <div class="account-usage-monitor-grid">
+            <section class="account-usage-card">
+              <div class="account-usage-card-head"><div><p class="eyebrow">Theo tuần</p><h4>Chưa đăng nhập</h4></div><strong id="accountInactiveWeekCount">-</strong></div>
+              <div id="accountDepartmentWeekSummary" class="account-department-summary"></div>
+              <div id="accountDepartmentWeekDetail" class="account-department-detail is-hidden" aria-live="polite"></div>
+              <div id="accountInactiveWeekList" class="account-usage-list is-hidden"></div>
+            </section>
+            <section class="account-usage-card">
+              <div class="account-usage-card-head"><div><p class="eyebrow">Theo tháng</p><h4>Chưa đăng nhập</h4></div><strong id="accountInactiveMonthCount">-</strong></div>
+              <div id="accountDepartmentMonthSummary" class="account-department-summary"></div>
+              <div id="accountDepartmentMonthDetail" class="account-department-detail is-hidden" aria-live="polite"></div>
+              <div id="accountInactiveMonthList" class="account-usage-list is-hidden"></div>
+            </section>
+          </div>
+          <section class="account-usage-history">
+            <div class="account-usage-card-head"><div><p class="eyebrow">Lịch sử hệ thống</p><h4>Hoạt động hàng tháng</h4></div><span id="accountUsageHistoryStatus" class="muted"></span></div>
+            <div id="accountUsageMonthlyHistory" class="account-usage-history-list"></div>
+            <div id="accountUsageMonthDetail" class="account-usage-month-detail is-hidden" aria-live="polite"></div>
+          </section>
         </section>
 
         <!-- Form tạo / cập nhật tài khoản -->
@@ -1047,9 +1062,20 @@
           <label>Phòng quản lý/làm việc
             <select id="accountDepartment"></select>
           </label>
+          <fieldset id="accountAccessGrants" class="account-access-grants wide">
+            <legend>Quyền bổ sung</legend>
+            <label class="checkbox-field">
+              <input id="accountCanPublishBulletins" type="checkbox">
+              <span>Được đăng và cập nhật tin bài của mình</span>
+            </label>
+            <label class="checkbox-field">
+              <input id="accountCanSaveArchive" type="checkbox">
+              <span>Được lưu và cập nhật hồ sơ của mình</span>
+            </label>
+          </fieldset>
           <div class="form-actions wide">
             <button type="submit">Lưu tài khoản</button>
-            <button id="deleteAccountBtn" class="ghost danger-action is-hidden" type="button" style="color: #e53e3e; border-color: #fed7d7; background: #fff5f5;">Xóa tài khoản</button>
+            <button id="deleteAccountBtn" class="ghost danger-action is-hidden" type="button">Xóa tài khoản</button>
             <button id="resetAccountForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
@@ -1115,7 +1141,7 @@
         </section>
       </section>
 
-      <!-- 11. CÀI ĐẶT HỆ THỐNG (Màn hình độc lập riêng biệt) -->
+      <!-- 11. CÀI ĐẶT HỆ THỐNG -->
       <section id="settings" class="view">
         <div class="section-head">
           <div>
@@ -1132,12 +1158,12 @@
               <h3>Công cụ dữ liệu & Tùy biến giao diện</h3>
             </div>
           </div>
-          <p class="section-note" style="margin-bottom: 12px;">Quản lý dữ liệu hệ thống, xuất/nhập báo cáo và kích hoạt chế độ chỉnh sửa giao diện.</p>
+          <p class="section-note">Quản lý dữ liệu hệ thống, xuất/nhập báo cáo và kích hoạt chế độ chỉnh sửa giao diện.</p>
           <div class="settings-tools-grid">
             <button id="toggleCustomizeMode" class="ghost customization-action" type="button">🎨 Tùy biến</button>
             <button id="printReport" class="ghost summary-action" type="button">🖨️ In báo cáo</button>
             <button id="exportData" class="ghost json-data-action" type="button">📤 Xuất JSON</button>
-            <label class="file-button json-data-action" style="margin: 0; cursor: pointer;">
+            <label class="file-button json-data-action">
               📥 Nhập JSON
               <input id="importData" type="file" accept="application/json" multiple>
             </label>
@@ -1145,7 +1171,7 @@
         </section>
 
         <!-- 2. Chủ đề Theme giao diện -->
-        <section id="systemThemePanel" class="block system-theme-panel" style="margin-top: 14px;">
+        <section id="systemThemePanel" class="block system-theme-panel">
           <div class="section-head system-theme-head">
             <div>
               <p class="eyebrow">Giao diện toàn hệ thống</p>
@@ -1181,7 +1207,7 @@
         </section>
 
         <!-- 3. Bảng Phân quyền nhóm -->
-        <section id="moduleAccessPanel" class="block admin-module-panel" style="margin-top: 14px;">
+        <section id="moduleAccessPanel" class="block admin-module-panel">
           <div class="section-head module-access-head">
             <div>
               <p class="eyebrow">Cấu hình hệ thống</p>
@@ -1423,6 +1449,33 @@
     </div>
   </section>
 
+  <section id="taskProjectCatalogDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card task-project-catalog-modal" role="dialog" aria-modal="true" aria-labelledby="taskProjectCatalogDialogTitle">
+      <div class="section-head task-project-catalog-head">
+        <div>
+          <p class="eyebrow">Danh mục dự án</p>
+          <h2 id="taskProjectCatalogDialogTitle">Quản lý tên dự án</h2>
+        </div>
+        <button id="closeTaskProjectCatalog" class="ghost" type="button">Đóng</button>
+      </div>
+      <form id="taskProjectCatalogForm" class="project-catalog-form">
+        <input id="taskProjectCatalogId" type="hidden">
+        <label>Tên dự án
+          <input id="taskProjectCatalogName" required maxlength="180" placeholder="Nhập tên dự án chuẩn...">
+        </label>
+        <div class="form-actions">
+          <button type="submit">Lưu dự án</button>
+          <button id="resetTaskProjectCatalogForm" class="ghost" type="button">Làm mới</button>
+        </div>
+      </form>
+      <label class="project-catalog-search" for="taskProjectCatalogSearch">
+        <span>Tìm kiếm dự án</span>
+        <input id="taskProjectCatalogSearch" type="search" autocomplete="off" placeholder="Gõ tên dự án để lọc nhanh...">
+      </label>
+      <div id="taskProjectCatalogList" class="project-catalog-list"></div>
+    </div>
+  </section>
+
   <section id="taskStatusDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
     <div class="modal-card kpi-task-detail-modal task-status-detail-modal" role="dialog" aria-modal="true">
       <div class="section-head">
@@ -1450,6 +1503,10 @@
       </div>
       <form id="taskCompletionReviewForm" class="form-grid task-completion-review-form">
         <input id="taskCompletionReviewTaskId" type="hidden">
+        <label id="taskCompletionReviewQualityField" class="is-hidden">Đánh giá chất lượng (%)
+          <input id="taskCompletionReviewQualityPercent" type="number" min="0" max="120" step="0.01" inputmode="decimal" placeholder="Nhập tỷ lệ chất lượng">
+        </label>
+        <div id="taskCompletionReviewTiming" class="is-hidden wide" aria-live="polite"></div>
         <label>Kết quả đánh giá
           <select id="taskCompletionReviewStatus" required>
             <option value="">Chọn kết quả</option>
@@ -1647,72 +1704,26 @@
   <template id="emptyRowTemplate">
     <tr><td colspan="8" class="empty-cell">Chưa có dữ liệu.</td></tr>
   </template>
-
   <div id="phucThinhToastContainer"></div>
 
-  <!-- 📱 MOBILE NAV -->
-  <nav class="mobile-bottom-nav mobile-only">
-    <button type="button" class="bottom-nav-item is-active" data-view="dashboard">
-      <span class="nav-icon">▦</span>
-      <span>Tổng quan</span>
-    </button>
-    <button type="button" class="bottom-nav-item" data-view="bulletin">
-      <span class="nav-icon">▤</span>
-      <span>Bảng tin</span>
-    </button>
-    <button type="button" class="bottom-nav-item" data-view="tasks">
-      <span class="nav-icon">☑</span>
-      <span>Công việc</span>
-    </button>
-    <button type="button" class="bottom-nav-item" data-view="people">
-      <span class="nav-icon">◉</span>
-      <span>Nhân sự</span>
-    </button>
-    <button type="button" class="bottom-nav-item" id="openMobileMenuBtn">
-      <span class="nav-icon">☰</span>
-      <span>Menu</span>
-    </button>
-  </nav>
+  <!-- 📱 MOBILE BOTTOM NAV & MENU POPUP -->
+  <nav class="mobile-bottom-nav mobile-only" id="mobileBottomNav"></nav>
 
   <div id="mobileMenuPopup" class="mobile-menu-popup mobile-only">
-    <div class="mobile-profile-card">
-      <div class="mobile-profile-avatar">👤</div>
+    <!-- Khung Header Tài khoản chuẩn -->
+    <div class="mobile-profile-card" id="mobileProfileHeaderCard">
+      <div class="mobile-profile-avatar" id="mobileUserAvatarLarge">ĐH</div>
       <div class="mobile-profile-info">
         <strong id="mobileUserLabel">Tài khoản</strong>
-        <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
+        <span id="mobileUserSubtext">Xem trang cá nhân của bạn</span>
       </div>
-      <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">-</button>
+      <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn" title="Đóng">✕</button>
     </div>
-    <div class="mobile-menu-list">
-      <button type="button" class="mobile-menu-item" data-view="archive">
-        <div class="mobile-icon-box">▧</div>
-        <span class="mobile-menu-text">Lưu Trữ</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="department-evaluations">
-        <div class="mobile-icon-box">▥</div>
-        <span class="mobile-menu-text">KPI phòng</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="evaluations">
-        <div class="mobile-icon-box">◇</div>
-        <span class="mobile-menu-text">KPI cá nhân</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="history">
-        <div class="mobile-icon-box">◷</div>
-        <span class="mobile-menu-text">Lịch sử</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="accounts">
-        <div class="mobile-icon-box">◫</div>
-        <span class="mobile-menu-text">Tài khoản</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="rules">
-        <div class="mobile-icon-box">§</div>
-        <span class="mobile-menu-text">Quy chế</span>
-      </button>
-      <button type="button" class="mobile-menu-item" data-view="settings">
-        <div class="mobile-icon-box">⚙</div>
-        <span class="mobile-menu-text">Cấu Hình Hệ Thống</span>
-      </button>
-    </div>
+
+    <!-- Danh sách Menu linh hoạt theo quyền (Được JS tự động vẽ vào đây) -->
+    <div class="mobile-menu-list" id="mobileMenuList"></div>
+
+    <!-- Footer Đăng xuất -->
     <div class="mobile-menu-footer">
       <button type="button" id="mobileLogoutBtn" class="mobile-logout-button">
         <span>🚪</span> Đăng xuất
@@ -1720,6 +1731,7 @@
     </div>
   </div>
 
+  <!-- POPUP CHI TIẾT NHÂN SỰ -->
   <section id="personDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
     <div class="modal-card person-detail-modal" role="dialog" aria-modal="true">
       <div class="person-detail-header">
@@ -1738,9 +1750,48 @@
     </div>
   </section>
 
+  <!-- KẾT NỐI SCRIPT -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="supabase-config.js"></script>
   <script src="people-data.js"></script>
   <script src="script.js"></script>
+  <script>
+    // Lắng nghe mọi cú click trên toàn bộ tài liệu (Event Delegation)
+    document.addEventListener('click', function(e) {
+      // Kiểm tra xem người dùng có bấm vào nút Đăng xuất Mobile hay không
+      const logoutBtn = e.target.closest('.mobile-logout-button, #mobileLogoutBtn, .mobile-menu-footer button');
+
+      if (logoutBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 1. Kiểm tra nếu giao diện PC đã có nút Đăng xuất hoạt động -> Cho nút Mobile kích hoạt hộ nút PC
+        const pcLogoutBtn = document.querySelector('#logoutBtn, .account-dropdown-menu .logout-item, [data-action="logout"]');
+        if (pcLogoutBtn && pcLogoutBtn !== logoutBtn) {
+          pcLogoutBtn.click();
+          return;
+        }
+
+        // 2. Thử kích hoạt các hàm Logout sẵn có trong JS hệ thống (nếu có)
+        if (typeof handleLogout === 'function') { handleLogout(); return; }
+        if (typeof logout === 'function') { logout(); return; }
+        if (typeof doLogout === 'function') { doLogout(); return; }
+
+        // 3. Phương án xử lý tự động: Xóa phiên làm việc & Chuyển về màn hình Login
+        localStorage.clear();
+        sessionStorage.clear();
+
+        document.body.classList.remove('is-authenticated');
+        const loginScreen = document.getElementById('loginScreen') || document.querySelector('.login-screen');
+        if (loginScreen) {
+          loginScreen.classList.remove('is-hidden');
+          loginScreen.style.display = 'flex';
+        }
+
+        // Tải lại trang để đưa ứng dụng về trạng thái ban đầu
+        window.location.reload();
+      }
+    });
+  </script>
 </body>
 </html>
