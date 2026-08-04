@@ -14,7 +14,7 @@ const maxUploadBytes = 10 * 1024 * 1024;
 const presenceWindowMs = 2 * 60 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.08.04.2";
+const deploymentVersion = "2026.08.04.3";
 const releaseManifestFormat = "phuc-thinh-code-release";
 const releaseManifestVersion = 1;
 const maxReleaseFileBytes = 10 * 1024 * 1024;
@@ -509,27 +509,93 @@ function appendOnly(previous: unknown, next: unknown): boolean {
   return previous.every((item, index) => sameJson(item, next[index]));
 }
 
-function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
-  const permitted = [
+const taskProgressMutableFields = [
     "status",
     "progress",
     "attachments",
     "progressReports",
-    "responseStatus",
-    "responseNote",
-    "responseAt",
-    "responseById",
-    "responseByName",
     "completedAt",
     "completedById",
     "completedByName",
+    "completionReviewStatus",
+    "completionReviewedAt",
+    "completionReviewedById",
+    "completionReviewedByName",
+    "completionReviewNote",
+    "lateCompletion",
+    "qualityPercent",
+    "qualityAssessedAt",
+    "qualityAssessedById",
+    "qualityAssessedByName",
     "updatedAt",
     "updatedBy",
     "updatedById",
+  "responseStatus",
+  "responseNote",
+  "responseAt",
+  "responseById",
+  "responseByName",
+] as const;
+
+function taskProgressFields(allowCollaboratorChanges = false): string[] {
+  return allowCollaboratorChanges
+    ? [...taskProgressMutableFields, "collaboratorIds", "collaboratorId"]
+    : [...taskProgressMutableFields];
+}
+
+function isBlankTaskField(value: unknown): boolean {
+  return String(value ?? "").trim() === "";
+}
+
+function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
+  const completionFields = [
+    "completionReviewedAt",
+    "completionReviewedById",
+    "completionReviewedByName",
+    "completionReviewNote",
+    "qualityPercent",
+    "qualityAssessedAt",
+    "qualityAssessedById",
+    "qualityAssessedByName",
   ];
-  if (allowCollaboratorChanges) permitted.push("collaboratorIds", "collaboratorId");
+  const cleared = completionFields.every((field) => isBlankTaskField(next[field]));
+  if (!cleared || Boolean(next.lateCompletion)) return false;
+  if (completedTaskStatus(next.status)) return String(next.completionReviewStatus || "") === "pending";
+  return isBlankTaskField(next.completionReviewStatus);
+}
+
+function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
+  const permitted = taskProgressFields(allowCollaboratorChanges);
   if (!appendOnly(previous.progressReports || [], next.progressReports || [])) return false;
-  return sameJson(withoutKeys(previous, permitted), withoutKeys(next, permitted));
+  return taskProgressLifecycleIsSafe(next) && sameJson(withoutKeys(previous, permitted), withoutKeys(next, permitted));
+}
+
+function rebaseTaskProgressReports(live: JsonRecord, base: JsonRecord, next: JsonRecord): JsonRecord[] {
+  const baseReports = Array.isArray(base.progressReports) ? base.progressReports : [];
+  const nextReports = Array.isArray(next.progressReports) ? next.progressReports : [];
+  const liveReports = Array.isArray(live.progressReports) ? clone(live.progressReports) : [];
+  const addedReports = nextReports.slice(baseReports.length).filter(isRecord);
+  const knownIds = new Set(liveReports.map((report) => recordId(report)).filter(Boolean));
+  addedReports.forEach((report) => {
+    const id = recordId(report);
+    if (id && knownIds.has(id)) return;
+    liveReports.push(clone(report));
+    if (id) knownIds.add(id);
+  });
+  return liveReports;
+}
+
+function rebaseTaskProgressChange(live: JsonRecord, base: JsonRecord, next: JsonRecord): JsonRecord | null {
+  if (!taskProgressOnlyChange(base, next, true)) return null;
+  const changedFields = taskProgressFields(true).filter((field) => !sameJson(base[field], next[field]));
+  if (!changedFields.length) return null;
+  const rebased = clone(live);
+  changedFields.forEach((field) => {
+    rebased[field] = field === "progressReports"
+      ? rebaseTaskProgressReports(live, base, next)
+      : next[field];
+  });
+  return rebased;
 }
 
 function taskQualityOnlyChange(previous: JsonRecord, next: JsonRecord): boolean {
@@ -813,15 +879,23 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         denied.push({ scope: collection, id: id || "unknown", reason: "Invalid record." });
         return;
       }
-      if (previous && !sameJson(operation.baseValue, collection === "accounts" ? sanitizedAccount(previous) : previous)) {
-        denied.push({ scope: collection, id, reason: "Record changed by another user." });
-        return;
+      const serverValue = collection === "accounts" && previous ? sanitizedAccount(previous) : previous;
+      let candidate = value;
+      if (previous && !sameJson(operation.baseValue, serverValue)) {
+        const rebased = collection === "tasks" && isRecord(operation.baseValue)
+          ? rebaseTaskProgressChange(previous, operation.baseValue, value)
+          : null;
+        if (!rebased) {
+          denied.push({ scope: collection, id, reason: "Record changed by another user." });
+          return;
+        }
+        candidate = rebased;
       }
-      if (!canUpsert(next, actor, collection, previous, value)) {
+      if (!canUpsert(next, actor, collection, previous, candidate)) {
         denied.push({ scope: collection, id, reason: "Permission denied." });
         return;
       }
-      const saved = collection === "accounts" ? mergeAccountPassword(previous, value) : clone(value);
+      const saved = collection === "accounts" ? mergeAccountPassword(previous, candidate) : clone(candidate);
       values.set(id, saved);
       changed += 1;
     });

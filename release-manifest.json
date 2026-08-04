@@ -2,15 +2,15 @@
   "manifestVersion": 1,
   "channel": "stable",
   "latest": {
-    "version": "2.2.4",
+    "version": "2.2.5",
     "build": "2026.08.04",
     "releasedAt": "2026-08-04T00:00:00+07:00",
     "dataSchemaVersion": 1,
     "requiresBackup": true,
     "summary": [
-      "Khắc phục vòng lặp đồng bộ khi máy chủ từ chối một thay đổi theo phân quyền.",
-      "Tự thay phần dữ liệu bị từ chối bằng phiên bản hợp lệ từ máy chủ, vẫn giữ các thay đổi hợp lệ khác.",
-      "Chuyển thông báo xung đột đồng bộ sang dạng không chặn thao tác và làm mới cache PWA."
+      "Cho phép Người thực hiện, Người phối hợp và cấp quản lý cập nhật tiến độ công việc quá hạn theo đúng quyền.",
+      "Đồng bộ an toàn trạng thái Chờ đánh giá mà không cho phép tự duyệt hoặc tự nhập chất lượng.",
+      "Gộp thay đổi tiến độ khi có cập nhật song song và giữ nguyên các trường khác của công việc."
     ]
   }
 }

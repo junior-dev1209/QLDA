@@ -1166,6 +1166,7 @@ const sharedSync = {
   conflict: false,
   conflictNotified: false,
   baseState: null,
+  serverBaseState: null,
   accountId: "",
   dirtyAccountId: "",
   localChangeVersion: 0,
@@ -2051,6 +2052,7 @@ function sharedSyncCheckpointPayload() {
     dirtyAccountId: sharedSync.dirtyAccountId || "",
     revision: sharedSync.revision,
     baseState: sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : null,
+    serverBaseState: sharedSync.serverBaseState ? cloneStatePayload(sharedSync.serverBaseState) : null,
   };
 }
 
@@ -2074,6 +2076,7 @@ async function restoreSharedSyncCheckpoint() {
       sharedSync.dirtyAccountId = String(checkpoint.dirtyAccountId || "");
       sharedSync.revision = Number.isFinite(Number(checkpoint.revision)) ? Number(checkpoint.revision) : sharedSync.revision;
       sharedSync.baseState = checkpoint.baseState ? cloneStatePayload(normalizeStatePayload(checkpoint.baseState)) : sharedSync.baseState;
+      sharedSync.serverBaseState = checkpoint.serverBaseState ? sharedServerBasePayload(checkpoint.serverBaseState) : sharedSync.serverBaseState;
       return true;
     })
     .catch((error) => {
@@ -2107,6 +2110,15 @@ function clearSharedStateDirty() {
 
 function cloneStatePayload(payload) {
   return JSON.parse(JSON.stringify(payload));
+}
+
+function sharedServerBasePayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const base = cloneStatePayload(payload);
+  SHARED_SYNC_COLLECTIONS.forEach((collection) => {
+    if (!Array.isArray(base[collection])) base[collection] = [];
+  });
+  return base;
 }
 
 function normalizedLoginUsername(value) {
@@ -2771,6 +2783,7 @@ async function adoptSharedState(payload, { render = true } = {}) {
   normalized.activePeriod = localActivePeriod || normalized.activePeriod;
   Object.assign(state, normalized);
   sharedSync.baseState = cloneStatePayload(normalized);
+  sharedSync.serverBaseState = sharedServerBasePayload(payload);
   persistState();
   const migrationResults = await Promise.all([
     migrateBulletinMediaToIndexedDb(),
@@ -2795,6 +2808,7 @@ async function retainUnsyncedLocalChanges(remotePayload, { render = true } = {})
   const merged = mergeRemoteStateWithUnsyncedChanges(base, local, remote);
   Object.assign(state, merged);
   sharedSync.baseState = cloneStatePayload(remote);
+  sharedSync.serverBaseState = sharedServerBasePayload(remotePayload);
   sharedSync.pending = true;
   persistState();
   await markSharedStateDirty();
@@ -2847,6 +2861,7 @@ async function loginSharedSession(username, password) {
       reason: "Thay doi chua dong bo thuoc tai khoan truoc do.",
     });
     sharedSync.baseState = null;
+    sharedSync.serverBaseState = null;
     await clearSharedStateDirty();
   }
   sharedSync.session = true;
@@ -2866,6 +2881,7 @@ async function loginSharedSession(username, password) {
   const serverUninitialized = sharedSync.revision === 0;
   if (serverUninitialized && remoteAccount?.role === "admin" && canBootstrapCloudFromLocalState()) {
     sharedSync.baseState = cloneStatePayload(normalizeStatePayload(result.payload.state));
+    sharedSync.serverBaseState = sharedServerBasePayload(result.payload.state);
     sharedSync.localChangeVersion += 1;
     sharedSync.pending = true;
     await markSharedStateDirty();
@@ -3196,13 +3212,15 @@ function showSystemToast(title, message, { tone = "warning", duration = 7000 } =
   window.setTimeout(dismiss, Math.max(3500, Number(duration) || 7000));
 }
 
-function buildSharedStatePatch(basePayload, nextPayload) {
+function buildSharedStatePatch(basePayload, nextPayload, serverBasePayload = basePayload) {
   const base = normalizeStatePayload(basePayload);
   const next = normalizeStatePayload(nextPayload);
+  const serverBase = sharedServerBasePayload(serverBasePayload) || cloneStatePayload(base);
   const collections = {};
 
   SHARED_SYNC_COLLECTIONS.forEach((collection) => {
     const baseRecords = sharedRecordMap(base[collection]);
+    const serverBaseRecords = sharedRecordMap(serverBase[collection]);
     const nextRecords = sharedRecordMap(next[collection]);
     const upserts = [];
     const deletes = [];
@@ -3210,10 +3228,11 @@ function buildSharedStatePatch(basePayload, nextPayload) {
     recordIds.forEach((id) => {
       const before = baseRecords.get(id);
       const after = nextRecords.get(id);
+      const serverBefore = serverBaseRecords.get(id);
       if (after && !sharedValuesEqual(before, after)) {
-        upserts.push({ id, value: after, baseValue: before || null });
+        upserts.push({ id, value: after, baseValue: serverBefore || before || null });
       } else if (before && !after) {
-        deletes.push({ id, baseValue: before });
+        deletes.push({ id, baseValue: serverBefore || before });
       }
     });
     if (upserts.length || deletes.length) collections[collection] = { upserts, deletes };
@@ -3221,7 +3240,11 @@ function buildSharedStatePatch(basePayload, nextPayload) {
 
   const fields = SHARED_SYNC_SCALAR_FIELDS
     .filter((key) => !sharedValuesEqual(base[key], next[key]))
-    .map((key) => ({ key, value: next[key], baseValue: base[key] }));
+    .map((key) => ({
+      key,
+      value: next[key],
+      baseValue: Object.prototype.hasOwnProperty.call(serverBase, key) ? serverBase[key] : base[key],
+    }));
   return { collections, fields };
 }
 
@@ -3278,7 +3301,10 @@ async function flushSharedStateSync() {
   try {
     const snapshot = await createSharedStateSnapshot();
     const baseSnapshot = sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : cloneStatePayload(snapshot);
-    const patch = buildSharedStatePatch(baseSnapshot, snapshot);
+    const serverBaseSnapshot = sharedSync.serverBaseState
+      ? cloneStatePayload(sharedSync.serverBaseState)
+      : cloneStatePayload(baseSnapshot);
+    const patch = buildSharedStatePatch(baseSnapshot, snapshot, serverBaseSnapshot);
     const requestedChangeVersion = sharedSync.localChangeVersion;
     if (!sharedPatchOperationCount(patch)) {
       persistState();
@@ -3328,8 +3354,10 @@ async function flushSharedStateSync() {
       const merged = mergeRemoteStateWithUnsyncedChanges(snapshot, currentForMerge, payload.state);
       Object.assign(state, merged);
       sharedSync.baseState = cloneStatePayload(normalizeStatePayload(payload.state));
+      sharedSync.serverBaseState = sharedServerBasePayload(payload.state);
     } else {
       sharedSync.baseState = cloneStatePayload(snapshot);
+      sharedSync.serverBaseState = cloneStatePayload(serverBaseSnapshot);
     }
     const hasNewerLocalChange = sharedSync.localChangeVersion !== requestedChangeVersion;
     if (Array.isArray(payload?.denied) && payload.denied.length) {
