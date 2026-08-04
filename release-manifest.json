@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 1,
+  "channel": "stable",
+  "latest": {
+    "version": "2.2.3",
+    "build": "2026.08.04",
+    "releasedAt": "2026-08-04T00:00:00+07:00",
+    "dataSchemaVersion": 1,
+    "requiresBackup": true,
+    "summary": [
+      "Khắc phục hiển thị ảnh bánh sinh nhật và bó hoa trong gói phát hành online.",
+      "Tự thử ảnh từ gói release trước, sau đó tự chuyển sang tệp ảnh ở máy chủ web tĩnh khi cần.",
+      "Duy trì kiểm tra hai ảnh sinh nhật là tệp bắt buộc của mọi gói cập nhật."
+    ]
+  }
+}
