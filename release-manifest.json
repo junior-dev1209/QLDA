@@ -2,15 +2,15 @@
   "manifestVersion": 1,
   "channel": "stable",
   "latest": {
-    "version": "2.2.3",
+    "version": "2.2.4",
     "build": "2026.08.04",
     "releasedAt": "2026-08-04T00:00:00+07:00",
     "dataSchemaVersion": 1,
     "requiresBackup": true,
     "summary": [
-      "Khắc phục hiển thị ảnh bánh sinh nhật và bó hoa trong gói phát hành online.",
-      "Tự thử ảnh từ gói release trước, sau đó tự chuyển sang tệp ảnh ở máy chủ web tĩnh khi cần.",
-      "Duy trì kiểm tra hai ảnh sinh nhật là tệp bắt buộc của mọi gói cập nhật."
+      "Khắc phục vòng lặp đồng bộ khi máy chủ từ chối một thay đổi theo phân quyền.",
+      "Tự thay phần dữ liệu bị từ chối bằng phiên bản hợp lệ từ máy chủ, vẫn giữ các thay đổi hợp lệ khác.",
+      "Chuyển thông báo xung đột đồng bộ sang dạng không chặn thao tác và làm mới cache PWA."
     ]
   }
 }
