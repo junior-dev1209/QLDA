@@ -4,7 +4,7 @@
 
 Ung dung dung Supabase theo luong sau:
 
-`Trinh duyet -> Edge Function kpi-sync -> Postgres kpi_shared_state + Storage private kpi-files, kpi-releases`
+`Trinh duyet -> Edge Function kpi-sync -> Postgres kpi_shared_state + Storage private kpi-files`
 
 Edge Function giu service key o phia may chu, quan ly phien dang nhap cua ung dung va khong tra mat khau tai khoan ve trinh duyet. Trinh duyet chi dung `Project URL` va `publishable key`.
 
@@ -52,14 +52,6 @@ Khong dien `service_role`, `secret key` hoac chuoi ket noi database vao `supabas
 
 7. Dang nhap tren mot may thu hai. Du lieu, tin bai, PDF, media va ho so phai hien thi tu Supabase.
 
-## Kho phat hanh ma nguon
-
-- Migration `20260803000000_kpi_code_releases.sql` tao bang `kpi_app_releases`, bucket private `kpi-releases` va ham kich hoat goi ma nguyen tu. Migration nay phai duoc day truoc khi su dung Trung tam cap nhat.
-- Edge Function `kpi-sync` phien ban co `release-current`, `release-list`, `release-create`, `release-file`, `release-activate` va `release-delete`. Chi phien Admin co the tao, tai tep, kich hoat hoac xoa ban nhap.
-- Hosting can duoc cap nhat **mot lan** voi `release-bootstrap.js` va `service-worker.js` moi. Sau do, Admin cap nhat cac tep giao dien duoc phep ngay trong `Cau hinh he thong` > `Trung tam cap nhat`; khong can tai lai tep ma giao dien len hosting cho moi phien ban.
-- Goi dau tien phai day du cac tep bat buoc. Goi sau tu sao chep tep cua goi dang kich hoat, chi can tai len tep da thay doi. Tep cua goi active khong the bi ghi de.
-- Neu goi moi loi, mo he thong voi tham so `?release-base=1`, dang nhap Admin va kich hoat lai goi da luu tru on dinh.
-
 ## Xuat va nhap du lieu JSON tach tep
 
 - Nut `Xuat JSON` cua Admin mo hop chon nhom du lieu. Co the chon mot, nhieu, hoac ca bon nhom: Bang tin, Luu tru, Nhan su va Tai khoan, va du lieu Cong viec/KPI/he thong con lai.
@@ -80,7 +72,7 @@ Khong dien `service_role`, `secret key` hoac chuoi ket noi database vao `supabas
 3. Dang nhap bang tai khoan nhan vien va kiem tra API `state`: chi co ho so, KPI cua minh, KPI phong va cong viec duoc phep xem; khong co toan bo tai khoan, nhan su va lich su he thong.
 4. Doi mat khau tai khoan nhan vien, dang xuat va dang nhap lai bang mat khau moi.
 5. Tai mot tep 6 MB, sau do mo tep tren may thu hai. Tep qua 10 MB phai bi Function tu choi.
-6. Dang nhap Admin tren may A va mot tai khoan khac tren may B. Trong muc `Tai khoan`, phan `Tai khoan truc tuyen` cua Admin phai hien thi tai khoan B trong vong toi da 45 giay. Dong tab B, tai khoan nay se tu an sau khoang 2 phut. Kiem tra bo loc phong va ba danh sach chua dang nhap theo ngay/tuan/thang, cung lich su hoat dong hang thang theo phong.
+6. Dang nhap Admin tren may A va mot tai khoan khac tren may B. Trong muc `Tai khoan`, phan `Tai khoan truc tuyen` cua Admin phai hien thi tai khoan B trong vong toi da 45 giay. Dong tab B, tai khoan nay se tu an sau khoang 2 phut. Kiem tra them hai danh sach chua dang nhap theo tuan/thang va lich su hoat dong hang thang theo phong.
 7. Tren may A, tao hoac cap nhat cong viec co tep dinh kem, cho dong bo hoan tat, sau do mo chi tiet cong viec va tai tep tu may B. Tep dinh kem cong viec phai hien thi va tai duoc tren ca hai may.
 8. Ngat mang may A, cap nhat mot cong viec va giu nguyen tab. Ket noi lai mang; thay doi phai tu dong duoc day len may chu trong thoi gian ngan, khong can tai lai trang. Kiem tra ket qua tren may B.
 9. Dang nhap bang tai khoan khac tren cung trinh duyet sau khi may A da co thay doi dang cho dong bo. He thong phai luu ban sao du phong cua thay doi cu va khong duoc phep day thay doi do bang phien cua tai khoan moi.
@@ -90,19 +82,19 @@ Khong dien `service_role`, `secret key` hoac chuoi ket noi database vao `supabas
 - Chi Admin xem duoc danh sach tai khoan dang hoat dong, so tai khoan dang nhap duy nhat trong ngay va trong thang.
 - Trinh duyet gui nhiep hoat dong moi 45 giay khi tab dang hien thi. Tai khoan khong co nhiep trong 2 phut se duoc xem la offline.
 - Thong ke ngay/thang tinh theo gio Viet Nam va chi tinh cac tai khoan dang nhap thanh cong; danh sach truc tuyen khong bao gio tra ve mat khau.
-- Admin co them danh sach chi tiet tai khoan chua dang nhap theo ngay, tuan, thang va bo loc theo tung phong. Du lieu nay chi tai khi mo hoac lam moi muc `Tai khoan`, khong nam trong chu ky 45 giay.
-- Lich su hoat dong he thong luu va hien thi 12 thang gan nhat: so tai khoan da dang nhap, tong so tai khoan dang hoat dong, luot dang nhap va thong ke tung phong. Truy van duoc tong hop tai Postgres, khong tai toan bo nhat ky dang nhap ve Edge Function. Du lieu dang nhap duoc giu toi da 400 ngay.
-- Migration `20260723000000_kpi_account_presence.sql`, `20260804000000_kpi_login_activity_summary.sql` va Edge Function `kpi-sync` phai duoc deploy cung phien ban giao dien nay. Phien ban `2026.08.04.2` dong bo quyen cap nhat cong viec giua giao dien va may chu, dong thoi ngan viec chuyen media cu cua nguoi chi co quyen xem thanh thay doi bi tu choi.
+- Admin co them danh sach chi tiet tai khoan chua dang nhap trong tuan, trong thang va duoc phan nhom theo phong. Du lieu nay chi tai khi mo hoac lam moi muc `Tai khoan`, khong nam trong chu ky 45 giay.
+- Lich su hoat dong he thong luu va hien thi 12 thang gan nhat: so tai khoan da dang nhap, tong so tai khoan dang hoat dong, luot dang nhap va thong ke tung phong. Du lieu dang nhap duoc giu toi da 400 ngay.
+- Migration `20260723000000_kpi_account_presence.sql` va Edge Function `kpi-sync` phai duoc deploy cung phien ban giao dien nay. Phien ban `2026.07.31.1` bo sung quyen cap rieng theo tai khoan: dang/cap nhat tin bai cua minh va luu/cap nhat ho so cua minh; chi Admin duoc cap hoac thu hoi hai quyen nay.
 
 ## Bao mat va van hanh
 
-- Bucket `kpi-files` va `kpi-releases` la private. Tep cong viec/ho so chi tai qua Edge Function sau khi co phien hop le; tep ma cua goi active chi duoc Edge Function phuc vu theo ID bat bien cua goi da kich hoat.
+- Bucket `kpi-files` la private; client chi tai tep qua Edge Function sau khi co phien hop le.
 - Bang `kpi_shared_state` va `kpi_sync_sessions` bat RLS va khong cap quyen truy cap truc tiep cho `anon` hoac `authenticated`. Chi Edge Function dung service key truy cap duoc.
 - Edge Function dung custom session de tuong thich voi tai khoan hien co. Phan quyen duoc kiem tra lai o Function: admin toan quyen; ban giam doc/truong-pho phong theo pham vi duoc giao; nhan vien chi cap nhat cong viec, KPI va mat khau cua minh trong pham vi cho phep. State tra ve cho nhan vien/truong-pho phong duoc loc theo ca nhan/phong ban; khong coi viec an nut tren giao dien la co che bao mat.
 - Cac thay doi cung mot ban ghi duoc kiem tra theo gia tri goc. Neu mot nguoi da sua truoc, thay doi cu cua may con lai bi tu choi, du lieu hop le khac van tiep tuc dong bo. Trinh duyet luu ban sao JSON du phong khi co thay doi bi tu choi.
 - Tep dinh kem Cong viec duoc luu trong bucket private `kpi-files`, tuong tu media Bang tin va tep Luu tru. Gioi han la 2 MB moi tep va 5 MB cho tong tep dinh kem cua mot cong viec de giu dong bo on dinh tren nhieu thiet bi.
 - Khi mang gian doan, trinh duyet luu thay doi theo tai khoan trong IndexedDB va thu dong bo lai voi do tre tang dan, co ngau nhien nhe de tranh nhieu may dong loat gui lai du lieu. Khong dang nhap bang tai khoan khac tren cung trinh duyet truoc khi thay doi hien tai da dong bo xong.
-- Sau khi cai dat kho phat hanh, thay doi giao dien thuong quy duoc tai len bang Trung tam cap nhat. Chi can deploy lai Edge Function khi thay doi backend, migration Supabase, giao thuc kho phat hanh hoac trinh khoi dong `release-bootstrap.js`.
+- Sau moi lan cap nhat giao dien co lien quan den dong bo hoac tep, deploy lai Edge Function `kpi-sync`, tai lai website de Service Worker nhan phien ban cache moi, sau do thuc hien muc Kiem thu sau khi deploy.
 - `KPI_ALLOWED_ORIGIN` phai la domain that cua he thong. Khong de `*` khi dua vao van hanh chinh thuc. Neu co ca domain www va khong www, khai bao cach nhau bang dau phay.
 - `activityLog` duoc gioi han 5.000 dong gan nhat de tranh phinh to JSON trung tam va Function tu ghi them dau vet dong bo co thoi gian, tai khoan thuc hien.
 - Sao luu dinh ky Postgres va bucket `kpi-files`. Ban sao luu database khong tu dong bao gom tep Storage. [Supabase Database](https://supabase.com/docs/guides/database/overview)
@@ -111,7 +103,6 @@ Khong dien `service_role`, `secret key` hoac chuoi ket noi database vao `supabas
 
 - `401` tu Function: kiem tra da deploy `supabase/config.toml` voi `verify_jwt = false`; Function tu xac thuc bang phien `x-kpi-session`.
 - `CORS`: kiem tra secret `KPI_ALLOWED_ORIGIN` dung chinh xac domain cua website.
-- `500` hoac `Khong the tai thong ke su dung`: chay `supabase db push` de tao ham `kpi_login_activity_summary`, sau do deploy lai `kpi-sync`.
 - `500`: xem Edge Function Logs tren Supabase Dashboard va kiem tra migration da chay thanh cong.
 - `500` kem `PGRST205` hoac thong bao khong tim thay `public.kpi_shared_state`: bang dong bo trung tam chua duoc tao. Mo `SQL Editor` trong Supabase, chay lan luot noi dung hai file migration `supabase/migrations/20260716000000_kpi_cloud.sql` va `supabase/migrations/20260723000000_kpi_account_presence.sql`, sau do deploy lai `kpi-sync`.
 - Du lieu khong dong bo: kiem tra `projectUrl`, `publishableKey`, secret `KPI_ALLOWED_ORIGIN` va Function URL `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`.
@@ -138,7 +129,7 @@ Quy trinh khoi tao hoac phuc hoi du lieu trung tam:
 
 1. Mo phien ban moi, dang nhap Admin tren may dang co JSON moi nhat.
 2. Nhap cac tep JSON can khoi phuc va cho thong bao da dong bo len may chu thanh cong. Neu thong bao dang cho dong bo, giu may mo va ket noi mang on dinh; khong nhap them tep khac trong luc nay.
-3. Kiem tra `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`. Sau khi hoan tat, `initialized` phai la `true`, `revision` lon hon `0`, `deploymentVersion` la `2026.08.04.2`, `releaseUpdates` la `true` va `originRestricted` la `true`.
+3. Kiem tra `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`. Sau khi hoan tat, `initialized` phai la `true`, `revision` lon hon `0`, `deploymentVersion` la `2026.07.31.2` va `originRestricted` la `true`.
 4. Dang nhap tren may thu hai, tai lai trang va kiem tra du lieu van con day du.
 
 Neu ket qua `status` co `initialized: false` hoac `revision: 0`, Postgres trung tam chua co du lieu va tat ca may khac se chi nhan trang thai rong. Ban giao dien nay khong con ghi de am tham du lieu cuc bo trong truong hop do: khi Admin dang nhap tren may dang luu day du du lieu va mat khau tai khoan, he thong se tu khoi tao may chu. Neu may do chi con ban du lieu da loc hoac da an mat khau, dang nhap Admin va Nhap JSON day du de khoi phuc; khong tao du lieu moi truoc khi hoan tat buoc nay.

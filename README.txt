@@ -45,6 +45,5 @@ Chuc nang chinh:
 - Mau in/PDF duoc can le A4 ngang, co dau trang bao cao, bang bieu ro mau, bo cuc gon va han che tran/chong cheo noi dung.
 - Dinh dang thoi gian hien thi thong nhat la ngay/thang/nam; cac ky theo thang duoc hien thi bang ngay dau thang.
 - Ho tro PWA de trien khai online va dung tren nhieu nen tang thiet bi.
-- Trung tam cap nhat danh rieng cho Admin: chon tep ma nguon, tao goi nhap, kiem tra SHA-256, sao luu JSON, dong bo va kich hoat goi ma tu Supabase. Xem RELEASE_UPDATE_GUIDE.md de cai dat nen tang mot lan va cap nhat cac lan sau.
 - Xep loai ca nhan, tong quan phong ban, canh bao qua han, de xuat khen thuong.
 - In bao cao va xuat/nhap du lieu JSON.

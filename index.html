@@ -11,8 +11,6 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="app-icon-phuc-thinh.png" type="image/png">
   <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png">
-  <script src="supabase-config.js"></script>
-  <script src="release-bootstrap.js"></script>
   <link rel="stylesheet" href="styles.css">
   <!-- 🔥 CHẶN ĐỨNG MÀN ĐĂNG NHẬP TRƯỚC KHI TRÌNH DUYỆT BẮT ĐẦU VẼ GIAO DIỆN -->
   <script>
@@ -70,7 +68,7 @@
   </header>
 
   <button id="birthdayDayBanner" class="birthday-day-banner is-hidden" type="button" aria-live="polite" aria-atomic="true" aria-expanded="true" aria-label="Thu gọn lời chúc sinh nhật">
-    <img class="birthday-day-banner-image" data-birthday-asset="bouquet" src="assets/birthday-bouquet.png" alt="" aria-hidden="true">
+    <img class="birthday-day-banner-image" src="assets/birthday-bouquet.png" alt="" aria-hidden="true">
     <div>
       <strong id="birthdayDayBannerName">Chúc mừng sinh nhật</strong>
       <span>Chúc bạn một ngày nhiều niềm vui và thành công.</span>
@@ -893,54 +891,6 @@
             </form>
           </section>
         </section>
-        <section id="systemUpdatePanel" class="block system-update-panel is-hidden">
-          <div class="section-head system-update-head">
-            <div>
-              <p class="eyebrow">Phát hành</p>
-              <h3>Trung tâm cập nhật</h3>
-            </div>
-            <button id="checkSystemUpdate" class="ghost" type="button">Kiểm tra phiên bản</button>
-          </div>
-          <div class="system-update-metrics" aria-label="Trạng thái phiên bản hệ thống">
-            <div>
-              <span>Ứng dụng đang chạy</span>
-              <strong id="systemUpdateCurrentVersion">-</strong>
-              <small id="systemUpdateCurrentBuild">-</small>
-            </div>
-            <div>
-              <span>Gói đang kích hoạt</span>
-              <strong id="systemUpdateAvailableVersion">-</strong>
-              <small id="systemUpdateReleaseDate">-</small>
-            </div>
-            <div>
-              <span>Đồng bộ dữ liệu</span>
-              <strong id="systemUpdateSyncState">-</strong>
-              <small id="systemUpdateSyncDetail">-</small>
-            </div>
-          </div>
-          <p id="systemUpdateStatus" class="section-note system-update-status" aria-live="polite"></p>
-          <ul id="systemUpdateNotes" class="system-update-notes"></ul>
-          <form id="releasePackageForm" class="release-package-form">
-            <label>Phiên bản gói mới
-              <input id="releasePackageVersion" pattern="v?[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?" placeholder="Ví dụ: 2.3.0">
-            </label>
-            <label class="wide">Ghi chú phát hành
-              <textarea id="releasePackageNotes" rows="2" maxlength="1200" placeholder="Nội dung thay đổi của gói mã này"></textarea>
-            </label>
-            <label class="file-button release-package-file-button">Chọn tệp mã
-              <input id="releasePackageFiles" type="file" multiple accept=".html,.css,.js,.json,.webmanifest,.png,.svg">
-            </label>
-            <p id="releasePackageFilesSummary" class="section-note release-package-files">Chưa chọn tệp. Gói đầu tiên cần đủ các tệp hệ thống bắt buộc.</p>
-            <div class="form-actions release-package-form-actions">
-              <button id="createReleasePackage" type="submit">Tải tệp và lưu nháp</button>
-            </div>
-          </form>
-          <div id="releasePackageList" class="release-package-list" aria-live="polite"></div>
-          <div class="form-actions system-update-actions">
-            <button id="backupBeforeSystemUpdate" class="ghost" type="button">Sao lưu trước cập nhật</button>
-            <button id="applySystemUpdate" type="button" disabled>Kích hoạt gói đã chọn</button>
-          </div>
-        </section>
       </section>
 
       <section id="accounts" class="view">
@@ -956,15 +906,7 @@
               <p class="eyebrow">Giám sát sử dụng</p>
               <h3>Tài khoản trực tuyến</h3>
             </div>
-            <div class="account-presence-actions">
-              <label class="account-usage-filter" for="accountUsageDepartmentFilter">
-                <span>Lọc phòng</span>
-                <select id="accountUsageDepartmentFilter">
-                  <option value="">Tất cả phòng</option>
-                </select>
-              </label>
-              <button id="refreshAccountPresence" class="ghost" type="button">Làm mới</button>
-            </div>
+            <button id="refreshAccountPresence" class="ghost" type="button">Làm mới</button>
           </div>
           <p id="accountPresenceStatus" class="section-note"></p>
           <div class="account-presence-metrics" aria-label="Thống kê đăng nhập">
@@ -983,16 +925,6 @@
           </div>
           <div id="accountPresenceList" class="account-presence-list"></div>
           <div class="account-usage-monitor-grid">
-            <section class="account-usage-card" aria-labelledby="accountInactiveDayTitle">
-              <div class="account-usage-card-head">
-                <div>
-                  <p class="eyebrow">Theo ngày</p>
-                  <h4 id="accountInactiveDayTitle">Chưa đăng nhập</h4>
-                </div>
-                <strong id="accountInactiveDayCount">-</strong>
-              </div>
-              <div id="accountInactiveDayList" class="account-usage-list"></div>
-            </section>
             <section class="account-usage-card" aria-labelledby="accountInactiveWeekTitle">
               <div class="account-usage-card-head">
                 <div>
@@ -1144,8 +1076,8 @@
       <h2 id="birthdayCelebrationTitle">Chúc mừng sinh nhật</h2>
       <p id="birthdayCelebrationMessage" class="birthday-celebration-message"></p>
       <div class="birthday-celebration-visual" aria-hidden="true">
-        <img class="birthday-cake-image" data-birthday-asset="cake" src="assets/birthday-cake.png" alt="">
-        <img class="birthday-bouquet-image" data-birthday-asset="bouquet" src="assets/birthday-bouquet.png" alt="">
+        <img class="birthday-cake-image" src="assets/birthday-cake.png" alt="">
+        <img class="birthday-bouquet-image" src="assets/birthday-bouquet.png" alt="">
       </div>
       <button id="dismissBirthdayCelebration" type="button">Tiếp tục làm việc</button>
     </div>
@@ -1565,5 +1497,8 @@
   </section>
 
   <!-- 🌟 CÁC FILE SCRIPT HỆ THỐNG -->
+  <script src="people-data.js"></script>
+  <script src="supabase-config.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>

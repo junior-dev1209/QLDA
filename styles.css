@@ -1814,200 +1814,6 @@ h3 {
   justify-content: flex-end;
 }
 
-.system-update-panel {
-  display: grid;
-  gap: 12px;
-  padding: 13px;
-}
-
-.system-update-head {
-  align-items: center;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-.system-update-head h3 {
-  margin: 0;
-  color: var(--primary-dark);
-}
-
-.system-update-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 9px;
-}
-
-.system-update-metrics > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.system-update-metrics span,
-.system-update-metrics small {
-  color: var(--muted);
-  line-height: 1.35;
-}
-
-.system-update-metrics span {
-  font-size: 0.75rem;
-  font-weight: 750;
-}
-
-.system-update-metrics strong {
-  overflow-wrap: anywhere;
-  color: var(--primary-dark);
-  font-size: 0.96rem;
-  line-height: 1.2;
-}
-
-.system-update-metrics small {
-  font-size: 0.76rem;
-}
-
-.system-update-status {
-  margin: 0;
-  padding: 9px 10px;
-  border-left: 3px solid var(--line-strong);
-  background: var(--surface-2);
-}
-
-.system-update-status.is-good {
-  border-left-color: var(--good);
-}
-
-.system-update-status.is-warning {
-  border-left-color: var(--warning, #b7791f);
-}
-
-.system-update-notes {
-  display: grid;
-  gap: 5px;
-  margin: 0;
-  padding-left: 19px;
-  color: var(--text);
-  font-size: 0.86rem;
-  line-height: 1.45;
-}
-
-.system-update-actions {
-  margin: 0;
-  justify-content: flex-end;
-}
-
-.release-package-form {
-  display: grid;
-  grid-template-columns: minmax(190px, 0.45fr) minmax(0, 1fr) auto;
-  gap: 10px 12px;
-  align-items: end;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.release-package-form > label:not(.file-button) {
-  display: grid;
-  gap: 5px;
-  color: #334155;
-  font-size: 0.84rem;
-  font-weight: 700;
-}
-
-.release-package-form > .wide,
-.release-package-files,
-.release-package-form-actions {
-  grid-column: 1 / -1;
-}
-
-.release-package-form textarea {
-  min-height: 58px;
-  resize: vertical;
-}
-
-.release-package-file-button {
-  align-self: end;
-  min-height: 36px;
-  padding: 7px 11px;
-  white-space: nowrap;
-}
-
-.release-package-files {
-  margin: -2px 0 0;
-  color: var(--muted);
-  font-size: 0.79rem;
-  line-height: 1.45;
-}
-
-.release-package-form-actions {
-  margin: 0;
-  justify-content: flex-end;
-}
-
-.release-package-list {
-  display: grid;
-  gap: 7px;
-}
-
-.release-package-item {
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 11px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
-}
-
-.release-package-item.is-active {
-  border-color: #84c9ae;
-  background: #f2fbf6;
-}
-
-.release-package-item.is-selected {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(23, 107, 135, 0.12);
-}
-
-.release-package-item-main {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto auto;
-  align-items: baseline;
-  gap: 3px 8px;
-}
-
-.release-package-item-main strong {
-  color: var(--primary-dark);
-}
-
-.release-package-item-main span {
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 750;
-}
-
-.release-package-item-main small,
-.release-package-item-main p {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.35;
-}
-
-.release-package-item-actions {
-  display: flex;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
 .view-custom-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -2172,28 +1978,6 @@ body.is-customization-resizing {
   margin-bottom: 4px;
 }
 
-.account-presence-actions {
-  display: flex;
-  align-items: end;
-  justify-content: flex-end;
-  gap: 9px;
-  min-width: 0;
-}
-
-.account-usage-filter {
-  display: grid;
-  gap: 4px;
-  min-width: min(220px, 38vw);
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 650;
-}
-
-.account-usage-filter select {
-  width: 100%;
-  min-width: 0;
-}
-
 .account-presence-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2276,7 +2060,7 @@ body.is-customization-resizing {
 
 .account-usage-monitor-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -2470,25 +2254,6 @@ body.is-customization-resizing {
 }
 
 @media (max-width: 640px) {
-  .account-presence-head,
-  .account-presence-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .account-presence-actions {
-    width: 100%;
-  }
-
-  .account-usage-filter {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .account-presence-actions .ghost {
-    width: 100%;
-  }
-
   .account-presence-metrics {
     grid-template-columns: 1fr;
   }
@@ -2613,9 +2378,7 @@ body.is-customization-resizing {
   .module-access-list,
   .module-role-grid,
   .system-theme-form,
-  .theme-color-fields,
-  .system-update-metrics,
-  .release-package-form {
+  .theme-color-fields {
     grid-template-columns: 1fr;
   }
 
@@ -2625,36 +2388,6 @@ body.is-customization-resizing {
 
   .system-theme-form .form-actions button {
     width: 100%;
-  }
-
-  .system-update-head,
-  .system-update-actions {
-    align-items: stretch;
-  }
-
-  .system-update-head > button,
-  .system-update-actions button {
-    width: 100%;
-  }
-
-  .release-package-form > .wide,
-  .release-package-files,
-  .release-package-form-actions {
-    grid-column: auto;
-  }
-
-  .release-package-form-actions button,
-  .release-package-file-button {
-    width: 100%;
-  }
-
-  .release-package-item {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .release-package-item-actions {
-    justify-content: flex-end;
   }
 }
 

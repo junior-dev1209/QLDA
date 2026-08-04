@@ -22,7 +22,6 @@ const SHARED_SYNC_REFRESH_JITTER_MS = 4000;
 const SHARED_SYNC_RETRY_INITIAL_MS = 2500;
 const SHARED_SYNC_RETRY_MAX_MS = 60000;
 const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
-const ACCOUNT_USAGE_REQUEST_TIMEOUT_MS = 45000;
 const OFFLINE_LOGIN_PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_LOGIN_PBKDF2_ITERATIONS = 120000;
 const OFFLINE_LOGIN_PROOF_MAX_ENTRIES = 500;
@@ -36,29 +35,6 @@ const SHARED_SYNC_SCALAR_FIELDS = [
   "canBoGpmbKpiCatalogVersion",
   "deletedIds",
 ];
-const APP_RELEASE = Object.freeze({
-  version: "2.2.3",
-  build: "2026.08.04",
-  releasedAt: "2026-08-04T00:00:00+07:00",
-  dataSchemaVersion: 1,
-  channel: "stable",
-});
-// Kept for older cached scripts until every installed client has loaded the release manager.
-const RELEASE_MANIFEST_PATH = "release-manifest.json";
-const SYSTEM_UPDATE_BACKUP_FORMAT = "phuc-thinh-system-release-backup";
-const SYSTEM_UPDATE_CHECK_TIMEOUT_MS = 15000;
-const RELEASE_PACKAGE_ALLOWED_PATHS = [
-  "index.html",
-  "styles.css",
-  "people-data.js",
-  "script.js",
-  "manifest.webmanifest",
-  "app-icon-phuc-thinh.png",
-  "icon.svg",
-  "assets/birthday-cake.png",
-  "assets/birthday-bouquet.png",
-];
-const RELEASE_PACKAGE_REQUIRED_PATHS = RELEASE_PACKAGE_ALLOWED_PATHS.filter((path) => path !== "icon.svg");
 function debounce(fn, delay = 200) {
   let timer;
   return function (...args) {
@@ -1128,19 +1104,6 @@ let taskDetailInlineEditor = null;
 let personDetailInlineEditor = null;
 let dashboardRefreshQueued = false;
 let dashboardChartAnimationFrame = 0;
-
-function runWhenDocumentReady(callback) {
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", callback, { once: true });
-    return;
-  }
-  callback();
-}
-
-let activeViewRenderFrame = 0;
-let activeViewRenderToken = 0;
-let accessControlAccountId = "";
-const visibleViewWorkTimers = new Map();
 let binaryStorageOpenPromise = null;
 let durableStorageRequestPromise = null;
 let durableStateWritePromise = Promise.resolve();
@@ -1182,23 +1145,7 @@ const accountPresence = {
   usageInFlight: false,
   usagePayload: null,
   usageError: "",
-  usageDepartmentId: "",
-  usageRetryTimer: 0,
-  usageRetryAttempts: 0,
 };
-const systemUpdate = {
-  checking: false,
-  applying: false,
-  uploading: false,
-  activeRelease: window.PHUC_THINH_ACTIVE_RELEASE || null,
-  releases: [],
-  selectedDraftId: "",
-  selectedFiles: [],
-  error: "",
-  checkedAt: "",
-  reloadOnControllerChange: false,
-};
-let pwaRegistrationPromise = null;
 
 const TASK_STATUS_PREPARING = "Chuẩn bị thực hiện";
 const TASK_STATUS_OLD_PREPARING = "Chưa bắt đầu";
@@ -2353,13 +2300,12 @@ function sharedRequestHeaders(headers = {}, sessionToken = sharedSync.sessionTok
 }
 
 async function sharedJsonRequest(action, options = {}) {
-  const { query = {}, timeoutMs = SHARED_SYNC_REQUEST_TIMEOUT_MS, ...requestOptions } = options;
+  const { query = {}, ...requestOptions } = options;
   requestOptions.credentials = usingSupabaseSync() ? "omit" : "same-origin";
   requestOptions.cache = "no-store";
   requestOptions.headers = sharedRequestHeaders(options.headers || {});
   const controller = options.signal ? null : new AbortController();
-  const normalizedTimeoutMs = Number.isFinite(Number(timeoutMs)) ? Math.max(1000, Number(timeoutMs)) : SHARED_SYNC_REQUEST_TIMEOUT_MS;
-  const timeout = controller ? window.setTimeout(() => controller.abort(), normalizedTimeoutMs) : 0;
+  const timeout = controller ? window.setTimeout(() => controller.abort(), SHARED_SYNC_REQUEST_TIMEOUT_MS) : 0;
   try {
     const response = await fetch(sharedEndpoint(action, query), {
       ...requestOptions,
@@ -2394,71 +2340,6 @@ function accountPresenceRelativeTime(timestamp) {
 function accountUsageDepartmentName(departmentId) {
   if (!departmentId || departmentId === "unassigned") return "Chưa phân phòng";
   return departmentById(departmentId)?.name || "Phòng chưa xác định";
-}
-
-function accountUsageSelectedDepartmentId() {
-  return String(byId("accountUsageDepartmentFilter")?.value || accountPresence.usageDepartmentId || "");
-}
-
-function renderAccountUsageDepartmentFilter() {
-  const select = byId("accountUsageDepartmentFilter");
-  if (!select) return;
-  const options = [
-    { id: "", name: "Tất cả phòng" },
-    ...departments.map((department) => ({ id: department.id, name: department.name })),
-    { id: "unassigned", name: "Chưa phân phòng" },
-  ];
-  const signature = options.map((option) => `${option.id}:${option.name}`).join("|");
-  const selected = accountPresence.usageDepartmentId || select.value || "";
-  if (select.dataset.optionsSignature !== signature) {
-    select.innerHTML = options.map((option) => `<option value="${escapeHtml(option.id)}">${escapeHtml(option.name)}</option>`).join("");
-    select.dataset.optionsSignature = signature;
-  }
-  select.value = options.some((option) => option.id === selected) ? selected : "";
-  accountPresence.usageDepartmentId = select.value;
-}
-
-function accountUsageGroupsForDepartment(groups, departmentId) {
-  const safeGroups = Array.isArray(groups) ? groups : [];
-  return departmentId ? safeGroups.filter((group) => String(group.departmentId || "unassigned") === departmentId) : safeGroups;
-}
-
-function accountUsageDepartmentTotal(departmentId) {
-  return state.accounts.filter((account) => {
-    if (account.disabled) return false;
-    const accountDepartmentId = account.departmentId || personById(account.personId)?.departmentId || "unassigned";
-    return accountDepartmentId === departmentId;
-  }).length;
-}
-
-function accountUsageCounts(period, departmentId) {
-  if (!departmentId) {
-    return {
-      inactiveCount: Number(period?.inactiveCount) || 0,
-      totalAccounts: Number(period?.totalAccounts) || 0,
-    };
-  }
-  const groups = accountUsageGroupsForDepartment(period?.groups, departmentId);
-  return {
-    inactiveCount: groups.reduce((total, group) => total + (Number(group.inactiveCount) || 0), 0),
-    totalAccounts: accountUsageDepartmentTotal(departmentId),
-  };
-}
-
-function accountUsageMonthlyEntryForDepartment(entry, departmentId) {
-  if (!departmentId) return entry;
-  const department = (Array.isArray(entry?.departments) ? entry.departments : []).find(
-    (item) => String(item.departmentId || "unassigned") === departmentId,
-  );
-  const totalAccounts = accountUsageDepartmentTotal(departmentId);
-  return {
-    ...entry,
-    totalAccounts,
-    uniqueAccounts: Number(department?.uniqueAccounts) || 0,
-    inactiveAccounts: Math.max(0, totalAccounts - (Number(department?.uniqueAccounts) || 0)),
-    loginCount: Number(department?.loginCount) || 0,
-    departments: department ? [department] : [],
-  };
 }
 
 function renderAccountInactiveUsageGroups(groups, emptyText) {
@@ -2498,27 +2379,19 @@ function renderAccountInactiveUsageGroups(groups, emptyText) {
 }
 
 function renderAccountUsageDetails() {
-  const dayCount = byId("accountInactiveDayCount");
   const weekCount = byId("accountInactiveWeekCount");
   const monthCount = byId("accountInactiveMonthCount");
-  const dayList = byId("accountInactiveDayList");
   const weekList = byId("accountInactiveWeekList");
   const monthList = byId("accountInactiveMonthList");
   const historyStatus = byId("accountUsageHistoryStatus");
   const historyList = byId("accountUsageMonthlyHistory");
-  if (!dayCount || !weekCount || !monthCount || !dayList || !weekList || !monthList || !historyStatus || !historyList) return;
-
-  renderAccountUsageDepartmentFilter();
-  const departmentId = accountUsageSelectedDepartmentId();
-  const connectionMessage = "Kết nối máy chủ để xem thống kê sử dụng.";
+  if (!weekCount || !monthCount || !weekList || !monthList || !historyStatus || !historyList) return;
 
   if (!accountPresenceAvailable()) {
-    dayCount.textContent = "-";
     weekCount.textContent = "-";
     monthCount.textContent = "-";
-    dayList.innerHTML = `<p class="muted">${connectionMessage}</p>`;
-    weekList.innerHTML = `<p class="muted">${connectionMessage}</p>`;
-    monthList.innerHTML = `<p class="muted">${connectionMessage}</p>`;
+    weekList.innerHTML = '<p class="muted">Kết nối máy chủ để xem thống kê sử dụng.</p>';
+    monthList.innerHTML = '<p class="muted">Kết nối máy chủ để xem thống kê sử dụng.</p>';
     historyStatus.textContent = "Chưa có kết nối";
     historyList.innerHTML = '<p class="muted">Lịch sử hoạt động được tổng hợp từ máy chủ.</p>';
     return;
@@ -2527,10 +2400,8 @@ function renderAccountUsageDetails() {
   const payload = accountPresence.usagePayload;
   if (!payload) {
     const message = accountPresence.usageError || "Đang tải thống kê sử dụng...";
-    dayCount.textContent = "...";
     weekCount.textContent = "...";
     monthCount.textContent = "...";
-    dayList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
     weekList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
     monthList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
     historyStatus.textContent = accountPresence.usageError ? "Không thể tải dữ liệu" : "Đang tải";
@@ -2538,29 +2409,18 @@ function renderAccountUsageDetails() {
     return;
   }
 
-  const inactiveDay = payload.inactiveDay || {};
   const inactiveWeek = payload.inactiveWeek || {};
   const inactiveMonth = payload.inactiveMonth || {};
-  const dayCounts = accountUsageCounts(inactiveDay, departmentId);
-  const weekCounts = accountUsageCounts(inactiveWeek, departmentId);
-  const monthCounts = accountUsageCounts(inactiveMonth, departmentId);
-  const filteredDayGroups = accountUsageGroupsForDepartment(inactiveDay.groups, departmentId);
-  const filteredWeekGroups = accountUsageGroupsForDepartment(inactiveWeek.groups, departmentId);
-  const filteredMonthGroups = accountUsageGroupsForDepartment(inactiveMonth.groups, departmentId);
-  const emptyPrefix = departmentId ? "Phòng đã chọn không có tài khoản chưa đăng nhập trong " : "Tất cả tài khoản đang hoạt động đã đăng nhập trong ";
-  dayCount.textContent = `${dayCounts.inactiveCount}/${dayCounts.totalAccounts}`;
-  weekCount.textContent = `${weekCounts.inactiveCount}/${weekCounts.totalAccounts}`;
-  monthCount.textContent = `${monthCounts.inactiveCount}/${monthCounts.totalAccounts}`;
-  dayList.innerHTML = renderAccountInactiveUsageGroups(filteredDayGroups, `${emptyPrefix}ngày hôm nay.`);
-  weekList.innerHTML = renderAccountInactiveUsageGroups(filteredWeekGroups, `${emptyPrefix}tuần này.`);
-  monthList.innerHTML = renderAccountInactiveUsageGroups(filteredMonthGroups, `${emptyPrefix}tháng này.`);
+  weekCount.textContent = `${Number(inactiveWeek.inactiveCount) || 0}/${Number(inactiveWeek.totalAccounts) || 0}`;
+  monthCount.textContent = `${Number(inactiveMonth.inactiveCount) || 0}/${Number(inactiveMonth.totalAccounts) || 0}`;
+  weekList.innerHTML = renderAccountInactiveUsageGroups(inactiveWeek.groups, "Tất cả tài khoản đang hoạt động đã đăng nhập trong tuần này.");
+  monthList.innerHTML = renderAccountInactiveUsageGroups(inactiveMonth.groups, "Tất cả tài khoản đang hoạt động đã đăng nhập trong tháng này.");
 
   const monthlyHistory = Array.isArray(payload.monthlyHistory) ? payload.monthlyHistory : [];
-  historyStatus.textContent = `Cập nhật: ${formatDateTime(payload.generatedAt)}`;
+  historyStatus.textContent = payload.historyTruncated ? "Chỉ hiển thị dữ liệu trong giới hạn an toàn" : `Cập nhật: ${formatDateTime(payload.generatedAt)}`;
   historyList.innerHTML = monthlyHistory.length
     ? monthlyHistory
-        .map((sourceEntry) => {
-          const entry = accountUsageMonthlyEntryForDepartment(sourceEntry, departmentId);
+        .map((entry) => {
           const departmentSummary = (Array.isArray(entry.departments) ? entry.departments : [])
             .map((department) => `${accountUsageDepartmentName(department.departmentId)}: ${Number(department.uniqueAccounts) || 0}/${Number(department.totalAccounts) || 0}`)
             .join(" · ");
@@ -2668,29 +2528,14 @@ async function requestAccountPresence() {
   }
 }
 
-function scheduleAccountUsageRetry() {
-  if (accountPresence.usageRetryTimer || accountPresence.usageRetryAttempts >= 3 || document.visibilityState === "hidden") return;
-  const delay = Math.min(30000, 3000 * 2 ** accountPresence.usageRetryAttempts);
-  accountPresence.usageRetryAttempts += 1;
-  accountPresence.usageRetryTimer = window.setTimeout(() => {
-    accountPresence.usageRetryTimer = 0;
-    requestAccountUsageHistory();
-  }, delay);
-}
-
 async function requestAccountUsageHistory({ force = false } = {}) {
   if (!isAdmin() || !accountPresenceAvailable() || document.visibilityState === "hidden" || accountPresence.usageInFlight) return;
   if (!force && accountPresence.usagePayload) return;
-  if (force) {
-    if (accountPresence.usageRetryTimer) window.clearTimeout(accountPresence.usageRetryTimer);
-    accountPresence.usageRetryTimer = 0;
-    accountPresence.usageRetryAttempts = 0;
-  }
   accountPresence.usageInFlight = true;
   accountPresence.usageError = "";
   renderAccountUsageDetails();
   try {
-    const { response, payload } = await sharedJsonRequest("usage-history", { timeoutMs: ACCOUNT_USAGE_REQUEST_TIMEOUT_MS });
+    const { response, payload } = await sharedJsonRequest("usage-history");
     if (response.status === 401) {
       expireSharedSession();
       return;
@@ -2699,20 +2544,12 @@ async function requestAccountUsageHistory({ force = false } = {}) {
     if (isAdmin()) {
       accountPresence.usagePayload = payload;
       accountPresence.usageError = "";
-      accountPresence.usageRetryAttempts = 0;
       renderAccountUsageDetails();
     }
-  } catch (error) {
+  } catch {
     if (isAdmin()) {
-      const timeout = error?.name === "AbortError";
-      const requiresMigration = String(error?.message || "").includes("Usage monitoring is unavailable");
-      accountPresence.usageError = requiresMigration
-        ? "Máy chủ chưa hoàn tất nâng cấp thống kê. Cần chạy migration và deploy lại kpi-sync."
-        : timeout
-          ? "Máy chủ phản hồi chậm. Hệ thống sẽ tự thử lại."
-          : "Không thể tải thống kê sử dụng. Hệ thống sẽ tự thử lại.";
+      accountPresence.usageError = "Không thể tải thống kê sử dụng. Hãy thử làm mới lại.";
       renderAccountUsageDetails();
-      if (!requiresMigration) scheduleAccountUsageRetry();
     }
   } finally {
     accountPresence.usageInFlight = false;
@@ -2731,7 +2568,6 @@ function startAccountPresenceMonitoring() {
 
 function stopAccountPresenceMonitoring() {
   if (accountPresence.heartbeatTimer) window.clearInterval(accountPresence.heartbeatTimer);
-  if (accountPresence.usageRetryTimer) window.clearTimeout(accountPresence.usageRetryTimer);
   accountPresence.heartbeatTimer = 0;
   accountPresence.inFlight = false;
   accountPresence.payload = null;
@@ -2739,9 +2575,6 @@ function stopAccountPresenceMonitoring() {
   accountPresence.usageInFlight = false;
   accountPresence.usagePayload = null;
   accountPresence.usageError = "";
-  accountPresence.usageDepartmentId = "";
-  accountPresence.usageRetryTimer = 0;
-  accountPresence.usageRetryAttempts = 0;
 }
 
 async function probeSharedSync({ force = false } = {}) {
@@ -3107,36 +2940,6 @@ function sharedPatchOperationCount(patch) {
   return collectionCount + (patch?.fields?.length || 0);
 }
 
-function sharedDeniedChangeMessage(deniedChanges, snapshot) {
-  const labels = {
-    people: "Nhân sự",
-    tasks: "Công việc",
-    projectCatalog: "Danh mục dự án",
-    bulletins: "Bảng tin",
-    archiveRecords: "Lưu trữ",
-    evaluations: "KPI cá nhân",
-    departmentEvaluations: "KPI phòng",
-    accounts: "Tài khoản",
-    activityLog: "Lịch sử hoạt động",
-    field: "Cấu hình hệ thống",
-  };
-  const changes = Array.isArray(deniedChanges) ? deniedChanges : [];
-  const conflictOnly = changes.length > 0 && changes.every((change) => change.reason === "Record changed by another user." || change.reason === "Field changed by another user.");
-  const targets = [...new Set(changes.map((change) => labels[change.scope] || "Dữ liệu hệ thống"))].slice(0, 3);
-  const targetText = targets.length ? targets.join(", ") : "một số dữ liệu";
-  if (conflictOnly) {
-    return `${targetText} đã được cập nhật từ thiết bị khác trước khi lưu. Hệ thống đã tải lại kết quả mới nhất từ máy chủ.`;
-  }
-  const currentState = snapshot || state;
-  const rejectedIds = changes
-    .filter((change) => change.scope === "tasks")
-    .map((change) => (currentState.tasks || []).find((task) => task.id === change.id)?.title || "")
-    .filter(Boolean)
-    .slice(0, 2);
-  const taskDetail = rejectedIds.length ? ` (${rejectedIds.join(", ")})` : "";
-  return `Máy chủ không chấp nhận thay đổi ở ${targetText}${taskDetail} theo quyền hiện tại. Dữ liệu đã được khôi phục theo phiên bản hợp lệ trên máy chủ.`;
-}
-
 function buildSharedStatePatch(basePayload, nextPayload) {
   const base = normalizeStatePayload(basePayload);
   const next = normalizeStatePayload(nextPayload);
@@ -3266,10 +3069,8 @@ async function flushSharedStateSync() {
     }
     const hasNewerLocalChange = sharedSync.localChangeVersion !== requestedChangeVersion;
     if (Array.isArray(payload?.denied) && payload.denied.length) {
-      const message = sharedDeniedChangeMessage(payload.denied, snapshot);
-      persistSharedConflictBackup(snapshot, { download: false, reason: message });
-      console.warn("Shared state changes were rejected:", payload.denied);
-      alert(message);
+      persistSharedConflictBackup(snapshot);
+      alert("Mot so thay doi khong duoc may chu chap nhan theo phan quyen hien tai. Du lieu da duoc dong bo lai theo ket qua hop le.");
     }
     persistState();
     if (hasNewerLocalChange) {
@@ -3455,7 +3256,7 @@ function dashboardElementsReady() {
 }
 
 function refreshDashboardLiveData() {
-  if (activeViewId() !== "dashboard" || !dashboardElementsReady()) return;
+  if (!dashboardElementsReady()) return;
   renderDashboard();
 }
 
@@ -3471,24 +3272,6 @@ function scheduleDashboardRefresh() {
   } else {
     setTimeout(run, 0);
   }
-}
-
-function scheduleVisibleViewWork(viewId, callback, delay = 80) {
-  const existingTimer = visibleViewWorkTimers.get(viewId);
-  if (existingTimer) window.clearTimeout(existingTimer);
-  const timer = window.setTimeout(() => {
-    visibleViewWorkTimers.delete(viewId);
-    if (activeViewId() !== viewId) return;
-    const run = () => {
-      if (activeViewId() === viewId) callback();
-    };
-    if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(run, { timeout: 500 });
-    } else {
-      window.setTimeout(run, 0);
-    }
-  }, delay);
-  visibleViewWorkTimers.set(viewId, timer);
 }
 
 function reloadStateFromStorage() {
@@ -3740,61 +3523,6 @@ let birthdayCelebrationCloseTimer = 0;
 let birthdayDateRefreshTimer = 0;
 let birthdayCelebrationDisplayKey = "";
 let birthdayBannerCollapsed = false;
-const birthdayAssetFiles = Object.freeze({
-  cake: "birthday-cake.png",
-  bouquet: "birthday-bouquet.png",
-});
-
-function birthdayAssetUrls(assetName) {
-  const fileName = birthdayAssetFiles[assetName];
-  if (!fileName) return [];
-  const bases = [
-    window.PHUC_THINH_RELEASE_SOURCE_BASE,
-    document.querySelector("base")?.href,
-    window.PHUC_THINH_STATIC_APP_BASE,
-    window.location.href,
-  ].filter(Boolean);
-  return [...new Set(bases.map((base) => {
-    try {
-      return new URL(`assets/${fileName}`, base).href;
-    } catch {
-      return "";
-    }
-  }).filter(Boolean))];
-}
-
-function ensureBirthdayAssetSources() {
-  const images = [
-    ...document.querySelectorAll("[data-birthday-asset], .birthday-cake-image, .birthday-bouquet-image, .birthday-day-banner-image"),
-  ];
-  [...new Set(images)].forEach((image) => {
-    const assetName =
-      image.dataset.birthdayAsset || (image.classList.contains("birthday-cake-image") ? "cake" : "bouquet");
-    const urls = birthdayAssetUrls(assetName);
-    if (!urls.length) return;
-    const signature = urls.join("|");
-    const load = (index) => {
-      image.dataset.birthdayAssetIndex = String(index);
-      image.dataset.birthdayAssetFailed = "";
-      image.src = urls[index];
-    };
-    image.onerror = () => {
-      const nextIndex = Number(image.dataset.birthdayAssetIndex || 0) + 1;
-      if (nextIndex < urls.length) {
-        load(nextIndex);
-        return;
-      }
-      image.dataset.birthdayAssetFailed = "1";
-    };
-    image.onload = () => {
-      image.dataset.birthdayAssetFailed = "";
-    };
-    if (image.dataset.birthdayAssetSignature !== signature || image.dataset.birthdayAssetFailed === "1") {
-      image.dataset.birthdayAssetSignature = signature;
-      load(0);
-    }
-  });
-}
 
 function vietnamDateParts(date = new Date()) {
   const values = new Intl.DateTimeFormat("en-CA", {
@@ -3864,7 +3592,6 @@ function renderBirthdayCelebration() {
   const dialog = byId("birthdayCelebration");
   const account = currentAccount();
   const person = birthdayPersonForToday();
-  ensureBirthdayAssetSources();
   if (!banner || !dialog || !account || !person) {
     banner?.classList.add("is-hidden");
     closeBirthdayCelebration();
@@ -5694,7 +5421,7 @@ function compareTaskRecords(a, b) {
   return (a.title || "").localeCompare(b.title || "", "vi");
 }
 
-function renderTaskBoard(options = {}) {
+function renderTaskBoard() {
   renderTaskProjectFilterOptions();
   const search = byId("taskSearch").value.trim().toLowerCase();
   const filter = byId("taskStatusFilter").value;
@@ -5779,8 +5506,8 @@ function renderTaskBoard(options = {}) {
   };
 
   byId("taskBoard").innerHTML = `<div class="task-columns">${renderTaskColumns()}</div>`;
-  scheduleVisibleViewWork("tasks", () => hydrateTaskAttachmentLinks(byId("taskBoard")));
-  if (options.applyCustomization !== false) applyFieldCustomizations();
+  hydrateTaskAttachmentLinks(byId("taskBoard"));
+  applyFieldCustomizations();
 }
 
 function renderTaskStatusDetailItem(task) {
@@ -7930,7 +7657,7 @@ function renderBulletinMasonry(cardHtmls) {
   return cardHtmls.join("");
 }
 
-function renderBulletinBoard(options = {}) {
+function renderBulletinBoard() {
   const posts = visibleBulletins();
   const search = normalizeSearchText(byId("bulletinSearch").value.trim());
   const category = byId("bulletinCategoryFilter").value;
@@ -7987,8 +7714,10 @@ function renderBulletinBoard(options = {}) {
           `;
         });
   byId("bulletinList").innerHTML = filtered.length ? renderBulletinMasonry(bulletinCardHtmls) : "Chưa có tin bài phù hợp.";
-  scheduleVisibleViewWork("bulletin", () => hydrateBulletinMediaElements(byId("bulletinList")), 100);
-  if (options.applyCustomization !== false) applyFieldCustomizations();
+  setTimeout(() => {
+    hydrateBulletinMediaElements(byId("bulletinList"));
+  }, 100);
+  applyFieldCustomizations();
 }
 
 function updateBulletinVoteSettingsVisibility() {
@@ -8040,7 +7769,6 @@ async function migrateBulletinMediaToIndexedDb({ persist = true, render = true }
   let changed = false;
   const pendingFiles = [];
   for (const post of state.bulletins || []) {
-    if (!canEditBulletin(post)) continue;
     if (!Array.isArray(post.media)) continue;
     for (const file of post.media) {
       if (!file?.dataUrl) continue;
@@ -8329,7 +8057,7 @@ function renderArchiveCard(record, index) {
   `;
 }
 
-function renderArchive(options = {}) {
+function renderArchive() {
   if (!byId("archiveList")) return;
   byId("archiveAdminPanel").classList.toggle("is-hidden", !canSaveArchive());
   const allRecords = visibleArchiveRecords()
@@ -8348,9 +8076,11 @@ function renderArchive(options = {}) {
   byId("archiveList").innerHTML = filtered.length
     ? filtered.map(renderArchiveCard).join("")
     : '<div class="archive-empty-help">Chưa có hồ sơ phù hợp với điều kiện tìm kiếm.</div>';
-  // Nạp tệp sau khi màn hình đã rảnh; bỏ lượt nạp khi người dùng đã chuyển mục.
-  scheduleVisibleViewWork("archive", () => hydrateArchiveFileLinks(byId("archiveList")), 100);
-  if (options.applyCustomization !== false) applyFieldCustomizations();
+  // 🌟 TỐI ƯU: Đưa việc nạp tệp ra luồng phụ để giao diện Tab hiển thị ngay lập tức
+  setTimeout(() => {
+    hydrateArchiveFileLinks(byId("archiveList"));
+  }, 100);
+  applyFieldCustomizations();
 }
 
 function storedFileBlob(file, dataUrl) {
@@ -8581,7 +8311,6 @@ async function migrateArchiveFilesToIndexedDb({ persist = true, render = true } 
   let changed = false;
   const pendingFiles = [];
   for (const record of state.archiveRecords || []) {
-    if (!canEditArchive(record)) continue;
     if (!Array.isArray(record.files)) continue;
     for (const file of record.files) {
       if (!file?.dataUrl) continue;
@@ -8617,7 +8346,6 @@ async function migrateTaskAttachmentsToIndexedDb({ persist = true } = {}) {
   let changed = false;
   const pendingFiles = [];
   for (const task of state.tasks || []) {
-    if (!canEditTaskDetails(task) && !canUpdateTaskProgress(task)) continue;
     if (!Array.isArray(task.attachments)) continue;
     for (const file of task.attachments) {
       if (!file?.dataUrl) continue;
@@ -8648,7 +8376,6 @@ function renderModuleAccessControls() {
   if (!isAdmin()) {
     list.innerHTML = "";
     byId("systemThemePanel")?.classList.add("is-hidden");
-    byId("systemUpdatePanel")?.classList.add("is-hidden");
     return;
   }
 
@@ -8690,7 +8417,6 @@ function renderModuleAccessControls() {
     })
     .join("");
   renderSystemThemeControls();
-  renderSystemUpdateControls();
 }
 
 function systemThemePreviewHtml(theme) {
@@ -8730,564 +8456,6 @@ function renderSystemThemeControls() {
   byId("systemThemeBackground").value = theme.background;
   byId("systemThemePreview").innerHTML = systemThemePreviewHtml(theme);
   updateSystemThemeFormState();
-}
-
-function releaseVersionParts(value) {
-  const match = String(value || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
-  return match ? match.slice(1, 4).map((part) => Number(part)) : null;
-}
-
-function compareReleaseVersions(left, right) {
-  const leftParts = releaseVersionParts(left);
-  const rightParts = releaseVersionParts(right);
-  if (!leftParts || !rightParts) return 0;
-  for (let index = 0; index < leftParts.length; index += 1) {
-    if (leftParts[index] !== rightParts[index]) return leftParts[index] > rightParts[index] ? 1 : -1;
-  }
-  return 0;
-}
-
-function normalizeReleaseManifest(payload) {
-  const latest = payload && typeof payload === "object" ? payload.latest : null;
-  const version = String(latest?.version || "").trim();
-  if (!releaseVersionParts(version)) throw new Error("Tệp thông tin phiên bản không hợp lệ.");
-  const releasedAt = String(latest?.releasedAt || "").trim();
-  const releasedTime = releasedAt ? new Date(releasedAt).getTime() : NaN;
-  if (!Number.isFinite(releasedTime)) throw new Error("Tệp thông tin phiên bản thiếu ngày phát hành hợp lệ.");
-  return {
-    manifestVersion: Number(payload.manifestVersion) || 1,
-    channel: String(payload.channel || "stable").trim() || "stable",
-    latest: {
-      version,
-      build: String(latest?.build || "").trim(),
-      releasedAt,
-      dataSchemaVersion: Math.max(1, Number(latest?.dataSchemaVersion) || 1),
-      requiresBackup: latest?.requiresBackup !== false,
-      summary: Array.isArray(latest?.summary)
-        ? latest.summary.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
-        : [],
-    },
-  };
-}
-
-function releaseDateLabel(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString("vi-VN");
-}
-
-function releaseUpdateAvailable() {
-  return Boolean(systemUpdate.manifest && compareReleaseVersions(systemUpdate.manifest.latest.version, APP_RELEASE.version) > 0);
-}
-
-function systemUpdateSyncInfo() {
-  if (window.location.protocol === "file:") {
-    return { tone: "warning", title: "Đang chạy tệp cục bộ", details: "Hãy dùng bản đã triển khai HTTPS để áp dụng cập nhật trực tiếp." };
-  }
-  if (!usingSupabaseSync()) {
-    return { tone: "warning", title: "Chưa cấu hình đồng bộ", details: "Cần cấu hình Supabase trước khi áp dụng cập nhật an toàn." };
-  }
-  if (!sharedSync.session || !sharedSync.sessionToken) {
-    return { tone: "warning", title: "Chưa có phiên đồng bộ", details: "Hãy đăng nhập trực tuyến lại trước khi cập nhật." };
-  }
-  if (sharedSync.inFlight) {
-    return { tone: "warning", title: "Đang đồng bộ", details: "Chờ hoàn tất đồng bộ dữ liệu rồi thử lại." };
-  }
-  if (sharedSync.dirty || sharedSync.pending) {
-    return { tone: "warning", title: "Có thay đổi chưa gửi", details: "Hệ thống sẽ gửi hết thay đổi lên máy chủ trước khi cập nhật." };
-  }
-  if (sharedSync.available !== true) {
-    return { tone: "warning", title: "Chưa xác minh máy chủ", details: "Kiểm tra kết nối Supabase trước khi áp dụng phiên bản mới." };
-  }
-  return { tone: "good", title: "Sẵn sàng cập nhật", details: "Dữ liệu hiện tại đã đồng bộ và có thể sao lưu an toàn." };
-}
-
-function renderSystemUpdateControls() {
-  const panel = byId("systemUpdatePanel");
-  if (!panel) return;
-  panel.classList.toggle("is-hidden", !isAdmin());
-  if (!isAdmin()) return;
-
-  const release = systemUpdate.manifest?.latest;
-  const syncInfo = systemUpdateSyncInfo();
-  byId("systemUpdateCurrentVersion").textContent = `v${APP_RELEASE.version}`;
-  byId("systemUpdateCurrentBuild").textContent = `Build ${APP_RELEASE.build}`;
-  byId("systemUpdateAvailableVersion").textContent = release ? `v${release.version}` : "Chưa kiểm tra";
-  byId("systemUpdateReleaseDate").textContent = release ? `Phát hành ${releaseDateLabel(release.releasedAt)}` : "Chọn kiểm tra để tải thông tin phát hành";
-  byId("systemUpdateSyncState").textContent = syncInfo.title;
-  byId("systemUpdateSyncDetail").textContent = syncInfo.details;
-
-  const status = byId("systemUpdateStatus");
-  const message = systemUpdate.applying
-    ? "Đang sao lưu, đồng bộ lần cuối và làm mới ứng dụng. Không đóng trang này."
-    : systemUpdate.checking
-      ? "Đang kiểm tra thông tin phát hành..."
-      : systemUpdate.error
-        ? systemUpdate.error
-        : release
-          ? releaseUpdateAvailable()
-            ? `Đã sẵn sàng phiên bản v${release.version}. Việc áp dụng sẽ tạo bản sao lưu trước khi làm mới ứng dụng.`
-            : "Thiết bị đang sử dụng phiên bản mới nhất đã phát hành."
-          : "Chưa kiểm tra thông tin phát hành.";
-  status.textContent = message;
-  status.className = `section-note system-update-status is-${systemUpdate.error ? "warning" : syncInfo.tone}`;
-
-  const notes = release?.summary || [];
-  byId("systemUpdateNotes").innerHTML = notes.length
-    ? notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")
-    : "";
-  const canApply = releaseUpdateAvailable() && !systemUpdate.checking && !systemUpdate.applying;
-  byId("applySystemUpdate").disabled = !canApply;
-  byId("checkSystemUpdate").disabled = systemUpdate.checking || systemUpdate.applying;
-  byId("backupBeforeSystemUpdate").disabled = systemUpdate.applying;
-}
-
-async function checkSystemUpdate() {
-  if (!isAdmin() || systemUpdate.checking || systemUpdate.applying) return;
-  systemUpdate.checking = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), SYSTEM_UPDATE_CHECK_TIMEOUT_MS);
-  try {
-    if (window.location.protocol === "file:") throw new Error("Bản mở trực tiếp từ tệp không thể kiểm tra phiên bản trực tuyến.");
-    const manifestUrl = new URL(RELEASE_MANIFEST_PATH, window.location.href);
-    if (manifestUrl.origin !== window.location.origin) throw new Error("Nguồn thông tin phiên bản không hợp lệ.");
-    const response = await fetch(manifestUrl.href, {
-      cache: "no-store",
-      headers: { "Cache-Control": "no-cache" },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error("Không tải được thông tin phiên bản từ máy chủ.");
-    systemUpdate.manifest = normalizeReleaseManifest(await response.json());
-    systemUpdate.checkedAt = new Date().toISOString();
-  } catch (error) {
-    systemUpdate.error = error?.name === "AbortError"
-      ? "Kiểm tra phiên bản quá thời gian chờ. Hãy kiểm tra kết nối và thử lại."
-      : error?.message || "Không thể kiểm tra phiên bản mới.";
-  } finally {
-    window.clearTimeout(timeout);
-    systemUpdate.checking = false;
-    renderSystemUpdateControls();
-  }
-}
-
-async function createSystemUpdateBackup() {
-  return {
-    format: SYSTEM_UPDATE_BACKUP_FORMAT,
-    version: 1,
-    createdAt: new Date().toISOString(),
-    application: { ...APP_RELEASE },
-    actor: currentActorInfo(),
-    state: await stateForExport(),
-  };
-}
-
-function systemUpdateBackupFilename() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `sao-luu-truoc-cap-nhat-v${APP_RELEASE.version}-${stamp}.json`;
-}
-
-async function downloadSystemUpdateBackup() {
-  if (!isAdmin() || systemUpdate.applying) return false;
-  const backup = await createSystemUpdateBackup();
-  downloadJsonFile(systemUpdateBackupFilename(), backup);
-  systemUpdate.error = "";
-  byId("systemUpdateStatus").textContent = "Đã tạo bản sao lưu toàn hệ thống trên thiết bị này.";
-  return true;
-}
-
-async function ensureSystemUpdateReady() {
-  if (!isAdmin()) throw new Error("Chỉ Admin được phép áp dụng phiên bản mới.");
-  if (!releaseUpdateAvailable()) throw new Error("Chưa có phiên bản mới sẵn sàng để áp dụng.");
-  if (!sharedSyncSupported() || !usingSupabaseSync()) throw new Error("Cập nhật trực tuyến yêu cầu cấu hình Supabase hợp lệ.");
-  if (!sharedSync.session || !sharedSync.sessionToken) throw new Error("Phiên đồng bộ đã hết hạn. Hãy đăng nhập lại rồi thử cập nhật.");
-  if (!(await probeSharedSync({ force: true }))) throw new Error("Không thể xác minh máy chủ đồng bộ. Dữ liệu chưa đủ điều kiện để cập nhật an toàn.");
-  if (sharedSync.inFlight) throw new Error("Đồng bộ đang chạy. Hãy chờ hoàn tất rồi thử lại.");
-  if (sharedSync.dirty || sharedSync.pending) {
-    sharedSync.pending = true;
-    const result = await flushSharedStateSync();
-    if (!result.ok || sharedSync.dirty || sharedSync.pending || sharedSync.inFlight) {
-      throw new Error("Không thể đồng bộ hết thay đổi trước khi cập nhật. Hệ thống chưa làm mới để tránh mất dữ liệu.");
-    }
-  }
-}
-
-function registerPwaForUpdates() {
-  if (!("serviceWorker" in navigator) || window.location.protocol === "file:") return Promise.resolve(null);
-  if (!pwaRegistrationPromise) {
-    pwaRegistrationPromise = navigator.serviceWorker
-      .register("service-worker.js", { updateViaCache: "none" })
-      .catch((error) => {
-        console.warn("PWA registration failed:", error);
-        return null;
-      });
-  }
-  return pwaRegistrationPromise;
-}
-
-function waitForReleaseServiceWorker(registration) {
-  if (registration.waiting) return Promise.resolve(registration.waiting);
-  const installing = registration.installing;
-  if (!installing) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => resolve(registration.waiting || null), 5000);
-    installing.addEventListener("statechange", () => {
-      if (installing.state !== "installed") return;
-      window.clearTimeout(timeout);
-      resolve(registration.waiting || null);
-    });
-  });
-}
-
-async function applySystemUpdate() {
-  if (!isAdmin() || systemUpdate.applying) return;
-  systemUpdate.applying = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    await ensureSystemUpdateReady();
-    const backup = await createSystemUpdateBackup();
-    downloadJsonFile(systemUpdateBackupFilename(), backup);
-
-    logActivity({
-      action: "Cập nhật",
-      module: "Cấu hình hệ thống",
-      targetType: "applicationRelease",
-      targetId: systemUpdate.manifest.latest.version,
-      title: "Áp dụng phiên bản hệ thống",
-      details: `Từ v${APP_RELEASE.version} lên v${systemUpdate.manifest.latest.version}; đã tạo bản sao lưu trước cập nhật.`,
-    });
-    saveState();
-    const finalSync = await flushSharedStateSync();
-    if (!finalSync.ok || sharedSync.dirty || sharedSync.pending || sharedSync.inFlight) {
-      throw new Error("Không thể lưu nhật ký cập nhật lên máy chủ. Hệ thống chưa làm mới để tránh mất dữ liệu.");
-    }
-
-    const registration = await registerPwaForUpdates();
-    if (!registration) throw new Error("Không thể khởi tạo cơ chế cập nhật PWA trên thiết bị này.");
-    systemUpdate.reloadOnControllerChange = true;
-    await registration.update();
-    const waitingWorker = await waitForReleaseServiceWorker(registration);
-    if (!waitingWorker) {
-      throw new Error("Máy chủ chưa cung cấp Service Worker mới. Trang chưa được làm mới để tránh áp dụng phiên bản không đầy đủ.");
-    }
-    waitingWorker.postMessage({ type: "SKIP_WAITING" });
-    window.setTimeout(() => window.location.reload(), 1200);
-  } catch (error) {
-    systemUpdate.reloadOnControllerChange = false;
-    systemUpdate.error = error?.message || "Không thể áp dụng phiên bản mới.";
-    systemUpdate.applying = false;
-    renderSystemUpdateControls();
-  }
-}
-
-function releasePackagePathForFile(file) {
-  const relativePath = String(file?.webkitRelativePath || "").replace(/\\/g, "/").replace(/^.*?(assets\/)/, "$1");
-  if (RELEASE_PACKAGE_ALLOWED_PATHS.includes(relativePath)) return relativePath;
-  const name = String(file?.name || "").trim();
-  const matches = RELEASE_PACKAGE_ALLOWED_PATHS.filter((path) => path.split("/").pop() === name);
-  return matches.length === 1 ? matches[0] : "";
-}
-
-function formatReleaseFileSize(value) {
-  const bytes = Math.max(0, Number(value) || 0);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function activeSystemRelease() {
-  const release = systemUpdate.activeRelease || window.PHUC_THINH_ACTIVE_RELEASE;
-  return release && typeof release === "object" ? release : null;
-}
-
-function selectedSystemRelease() {
-  return systemUpdate.releases.find((release) => release.id === systemUpdate.selectedDraftId) || null;
-}
-
-function releaseNotes(release) {
-  return String(release?.notes || "").trim();
-}
-
-function updateReleaseFileSelection(files) {
-  const mapped = [];
-  const seenPaths = new Set();
-  const invalid = [];
-  Array.from(files || []).forEach((file) => {
-    const path = releasePackagePathForFile(file);
-    if (!path || seenPaths.has(path)) {
-      invalid.push(file.name || "tệp không xác định");
-      return;
-    }
-    seenPaths.add(path);
-    mapped.push({ file, path });
-  });
-  systemUpdate.selectedFiles = mapped;
-  const summary = byId("releasePackageFilesSummary");
-  if (!summary) return;
-  const missing = RELEASE_PACKAGE_REQUIRED_PATHS.filter((path) => !mapped.some((item) => item.path === path));
-  const parts = mapped.length
-    ? mapped.map((item) => `${item.path} (${formatReleaseFileSize(item.file.size)})`)
-    : ["Chưa chọn tệp."];
-  if (missing.length && !activeSystemRelease()) parts.push(`Gói đầu tiên còn thiếu: ${missing.join(", ")}.`);
-  if (invalid.length) parts.push(`Không nhận: ${invalid.join(", ")}.`);
-  summary.textContent = parts.join(" · ");
-}
-
-async function releaseApiRequest(action, options = {}) {
-  const { response, payload } = await sharedJsonRequest(action, options);
-  if (!response.ok) throw new Error(String(payload?.error || "Không thể xử lý gói cập nhật trên máy chủ."));
-  return payload;
-}
-
-function releaseStatusLabel(status) {
-  const labels = { active: "Đang kích hoạt", draft: "Bản nháp", archived: "Đã lưu trữ" };
-  return labels[status] || status || "Không xác định";
-}
-
-function releasePackageListHtml() {
-  if (!systemUpdate.releases.length) return '<p class="section-note">Chưa có gói phát hành trên máy chủ. Hãy tạo gói đầu tiên bằng đủ các tệp hệ thống bắt buộc.</p>';
-  return systemUpdate.releases.map((release) => {
-    const selected = release.id === systemUpdate.selectedDraftId;
-    const files = Array.isArray(release.files) ? release.files : [];
-    const requiredFileCount = files.filter((file) => RELEASE_PACKAGE_REQUIRED_PATHS.includes(file.path)).length;
-    const canSelect = release.status !== "active" && (release.complete === true || release.status === "draft");
-    return `
-      <article class="release-package-item${selected ? " is-selected" : ""}${release.status === "active" ? " is-active" : ""}">
-        <div class="release-package-item-main">
-          <strong>v${escapeHtml(release.version || "-")}</strong>
-          <span>${escapeHtml(releaseStatusLabel(release.status))}</span>
-          <small>${escapeHtml(releaseDateLabel(release.publishedAt || release.createdAt))} · ${requiredFileCount}/${RELEASE_PACKAGE_REQUIRED_PATHS.length} tệp bắt buộc${release.complete ? "" : " · Chưa đủ tệp"}</small>
-          ${releaseNotes(release) ? `<p>${escapeHtml(releaseNotes(release))}</p>` : ""}
-        </div>
-        <div class="release-package-item-actions">
-          ${canSelect ? `<button class="ghost" type="button" data-select-release="${escapeHtml(release.id)}">${selected ? "Đã chọn" : release.status === "draft" ? "Sửa nháp" : "Chọn"}</button>` : ""}
-          ${release.status === "draft" ? `<button class="icon-button danger-action" type="button" data-delete-release="${escapeHtml(release.id)}" title="Xóa bản nháp" aria-label="Xóa bản nháp">×</button>` : ""}
-        </div>
-      </article>`;
-  }).join("");
-}
-
-function renderSystemUpdateControls() {
-  const panel = byId("systemUpdatePanel");
-  if (!panel) return;
-  panel.classList.toggle("is-hidden", !isAdmin());
-  if (!isAdmin()) return;
-
-  const active = activeSystemRelease();
-  const selected = selectedSystemRelease();
-  const syncInfo = systemUpdateSyncInfo();
-  byId("systemUpdateCurrentVersion").textContent = active ? `v${active.version}` : `v${APP_RELEASE.version}`;
-  byId("systemUpdateCurrentBuild").textContent = active ? "Gói mã từ kho phát hành" : `Bản gốc ${APP_RELEASE.build}`;
-  byId("systemUpdateAvailableVersion").textContent = active ? `v${active.version}` : "Chưa kích hoạt";
-  byId("systemUpdateReleaseDate").textContent = active ? `Kích hoạt ${releaseDateLabel(active.publishedAt || active.createdAt)}` : "Gói đầu tiên sẽ được kích hoạt từ giao diện này";
-  byId("systemUpdateSyncState").textContent = syncInfo.title;
-  byId("systemUpdateSyncDetail").textContent = syncInfo.details;
-
-  const status = byId("systemUpdateStatus");
-  const message = systemUpdate.uploading
-    ? "Đang kiểm tra và tải tệp mã lên kho phát hành. Không đóng trang này."
-    : systemUpdate.applying
-      ? "Đang sao lưu, đồng bộ lần cuối và kích hoạt gói đã chọn. Không đóng trang này."
-      : systemUpdate.checking
-        ? "Đang tải danh sách gói phát hành..."
-        : systemUpdate.error
-          ? systemUpdate.error
-          : selected
-            ? `Đã chọn gói v${selected.version}. Kích hoạt chỉ thực hiện sau khi sao lưu và đồng bộ thành công.`
-            : active
-              ? "Có thể tạo gói nháp mới hoặc chọn một gói đã lưu trữ để quay lại phiên bản trước."
-              : "Chưa có gói nào được kích hoạt. Gói đầu tiên cần tải đủ tệp hệ thống bắt buộc.";
-  status.textContent = message;
-  status.className = `section-note system-update-status is-${systemUpdate.error ? "warning" : syncInfo.tone}`;
-  byId("systemUpdateNotes").innerHTML = releaseNotes(active) ? `<li>${escapeHtml(releaseNotes(active))}</li>` : "";
-  byId("releasePackageList").innerHTML = releasePackageListHtml();
-
-  const busy = systemUpdate.checking || systemUpdate.uploading || systemUpdate.applying;
-  byId("applySystemUpdate").disabled = !selected || selected.complete !== true || busy;
-  byId("checkSystemUpdate").disabled = busy;
-  byId("backupBeforeSystemUpdate").disabled = busy;
-  byId("createReleasePackage").disabled = busy;
-  byId("createReleasePackage").textContent = selected?.status === "draft" ? "Bổ sung tệp vào bản nháp" : "Tải tệp và lưu nháp";
-}
-
-async function checkSystemUpdate() {
-  if (!isAdmin() || systemUpdate.checking || systemUpdate.uploading || systemUpdate.applying) return;
-  systemUpdate.checking = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    if (window.location.protocol === "file:") throw new Error("Bản mở trực tiếp từ tệp không thể quản lý gói cập nhật trực tuyến.");
-    const [current, list] = await Promise.all([
-      releaseApiRequest("release-current"),
-      releaseApiRequest("release-list"),
-    ]);
-    systemUpdate.activeRelease = current?.release || null;
-    systemUpdate.releases = Array.isArray(list?.releases) ? list.releases : [];
-    if (systemUpdate.selectedDraftId && !systemUpdate.releases.some((release) => release.id === systemUpdate.selectedDraftId)) {
-      systemUpdate.selectedDraftId = "";
-    }
-    systemUpdate.checkedAt = new Date().toISOString();
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể tải danh sách gói cập nhật.";
-  } finally {
-    systemUpdate.checking = false;
-    renderSystemUpdateControls();
-  }
-}
-
-async function createSystemUpdateBackup() {
-  return {
-    format: SYSTEM_UPDATE_BACKUP_FORMAT,
-    version: 1,
-    createdAt: new Date().toISOString(),
-    application: { ...APP_RELEASE },
-    activeRelease: activeSystemRelease(),
-    actor: currentActorInfo(),
-    state: await stateForExport(),
-  };
-}
-
-function systemUpdateBackupFilename() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `sao-luu-truoc-cap-nhat-v${activeSystemRelease()?.version || APP_RELEASE.version}-${stamp}.json`;
-}
-
-async function downloadSystemUpdateBackup() {
-  if (!isAdmin() || systemUpdate.applying || systemUpdate.uploading) return false;
-  const backup = await createSystemUpdateBackup();
-  downloadJsonFile(systemUpdateBackupFilename(), backup);
-  systemUpdate.error = "";
-  byId("systemUpdateStatus").textContent = "Đã tạo bản sao lưu toàn hệ thống trên thiết bị này.";
-  return true;
-}
-
-async function ensureSystemUpdateReady() {
-  if (!isAdmin()) throw new Error("Chỉ Admin được phép quản lý gói cập nhật.");
-  if (!sharedSyncSupported() || !usingSupabaseSync()) throw new Error("Cập nhật trực tuyến yêu cầu cấu hình Supabase hợp lệ.");
-  if (!sharedSync.session || !sharedSync.sessionToken) throw new Error("Phiên đồng bộ đã hết hạn. Hãy đăng nhập lại rồi thử cập nhật.");
-  if (!(await probeSharedSync({ force: true }))) throw new Error("Không thể xác minh máy chủ đồng bộ. Dữ liệu chưa đủ điều kiện để cập nhật an toàn.");
-  if (sharedSync.inFlight) throw new Error("Đồng bộ đang chạy. Hãy chờ hoàn tất rồi thử lại.");
-  if (sharedSync.dirty || sharedSync.pending) {
-    sharedSync.pending = true;
-    const result = await flushSharedStateSync();
-    if (!result.ok || sharedSync.dirty || sharedSync.pending || sharedSync.inFlight) {
-      throw new Error("Không thể đồng bộ hết thay đổi trước khi cập nhật. Hệ thống chưa làm mới để tránh mất dữ liệu.");
-    }
-  }
-}
-
-async function createReleasePackage(event) {
-  event.preventDefault();
-  if (!isAdmin() || systemUpdate.uploading || systemUpdate.applying) return;
-  const selectedDraft = selectedSystemRelease()?.status === "draft" ? selectedSystemRelease() : null;
-  const version = byId("releasePackageVersion").value.trim();
-  const notes = byId("releasePackageNotes").value.trim();
-  if (!selectedDraft && !releaseVersionParts(version)) {
-    systemUpdate.error = "Phiên bản phải theo dạng 2.3.0 hoặc v2.3.0.";
-    renderSystemUpdateControls();
-    return;
-  }
-  if (!systemUpdate.selectedFiles.length) {
-    systemUpdate.error = "Hãy chọn ít nhất một tệp mã hợp lệ cho gói phát hành.";
-    renderSystemUpdateControls();
-    return;
-  }
-  systemUpdate.uploading = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    await ensureSystemUpdateReady();
-    const created = selectedDraft
-      ? { release: selectedDraft }
-      : await releaseApiRequest("release-create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version, notes }),
-      });
-    let release = created.release;
-    for (const item of systemUpdate.selectedFiles) {
-      const form = new FormData();
-      form.append("releaseId", release.id);
-      form.append("path", item.path);
-      form.append("file", item.file, item.file.name);
-      const uploaded = await releaseApiRequest("release-file", { method: "POST", body: form });
-      release = uploaded.release;
-    }
-    systemUpdate.selectedDraftId = release.id;
-    systemUpdate.selectedFiles = [];
-    byId("releasePackageFiles").value = "";
-    byId("releasePackageNotes").value = "";
-    byId("releasePackageVersion").value = "";
-    updateReleaseFileSelection([]);
-    logActivity({
-      action: "Tạo mới",
-      module: "Cấu hình hệ thống",
-      targetType: "applicationReleaseDraft",
-      targetId: release.id,
-      title: `${selectedDraft ? "Bổ sung" : "Tạo"} gói cập nhật v${release.version}`,
-      details: `Bản nháp hiện có ${release.files?.length || 0} tệp mã.`,
-    });
-    saveState();
-    await flushSharedStateSync();
-    systemUpdate.uploading = false;
-    await checkSystemUpdate();
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể tạo gói cập nhật.";
-  } finally {
-    systemUpdate.uploading = false;
-    renderSystemUpdateControls();
-  }
-}
-
-function registerPwaForUpdates() {
-  if (!("serviceWorker" in navigator) || window.location.protocol === "file:") return Promise.resolve(null);
-  if (!pwaRegistrationPromise) {
-    const staticBase = window.PHUC_THINH_STATIC_APP_BASE || new URL(".", window.location.href).href;
-    pwaRegistrationPromise = navigator.serviceWorker
-      .register(new URL("service-worker.js", staticBase).href, { updateViaCache: "none" })
-      .catch((error) => {
-        console.warn("PWA registration failed:", error);
-        return null;
-      });
-  }
-  return pwaRegistrationPromise;
-}
-
-async function applySystemUpdate() {
-  const selected = selectedSystemRelease();
-  if (!isAdmin() || !selected || selected.complete !== true || systemUpdate.applying) return;
-  systemUpdate.applying = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    await ensureSystemUpdateReady();
-    const backup = await createSystemUpdateBackup();
-    downloadJsonFile(systemUpdateBackupFilename(), backup);
-    logActivity({
-      action: "Cập nhật",
-      module: "Cấu hình hệ thống",
-      targetType: "applicationRelease",
-      targetId: selected.id,
-      title: `Kích hoạt gói v${selected.version}`,
-      details: "Đã sao lưu và đồng bộ dữ liệu trước khi chuyển gói mã.",
-    });
-    saveState();
-    const finalSync = await flushSharedStateSync();
-    if (!finalSync.ok || sharedSync.dirty || sharedSync.pending || sharedSync.inFlight) {
-      throw new Error("Không thể lưu nhật ký cập nhật lên máy chủ. Hệ thống chưa làm mới để tránh mất dữ liệu.");
-    }
-    await releaseApiRequest("release-activate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ releaseId: selected.id }),
-    });
-    window.location.href = window.location.href.replace(/([?&])release-base=1&?/, "$1").replace(/[?&]$/, "");
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể kích hoạt gói cập nhật.";
-    systemUpdate.applying = false;
-    renderSystemUpdateControls();
-  }
 }
 
 function applySystemCustomization() {
@@ -9405,11 +8573,7 @@ function renderCustomFieldsForScope(scopeId) {
   else form.appendChild(container);
 }
 
-function renderAllCustomFields(scopeId = "") {
-  if (scopeId) {
-    renderCustomFieldsForScope(scopeId);
-    return;
-  }
+function renderAllCustomFields() {
   customFieldScopes.forEach((scope) => renderCustomFieldsForScope(scope.id));
 }
 
@@ -9985,9 +9149,8 @@ function renderPopupCustomizationButtons() {
   });
 }
 
-function renderDirectCustomization({ viewId = activeViewId() } = {}) {
-  const scope = customizationScopeForView(viewId);
-  if (scope) renderAllCustomFields(scope.id);
+function renderDirectCustomization() {
+  renderAllCustomFields();
   renderViewCustomizationTools();
   applyFieldCustomizations();
   applyPopupCustomizations();
@@ -10202,10 +9365,8 @@ function applyAccessControls() {
   document.querySelector(".topbar").classList.toggle("is-hidden", !account);
   document.querySelector(".layout").classList.toggle("is-hidden", !account);
   if (!account) {
-    accessControlAccountId = "";
-    document.body.classList.remove("is-customize-mode");
     syncMobileNavigationAccess();
-    return "";
+    return;
   }
 
   renderCurrentUser();
@@ -10221,10 +9382,7 @@ function applyAccessControls() {
   document.querySelectorAll(".customization-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isAdmin());
   });
-  if (!isAdmin() && customizeMode) {
-    customizeMode = false;
-    localStorage.setItem(CUSTOMIZE_MODE_KEY, "0");
-  }
+  if (!isAdmin() && customizeMode) setCustomizeMode(false);
   document.querySelectorAll(".bulletin-admin-only").forEach((element) => {
     element.classList.toggle("is-hidden", !canPublishBulletins());
   });
@@ -10237,98 +9395,36 @@ function applyAccessControls() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("is-hidden", !canAccessView(button.dataset.view));
   });
-  const currentView = activeViewId();
+  syncMobileNavigationAccess();
+
+  // 🌟 ƯU TIÊN 1: Mở lại Tab đang xem dở trước khi F5
   const savedView = localStorage.getItem(activeViewStorageKey());
-  const accountChanged = accessControlAccountId !== account.id;
-  const targetView =
-    !canAccessView(currentView) || accountChanged
-      ? savedView && canAccessView(savedView)
-        ? savedView
-        : firstAccessibleView()
-      : currentView;
-  if (targetView !== currentView) setActiveView(targetView, { persist: false });
-  else syncMobileNavigationAccess(targetView);
-  accessControlAccountId = account.id;
-  return targetView;
-}
-
-function setActiveView(viewId, { persist = true } = {}) {
-  if (!viewId) return;
-  if (persist) localStorage.setItem(activeViewStorageKey(), viewId);
-
-  document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === viewId));
-  document.querySelectorAll(".view").forEach((item) => item.classList.toggle("is-active", item.id === viewId));
-  syncMobileNavigationAccess(viewId);
-}
-
-function renderActiveView(viewId = activeViewId(), { animateDashboard = false } = {}) {
-  if (!currentAccount() || !viewId || activeViewId() !== viewId) return;
-  if (viewId === "dashboard") {
-    renderDashboard({ animate: animateDashboard });
-  } else if (viewId === "bulletin") {
-    renderBulletinBoard({ applyCustomization: false });
-  } else if (viewId === "archive") {
-    renderArchiveOptions();
-    renderArchive({ applyCustomization: false });
-  } else if (viewId === "people") {
-    renderDepartmentAndRoleOptions();
-    renderPeopleTable();
-  } else if (viewId === "tasks") {
-    renderTaskProjectCatalog();
-    renderPersonOptions();
-    updateTaskFormLock();
-    renderTaskBoard({ applyCustomization: false });
-  } else if (viewId === "department-evaluations") {
-    renderDepartmentEvaluationOptions();
-    loadDepartmentEvaluationForSelection();
-    renderDepartmentEvaluationTable();
-  } else if (viewId === "evaluations") {
-    renderPersonOptions();
-    loadEvaluationForSelection();
-    renderEvaluationTable();
-  } else if (viewId === "history") {
-    renderHistory();
-  } else if (viewId === "accounts") {
-    renderAccountOptions();
-    renderAccountTable();
-    renderAccountPresence();
-    if (isAdmin()) {
-      requestAccountPresence();
-      requestAccountUsageHistory();
-    }
-  } else if (viewId === "system-settings") {
-    renderModuleAccessControls();
-  } else if (viewId === "rules") {
-    renderRules();
+  if (savedView && canAccessView(savedView)) {
+    switchView(savedView);
+  } else {
+    // ƯU TIÊN 2: Nếu không có bộ nhớ hoặc mất quyền, mới cho về mặc định
+    switchView(firstAccessibleView());
   }
-  renderDirectCustomization({ viewId });
-}
-
-function scheduleActiveViewRender(viewId, { animateDashboard = false } = {}) {
-  activeViewRenderToken += 1;
-  const renderToken = activeViewRenderToken;
-  if (activeViewRenderFrame) {
-    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(activeViewRenderFrame);
-    else window.clearTimeout(activeViewRenderFrame);
-  }
-  const run = () => {
-    activeViewRenderFrame = 0;
-    if (renderToken !== activeViewRenderToken || activeViewId() !== viewId) return;
-    renderActiveView(viewId, { animateDashboard });
-  };
-  activeViewRenderFrame =
-    typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : window.setTimeout(run, 0);
 }
 
 function switchView(viewId) {
   if (!canAccessView(viewId)) return;
-  const currentView = activeViewId();
-  if (currentView === viewId) {
-    syncMobileNavigationAccess(viewId);
-    return;
+  
+  // 🌟 CHÈN THÊM DÒNG NÀY: Lưu lại tên Tab đang xem vào máy
+  localStorage.setItem(activeViewStorageKey(), viewId);
+
+  document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === viewId));
+  document.querySelectorAll(".view").forEach((item) => item.classList.toggle("is-active", item.id === viewId));
+  syncMobileNavigationAccess(viewId);
+  if (viewId === "dashboard") renderDashboard({ animate: true });
+  if (viewId === "bulletin") renderBulletinBoard();
+  if (viewId === "archive") renderArchive();
+  if (viewId === "accounts" && isAdmin()) {
+    renderAccountPresence();
+    requestAccountPresence();
+    requestAccountUsageHistory();
   }
-  setActiveView(viewId);
-  scheduleActiveViewRender(viewId, { animateDashboard: viewId === "dashboard" });
+  renderDirectCustomization();
 }
 
 function focusEditForm(formId, focusId) {
@@ -11097,15 +10193,35 @@ function printSelectedSections(sectionIds) {
   }
 }
 
-function renderAll(options = {}) {
+function renderAll() {
   applySystemCustomization();
-  const viewId = applyAccessControls();
-  if (!currentAccount()) return;
-  ensureRecurringTasksForPeriod();
+  applyAccessControls();
+  if (currentAccount()) ensureRecurringTasksForPeriod();
   byId("activePeriod").value = state.activePeriod;
   byId("evalPeriod").value = state.activePeriod;
   byId("deptEvalPeriod").value = state.activePeriod;
-  renderActiveView(viewId, { animateDashboard: options.animateDashboard === true });
+  renderDepartmentEvaluationOptions();
+  renderTaskProjectCatalog();
+  renderPersonOptions();
+  updateTaskFormLock();
+  renderAccountOptions();
+  renderPeopleTable();
+  renderBulletinBoard();
+  renderArchiveOptions();
+  renderArchive();
+  renderTaskBoard();
+  loadDepartmentEvaluationForSelection();
+  loadEvaluationForSelection();
+  renderDepartmentEvaluationTable();
+  renderEvaluationTable();
+  renderDashboard();
+  renderHistory();
+  renderRules();
+  renderModuleAccessControls();
+  renderAccountTable();
+  renderAccountPresence();
+  renderDirectCustomization();
+  applyAccessControls();
   renderBirthdayCelebration();
 }
 
@@ -11695,7 +10811,10 @@ byId("activePeriod").addEventListener("change", (event) => {
   const shouldAnimateDashboard = document.querySelector(".view.is-active")?.id === "dashboard";
   state.activePeriod = event.target.value || currentMonth();
   persistState();
-  renderAll({ animateDashboard: shouldAnimateDashboard });
+  renderAll();
+  if (shouldAnimateDashboard && document.querySelector(".view.is-active")?.id === "dashboard") {
+    renderDashboard({ animate: true });
+  }
 });
 
 byId("bulletinForm").addEventListener("submit", async (event) => {
@@ -12243,11 +11362,6 @@ byId("refreshAccountPresence").addEventListener("click", () => {
   requestAccountPresence();
   requestAccountUsageHistory({ force: true });
 });
-byId("accountUsageDepartmentFilter").addEventListener("change", (event) => {
-  if (!isAdmin()) return;
-  accountPresence.usageDepartmentId = String(event.target.value || "");
-  renderAccountUsageDetails();
-});
 
 byId("moduleAccessList").addEventListener("change", (event) => {
   const moduleId = event.target.dataset.moduleToggle || event.target.dataset.moduleId;
@@ -12306,51 +11420,6 @@ byId("systemThemeForm").addEventListener("submit", (event) => {
   });
   saveState();
   renderAll();
-});
-
-byId("checkSystemUpdate").addEventListener("click", checkSystemUpdate);
-byId("backupBeforeSystemUpdate").addEventListener("click", async () => {
-  try {
-    await downloadSystemUpdateBackup();
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể tạo bản sao lưu trên thiết bị này.";
-    renderSystemUpdateControls();
-  }
-});
-byId("applySystemUpdate").addEventListener("click", applySystemUpdate);
-byId("releasePackageFiles").addEventListener("change", (event) => {
-  updateReleaseFileSelection(event.target.files);
-});
-byId("releasePackageForm").addEventListener("submit", createReleasePackage);
-byId("releasePackageList").addEventListener("click", async (event) => {
-  const selectId = event.target.closest("[data-select-release]")?.dataset.selectRelease;
-  const deleteId = event.target.closest("[data-delete-release]")?.dataset.deleteRelease;
-  if (selectId) {
-    systemUpdate.selectedDraftId = selectId;
-    systemUpdate.error = "";
-    renderSystemUpdateControls();
-    return;
-  }
-  if (!deleteId || !isAdmin() || systemUpdate.uploading || systemUpdate.applying) return;
-  if (!confirm("Xóa bản nháp gói cập nhật này?")) return;
-  systemUpdate.uploading = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    await releaseApiRequest("release-delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ releaseId: deleteId }),
-    });
-    if (systemUpdate.selectedDraftId === deleteId) systemUpdate.selectedDraftId = "";
-    systemUpdate.uploading = false;
-    await checkSystemUpdate();
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể xóa bản nháp gói cập nhật.";
-  } finally {
-    systemUpdate.uploading = false;
-    renderSystemUpdateControls();
-  }
 });
 
 byId("accountSearch").addEventListener("input", debounce(renderAccountTable, 160));
@@ -13912,13 +12981,10 @@ migrateTaskAttachmentsToIndexedDb();
 // ⏳ KÍCH HOẠT CHU KỲ ĐỒNG BỘ NỀN SUPABASE STORAGE DIRECT (8 GIÂY/LẦN)
 // =========================================================================
 
-// Keep PWA updates dormant until an administrator explicitly applies a released version.
+// Kịch bản kích hoạt Service Worker chạy Offline ngầm của trình duyệt
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (systemUpdate.reloadOnControllerChange) window.location.reload();
-  });
   window.addEventListener("load", () => {
-    registerPwaForUpdates();
+    navigator.serviceWorker.register("service-worker.js").catch(() => {});
   });
 }
 // 🌟 TỰ ĐỘNG GHI NHỚ VỊ TRÍ CUỘN CHUỘT TRƯỚC KHI F5
@@ -13983,10 +13049,6 @@ document.addEventListener("click", (event) => {
       event.preventDefault();
       return;
     }
-
-    // Available immediately, including when the offline bootstrapper loads this script after DOMContentLoaded.
-    event.preventDefault();
-    switchView(viewId);
     
     // Cập nhật trạng thái Active nút Bottom Nav
     document.querySelectorAll(".bottom-nav-item").forEach(btn => {
@@ -14001,7 +13063,7 @@ document.addEventListener("click", (event) => {
    📱 KẾT NỐI DỮ LIỆU & CHUYỂN TAB MƯỢT MÀ CHO THANH BOTTOM NAV (MOBILE)
    ========================================================================= */
 
-runWhenDocumentReady(function() {
+document.addEventListener('DOMContentLoaded', function() {
   // 1. Quét tất cả nút điều hướng Mobile (Thanh đáy + Popup Menu)
   const mobileNavButtons = document.querySelectorAll('.mobile-bottom-nav [data-view], #mobileMenuPopup [data-view]');
   const popupMenu = document.getElementById('mobileMenuPopup');
@@ -14035,7 +13097,7 @@ runWhenDocumentReady(function() {
    📱 LOGIC DỮ LIỆU & ĐĂNG XUẤT CHO POPUP MENU MOBILE
    ========================================================================= */
 
-runWhenDocumentReady(function() {
+document.addEventListener('DOMContentLoaded', function() {
   const openBtn = document.getElementById('openMobileMenuBtn');
   const closeBtn = document.getElementById('closeMobileMenuBtn');
   const popup = document.getElementById('mobileMenuPopup');
@@ -14087,7 +13149,7 @@ runWhenDocumentReady(function() {
    📱 BẤM VÀO TÊN NHÂN SỰ ĐỂ MỞ POPUP XEM TOÀN BỘ THÔNG TIN CHI TIẾT
    ========================================================================= */
 
-runWhenDocumentReady(function() {
+document.addEventListener('DOMContentLoaded', function() {
   const peopleTable = document.getElementById('peopleTable');
   const dialog = document.getElementById('personDetailDialog');
   const closeBtn = document.getElementById('closePersonDetail');
@@ -14159,7 +13221,7 @@ runWhenDocumentReady(function() {
   });
 });
 
-runWhenDocumentReady(() => {
+document.addEventListener("DOMContentLoaded", () => {
   const peopleTable = byId("peopleTable");
   const dialog = byId("personDetailDialog");
   const detailName = byId("personDetailName");
@@ -14356,7 +13418,7 @@ runWhenDocumentReady(() => {
    ⚡ FIX LỖI BẤM MENU MOBILE (DÙNG ONCLICK TRỰC TIẾP CHỐNG XUNG ĐỘT)
    ========================================================================= */
 
-runWhenDocumentReady(function() {
+document.addEventListener('DOMContentLoaded', function() {
   const openBtn = document.getElementById('openMobileMenuBtn');
   const closeBtn = document.getElementById('closeMobileMenuBtn');
   const popup = document.getElementById('mobileMenuPopup');
@@ -14401,7 +13463,7 @@ runWhenDocumentReady(function() {
    📱 LOGIC DỮ LIỆU & ĐĂNG XUẤT CHO POPUP MENU MOBILE
    ========================================================================= */
 
-runWhenDocumentReady(function() {
+document.addEventListener('DOMContentLoaded', function() {
   const openBtn = document.getElementById('openMobileMenuBtn');
   const closeBtn = document.getElementById('closeMobileMenuBtn');
   const popup = document.getElementById('mobileMenuPopup');
