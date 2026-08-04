@@ -1,10 +1,11 @@
-const CACHE_NAME = "phuc-thinh-kpi-v269";
+const CACHE_NAME = "phuc-thinh-kpi-v275";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./people-data.js",
   "./supabase-config.js",
+  "./release-bootstrap.js",
   "./script.js",
   "./manifest.webmanifest",
   "./app-icon-phuc-thinh.png",
@@ -14,7 +15,6 @@ const APP_SHELL = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
-  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
@@ -29,13 +29,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
+  const remoteReleaseRequest = /\.supabase\.co$/i.test(url.hostname)
+    && (url.pathname.includes("/functions/v1/kpi-sync/release/")
+      || (url.pathname.endsWith("/functions/v1/kpi-sync") && url.searchParams.get("action") === "release-current"));
+  if (url.origin !== self.location.origin && !remoteReleaseRequest) return;
   if (url.pathname.includes("/api/")) return;
 
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        if (response.ok && response.type === "basic") {
+        if (response.ok && (response.type === "basic" || remoteReleaseRequest)) {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         }
@@ -48,4 +51,8 @@ self.addEventListener("fetch", (event) => {
         }),
       ),
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
