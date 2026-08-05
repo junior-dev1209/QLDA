@@ -36,29 +36,6 @@ const SHARED_SYNC_SCALAR_FIELDS = [
   "canBoGpmbKpiCatalogVersion",
   "deletedIds",
 ];
-const APP_RELEASE = Object.freeze({
-  version: "2.2.3",
-  build: "2026.08.04",
-  releasedAt: "2026-08-04T00:00:00+07:00",
-  dataSchemaVersion: 1,
-  channel: "stable",
-});
-// Kept for older cached scripts until every installed client has loaded the release manager.
-const RELEASE_MANIFEST_PATH = "release-manifest.json";
-const SYSTEM_UPDATE_BACKUP_FORMAT = "phuc-thinh-system-release-backup";
-const SYSTEM_UPDATE_CHECK_TIMEOUT_MS = 15000;
-const RELEASE_PACKAGE_ALLOWED_PATHS = [
-  "index.html",
-  "styles.css",
-  "people-data.js",
-  "script.js",
-  "manifest.webmanifest",
-  "app-icon-phuc-thinh.png",
-  "icon.svg",
-  "assets/birthday-cake.png",
-  "assets/birthday-bouquet.png",
-];
-const RELEASE_PACKAGE_REQUIRED_PATHS = RELEASE_PACKAGE_ALLOWED_PATHS.filter((path) => path !== "icon.svg");
 function debounce(fn, delay = 200) {
   let timer;
   return function (...args) {
@@ -1188,18 +1165,6 @@ const accountPresence = {
   usageRetryTimer: 0,
   usageRetryAttempts: 0,
 };
-const systemUpdate = {
-  checking: false,
-  applying: false,
-  uploading: false,
-  activeRelease: window.PHUC_THINH_ACTIVE_RELEASE || null,
-  releases: [],
-  selectedDraftId: "",
-  selectedFiles: [],
-  error: "",
-  checkedAt: "",
-  reloadOnControllerChange: false,
-};
 let pwaRegistrationPromise = null;
 
 const TASK_STATUS_PREPARING = "Chuẩn bị thực hiện";
@@ -1361,14 +1326,14 @@ function taskCompletionReviewLabel(task) {
 function taskIsLateCompletion(task) {
   if (task?.lateCompletion) return true;
   if (!taskCompletionIsApproved(task)) return false;
-  const completedAt = task?.completionReviewedAt || task?.completedAt || "";
+  const completedAt = task?.completedAt || task?.completionReviewedAt || "";
   return !!completedAt && !isTimestampBeforeDeadline(completedAt, task);
 }
 
 function taskCompletionTimingStatus(task, confirmedAt = "") {
   if (!taskCompletionIsApproved(task) || !task?.due) return "";
   if (taskIsLateCompletion(task)) return "late";
-  const timestamp = confirmedAt || task?.completionReviewedAt || task?.completedAt || "";
+  const timestamp = task?.completedAt || confirmedAt || task?.completionReviewedAt || "";
   const completedAt = timestamp ? new Date(timestamp) : null;
   const plannedDate = new Date(`${task.due}T00:00:00`);
   if (!completedAt || Number.isNaN(completedAt.getTime()) || Number.isNaN(plannedDate.getTime())) return "";
@@ -2001,12 +1966,12 @@ function persistState() {
 
 function saveState() {
   persistState();
-  if (sharedSync.session) {
+  if (sharedSync.session && !isOfflineFileRuntime()) {
     sharedSync.localChangeVersion += 1;
     markSharedStateDirty();
   }
   scheduleDashboardRefresh();
-  queueSharedStateSync();
+  if (!isOfflineFileRuntime()) queueSharedStateSync();
 }
 
 async function restoreDurableState() {
@@ -2326,8 +2291,14 @@ function canBootstrapCloudFromLocalState(payload = state) {
   );
 }
 
+function isOfflineFileRuntime() {
+  return window.location.protocol === "file:";
+}
+
 function sharedSyncSupported() {
-  return Boolean(supabaseSyncConfig()) || window.location.protocol === "https:" || window.location.protocol === "http:";
+  // A file:// copy is an intentionally isolated local test environment.
+  // It must never wait for, or overwrite its data from, the cloud service.
+  return !isOfflineFileRuntime() && (Boolean(supabaseSyncConfig()) || window.location.protocol === "https:" || window.location.protocol === "http:");
 }
 
 function supabaseSyncConfig() {
@@ -2345,7 +2316,7 @@ function supabaseSyncConfig() {
 }
 
 function usingSupabaseSync() {
-  return Boolean(supabaseSyncConfig());
+  return !isOfflineFileRuntime() && Boolean(supabaseSyncConfig());
 }
 
 function sharedEndpoint(action, query = {}) {
@@ -2840,6 +2811,17 @@ async function retainUnsyncedLocalChanges(remotePayload, { render = true } = {})
 async function loginSharedSession(username, password) {
   await ensureDurableStateRestored();
   await restoreSharedSyncCheckpoint();
+  if (isOfflineFileRuntime()) {
+    const offlineAccount = await verifyOfflineLogin(username, password);
+    if (offlineAccount) {
+      sharedSync.session = true;
+      sharedSync.accountId = String(offlineAccount.id);
+      sharedSync.available = null;
+      sharedSync.initialized = null;
+      return { mode: "offline", offlineAccountId: String(offlineAccount.id) };
+    }
+    return { mode: "local" };
+  }
   if (!(await probeSharedSync())) {
     const offlineAccount = await verifyOfflineLogin(username, password);
     if (offlineAccount) {
@@ -3057,7 +3039,7 @@ function sharedSyncRetryDelay() {
 }
 
 function scheduleSharedStateRetry() {
-  if (!sharedSync.session || !sharedSync.dirty || sharedSync.retryTimer || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  if (isOfflineFileRuntime() || !sharedSync.session || !sharedSync.dirty || sharedSync.retryTimer || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
   const delay = sharedSyncRetryDelay();
   sharedSync.retryTimer = window.setTimeout(async () => {
     sharedSync.retryTimer = 0;
@@ -3073,7 +3055,7 @@ function scheduleSharedStateRetry() {
 }
 
 function scheduleSharedStateRefresh({ immediate = false } = {}) {
-  if (sharedSync.refreshTimer || !sharedSync.session || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  if (isOfflineFileRuntime() || sharedSync.refreshTimer || !sharedSync.session || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
   const delay = immediate ? Math.round(Math.random() * 1200) : SHARED_SYNC_REFRESH_MS + Math.round(Math.random() * SHARED_SYNC_REFRESH_JITTER_MS);
   sharedSync.refreshTimer = window.setTimeout(async () => {
     sharedSync.refreshTimer = 0;
@@ -3093,7 +3075,7 @@ function stopSharedStateRefresh() {
 }
 
 function queueSharedStateSync() {
-  if (!sharedSync.session || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  if (isOfflineFileRuntime() || !sharedSync.session || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
   sharedSync.pending = true;
   if (sharedSync.available !== true) {
     scheduleSharedStateRetry();
@@ -3420,7 +3402,7 @@ async function flushSharedStateSync() {
 }
 
 async function refreshSharedState() {
-  if (!sharedSync.session || sharedSync.inFlight || document.visibilityState === "hidden" || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  if (isOfflineFileRuntime() || !sharedSync.session || sharedSync.inFlight || document.visibilityState === "hidden" || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
   if (sharedSync.pending || sharedSync.dirty) {
     if (await probeSharedSync({ force: true })) {
       sharedSync.pending = true;
@@ -3813,6 +3795,11 @@ function migrateCanBoGpmbKpiCatalog() {
 migrateDepartmentTermLabels();
 migrateLegacyProjectDepartments();
 mergeImportedPeopleIntoState();
+if (isOfflineFileRuntime()) {
+  // The bundled personnel source creates a complete, independent test set
+  // when this application is opened directly from disk.
+  scheduleLocalOfflineLoginProofCache(state.accounts);
+}
 migrateCanBoGpmbKpiCatalog();
 if (syncPersonnelAccounts()) saveState();
 
@@ -3865,7 +3852,6 @@ function birthdayAssetUrls(assetName) {
   const fileName = birthdayAssetFiles[assetName];
   if (!fileName) return [];
   const bases = [
-    window.PHUC_THINH_RELEASE_SOURCE_BASE,
     document.querySelector("base")?.href,
     window.PHUC_THINH_STATIC_APP_BASE,
     window.location.href,
@@ -6062,10 +6048,11 @@ function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") 
   const wasApproved = taskCompletionIsApproved(task);
   const completionReviewedAt = approved && wasApproved && task.completionReviewedAt ? task.completionReviewedAt : timestamp;
   const returnedStatus = previousStatus === "Quá hạn" || taskIsPastDeadline(task) ? "Quá hạn" : "Đang thực hiện";
+  const completedAtForReview = task.completedAt || timestamp;
   const lateCompletion = approved
-    ? wasApproved
-      ? taskIsLateCompletion(task)
-      : previousStatus === "Quá hạn" || taskIsPastDeadline(task)
+    ? task?.due
+      ? !isTimestampBeforeDeadline(completedAtForReview, task)
+      : false
     : false;
   const nextTask = {
     ...task,
@@ -6082,7 +6069,7 @@ function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") 
     qualityAssessedByName: approved ? actor.name : "",
   };
   if (approved) {
-    nextTask.completedAt = task.completedAt || timestamp;
+    nextTask.completedAt = completedAtForReview;
     nextTask.completedById = task.completedById || task.ownerId || "";
     nextTask.completedByName = task.completedByName || personById(task.ownerId)?.name || "";
   } else {
@@ -8791,7 +8778,6 @@ function renderModuleAccessControls() {
   if (!isAdmin()) {
     list.innerHTML = "";
     byId("systemThemePanel")?.classList.add("is-hidden");
-    byId("systemUpdatePanel")?.classList.add("is-hidden");
     return;
   }
 
@@ -8833,7 +8819,6 @@ function renderModuleAccessControls() {
     })
     .join("");
   renderSystemThemeControls();
-  renderSystemUpdateControls();
 }
 
 function systemThemePreviewHtml(theme) {
@@ -8875,191 +8860,11 @@ function renderSystemThemeControls() {
   updateSystemThemeFormState();
 }
 
-function releaseVersionParts(value) {
-  const match = String(value || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
-  return match ? match.slice(1, 4).map((part) => Number(part)) : null;
-}
-
-function compareReleaseVersions(left, right) {
-  const leftParts = releaseVersionParts(left);
-  const rightParts = releaseVersionParts(right);
-  if (!leftParts || !rightParts) return 0;
-  for (let index = 0; index < leftParts.length; index += 1) {
-    if (leftParts[index] !== rightParts[index]) return leftParts[index] > rightParts[index] ? 1 : -1;
-  }
-  return 0;
-}
-
-function normalizeReleaseManifest(payload) {
-  const latest = payload && typeof payload === "object" ? payload.latest : null;
-  const version = String(latest?.version || "").trim();
-  if (!releaseVersionParts(version)) throw new Error("Tệp thông tin phiên bản không hợp lệ.");
-  const releasedAt = String(latest?.releasedAt || "").trim();
-  const releasedTime = releasedAt ? new Date(releasedAt).getTime() : NaN;
-  if (!Number.isFinite(releasedTime)) throw new Error("Tệp thông tin phiên bản thiếu ngày phát hành hợp lệ.");
-  return {
-    manifestVersion: Number(payload.manifestVersion) || 1,
-    channel: String(payload.channel || "stable").trim() || "stable",
-    latest: {
-      version,
-      build: String(latest?.build || "").trim(),
-      releasedAt,
-      dataSchemaVersion: Math.max(1, Number(latest?.dataSchemaVersion) || 1),
-      requiresBackup: latest?.requiresBackup !== false,
-      summary: Array.isArray(latest?.summary)
-        ? latest.summary.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
-        : [],
-    },
-  };
-}
-
-function releaseDateLabel(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString("vi-VN");
-}
-
-function releaseUpdateAvailable() {
-  return Boolean(systemUpdate.manifest && compareReleaseVersions(systemUpdate.manifest.latest.version, APP_RELEASE.version) > 0);
-}
-
-function systemUpdateSyncInfo() {
-  if (window.location.protocol === "file:") {
-    return { tone: "warning", title: "Đang chạy tệp cục bộ", details: "Hãy dùng bản đã triển khai HTTPS để áp dụng cập nhật trực tiếp." };
-  }
-  if (!usingSupabaseSync()) {
-    return { tone: "warning", title: "Chưa cấu hình đồng bộ", details: "Cần cấu hình Supabase trước khi áp dụng cập nhật an toàn." };
-  }
-  if (!sharedSync.session || !sharedSync.sessionToken) {
-    return { tone: "warning", title: "Chưa có phiên đồng bộ", details: "Hãy đăng nhập trực tuyến lại trước khi cập nhật." };
-  }
-  if (sharedSync.inFlight) {
-    return { tone: "warning", title: "Đang đồng bộ", details: "Chờ hoàn tất đồng bộ dữ liệu rồi thử lại." };
-  }
-  if (sharedSync.dirty || sharedSync.pending) {
-    return { tone: "warning", title: "Có thay đổi chưa gửi", details: "Hệ thống sẽ gửi hết thay đổi lên máy chủ trước khi cập nhật." };
-  }
-  if (sharedSync.available !== true) {
-    return { tone: "warning", title: "Chưa xác minh máy chủ", details: "Kiểm tra kết nối Supabase trước khi áp dụng phiên bản mới." };
-  }
-  return { tone: "good", title: "Sẵn sàng cập nhật", details: "Dữ liệu hiện tại đã đồng bộ và có thể sao lưu an toàn." };
-}
-
-function renderSystemUpdateControls() {
-  const panel = byId("systemUpdatePanel");
-  if (!panel) return;
-  panel.classList.toggle("is-hidden", !isAdmin());
-  if (!isAdmin()) return;
-
-  const release = systemUpdate.manifest?.latest;
-  const syncInfo = systemUpdateSyncInfo();
-  byId("systemUpdateCurrentVersion").textContent = `v${APP_RELEASE.version}`;
-  byId("systemUpdateCurrentBuild").textContent = `Build ${APP_RELEASE.build}`;
-  byId("systemUpdateAvailableVersion").textContent = release ? `v${release.version}` : "Chưa kiểm tra";
-  byId("systemUpdateReleaseDate").textContent = release ? `Phát hành ${releaseDateLabel(release.releasedAt)}` : "Chọn kiểm tra để tải thông tin phát hành";
-  byId("systemUpdateSyncState").textContent = syncInfo.title;
-  byId("systemUpdateSyncDetail").textContent = syncInfo.details;
-
-  const status = byId("systemUpdateStatus");
-  const message = systemUpdate.applying
-    ? "Đang sao lưu, đồng bộ lần cuối và làm mới ứng dụng. Không đóng trang này."
-    : systemUpdate.checking
-      ? "Đang kiểm tra thông tin phát hành..."
-      : systemUpdate.error
-        ? systemUpdate.error
-        : release
-          ? releaseUpdateAvailable()
-            ? `Đã sẵn sàng phiên bản v${release.version}. Việc áp dụng sẽ tạo bản sao lưu trước khi làm mới ứng dụng.`
-            : "Thiết bị đang sử dụng phiên bản mới nhất đã phát hành."
-          : "Chưa kiểm tra thông tin phát hành.";
-  status.textContent = message;
-  status.className = `section-note system-update-status is-${systemUpdate.error ? "warning" : syncInfo.tone}`;
-
-  const notes = release?.summary || [];
-  byId("systemUpdateNotes").innerHTML = notes.length
-    ? notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")
-    : "";
-  const canApply = releaseUpdateAvailable() && !systemUpdate.checking && !systemUpdate.applying;
-  byId("applySystemUpdate").disabled = !canApply;
-  byId("checkSystemUpdate").disabled = systemUpdate.checking || systemUpdate.applying;
-  byId("backupBeforeSystemUpdate").disabled = systemUpdate.applying;
-}
-
-async function checkSystemUpdate() {
-  if (!isAdmin() || systemUpdate.checking || systemUpdate.applying) return;
-  systemUpdate.checking = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), SYSTEM_UPDATE_CHECK_TIMEOUT_MS);
-  try {
-    if (window.location.protocol === "file:") throw new Error("Bản mở trực tiếp từ tệp không thể kiểm tra phiên bản trực tuyến.");
-    const manifestUrl = new URL(RELEASE_MANIFEST_PATH, window.location.href);
-    if (manifestUrl.origin !== window.location.origin) throw new Error("Nguồn thông tin phiên bản không hợp lệ.");
-    const response = await fetch(manifestUrl.href, {
-      cache: "no-store",
-      headers: { "Cache-Control": "no-cache" },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error("Không tải được thông tin phiên bản từ máy chủ.");
-    systemUpdate.manifest = normalizeReleaseManifest(await response.json());
-    systemUpdate.checkedAt = new Date().toISOString();
-  } catch (error) {
-    systemUpdate.error = error?.name === "AbortError"
-      ? "Kiểm tra phiên bản quá thời gian chờ. Hãy kiểm tra kết nối và thử lại."
-      : error?.message || "Không thể kiểm tra phiên bản mới.";
-  } finally {
-    window.clearTimeout(timeout);
-    systemUpdate.checking = false;
-    renderSystemUpdateControls();
-  }
-}
-
-async function createSystemUpdateBackup() {
-  return {
-    format: SYSTEM_UPDATE_BACKUP_FORMAT,
-    version: 1,
-    createdAt: new Date().toISOString(),
-    application: { ...APP_RELEASE },
-    actor: currentActorInfo(),
-    state: await stateForExport(),
-  };
-}
-
-function systemUpdateBackupFilename() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `sao-luu-truoc-cap-nhat-v${APP_RELEASE.version}-${stamp}.json`;
-}
-
-async function downloadSystemUpdateBackup() {
-  if (!isAdmin() || systemUpdate.applying) return false;
-  const backup = await createSystemUpdateBackup();
-  downloadJsonFile(systemUpdateBackupFilename(), backup);
-  systemUpdate.error = "";
-  byId("systemUpdateStatus").textContent = "Đã tạo bản sao lưu toàn hệ thống trên thiết bị này.";
-  return true;
-}
-
-async function ensureSystemUpdateReady() {
-  if (!isAdmin()) throw new Error("Chỉ Admin được phép áp dụng phiên bản mới.");
-  if (!releaseUpdateAvailable()) throw new Error("Chưa có phiên bản mới sẵn sàng để áp dụng.");
-  if (!sharedSyncSupported() || !usingSupabaseSync()) throw new Error("Cập nhật trực tuyến yêu cầu cấu hình Supabase hợp lệ.");
-  if (!sharedSync.session || !sharedSync.sessionToken) throw new Error("Phiên đồng bộ đã hết hạn. Hãy đăng nhập lại rồi thử cập nhật.");
-  if (!(await probeSharedSync({ force: true }))) throw new Error("Không thể xác minh máy chủ đồng bộ. Dữ liệu chưa đủ điều kiện để cập nhật an toàn.");
-  if (sharedSync.inFlight) throw new Error("Đồng bộ đang chạy. Hãy chờ hoàn tất rồi thử lại.");
-  if (sharedSync.dirty || sharedSync.pending) {
-    sharedSync.pending = true;
-    const result = await flushSharedStateSync();
-    if (!result.ok || sharedSync.dirty || sharedSync.pending || sharedSync.inFlight) {
-      throw new Error("Không thể đồng bộ hết thay đổi trước khi cập nhật. Hệ thống chưa làm mới để tránh mất dữ liệu.");
-    }
-  }
-}
-
 function registerPwaForUpdates() {
   if (!("serviceWorker" in navigator) || window.location.protocol === "file:") return Promise.resolve(null);
   if (!pwaRegistrationPromise) {
     pwaRegistrationPromise = navigator.serviceWorker
-      .register("service-worker.js", { updateViaCache: "none" })
+      .register(new URL("service-worker.js", window.location.href).href, { updateViaCache: "none" })
       .catch((error) => {
         console.warn("PWA registration failed:", error);
         return null;
@@ -9067,372 +8872,6 @@ function registerPwaForUpdates() {
   }
   return pwaRegistrationPromise;
 }
-
-function waitForReleaseServiceWorker(registration) {
-  if (registration.waiting) return Promise.resolve(registration.waiting);
-  const installing = registration.installing;
-  if (!installing) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => resolve(registration.waiting || null), 5000);
-    installing.addEventListener("statechange", () => {
-      if (installing.state !== "installed") return;
-      window.clearTimeout(timeout);
-      resolve(registration.waiting || null);
-    });
-  });
-}
-
-async function applySystemUpdate() {
-  if (!isAdmin() || systemUpdate.applying) return;
-  systemUpdate.applying = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    await ensureSystemUpdateReady();
-    const backup = await createSystemUpdateBackup();
-    downloadJsonFile(systemUpdateBackupFilename(), backup);
-
-    logActivity({
-      action: "Cập nhật",
-      module: "Cấu hình hệ thống",
-      targetType: "applicationRelease",
-      targetId: systemUpdate.manifest.latest.version,
-      title: "Áp dụng phiên bản hệ thống",
-      details: `Từ v${APP_RELEASE.version} lên v${systemUpdate.manifest.latest.version}; đã tạo bản sao lưu trước cập nhật.`,
-    });
-    saveState();
-    const finalSync = await flushSharedStateSync();
-    if (!finalSync.ok || sharedSync.dirty || sharedSync.pending || sharedSync.inFlight) {
-      throw new Error("Không thể lưu nhật ký cập nhật lên máy chủ. Hệ thống chưa làm mới để tránh mất dữ liệu.");
-    }
-
-    const registration = await registerPwaForUpdates();
-    if (!registration) throw new Error("Không thể khởi tạo cơ chế cập nhật PWA trên thiết bị này.");
-    systemUpdate.reloadOnControllerChange = true;
-    await registration.update();
-    const waitingWorker = await waitForReleaseServiceWorker(registration);
-    if (!waitingWorker) {
-      throw new Error("Máy chủ chưa cung cấp Service Worker mới. Trang chưa được làm mới để tránh áp dụng phiên bản không đầy đủ.");
-    }
-    waitingWorker.postMessage({ type: "SKIP_WAITING" });
-    window.setTimeout(() => window.location.reload(), 1200);
-  } catch (error) {
-    systemUpdate.reloadOnControllerChange = false;
-    systemUpdate.error = error?.message || "Không thể áp dụng phiên bản mới.";
-    systemUpdate.applying = false;
-    renderSystemUpdateControls();
-  }
-}
-
-function releasePackagePathForFile(file) {
-  const relativePath = String(file?.webkitRelativePath || "").replace(/\\/g, "/").replace(/^.*?(assets\/)/, "$1");
-  if (RELEASE_PACKAGE_ALLOWED_PATHS.includes(relativePath)) return relativePath;
-  const name = String(file?.name || "").trim();
-  const matches = RELEASE_PACKAGE_ALLOWED_PATHS.filter((path) => path.split("/").pop() === name);
-  return matches.length === 1 ? matches[0] : "";
-}
-
-function formatReleaseFileSize(value) {
-  const bytes = Math.max(0, Number(value) || 0);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function activeSystemRelease() {
-  const release = systemUpdate.activeRelease || window.PHUC_THINH_ACTIVE_RELEASE;
-  return release && typeof release === "object" ? release : null;
-}
-
-function selectedSystemRelease() {
-  return systemUpdate.releases.find((release) => release.id === systemUpdate.selectedDraftId) || null;
-}
-
-function releaseNotes(release) {
-  return String(release?.notes || "").trim();
-}
-
-function updateReleaseFileSelection(files) {
-  const mapped = [];
-  const seenPaths = new Set();
-  const invalid = [];
-  Array.from(files || []).forEach((file) => {
-    const path = releasePackagePathForFile(file);
-    if (!path || seenPaths.has(path)) {
-      invalid.push(file.name || "tệp không xác định");
-      return;
-    }
-    seenPaths.add(path);
-    mapped.push({ file, path });
-  });
-  systemUpdate.selectedFiles = mapped;
-  const summary = byId("releasePackageFilesSummary");
-  if (!summary) return;
-  const missing = RELEASE_PACKAGE_REQUIRED_PATHS.filter((path) => !mapped.some((item) => item.path === path));
-  const parts = mapped.length
-    ? mapped.map((item) => `${item.path} (${formatReleaseFileSize(item.file.size)})`)
-    : ["Chưa chọn tệp."];
-  if (missing.length && !activeSystemRelease()) parts.push(`Gói đầu tiên còn thiếu: ${missing.join(", ")}.`);
-  if (invalid.length) parts.push(`Không nhận: ${invalid.join(", ")}.`);
-  summary.textContent = parts.join(" · ");
-}
-
-async function releaseApiRequest(action, options = {}) {
-  const { response, payload } = await sharedJsonRequest(action, options);
-  if (!response.ok) throw new Error(String(payload?.error || "Không thể xử lý gói cập nhật trên máy chủ."));
-  return payload;
-}
-
-function releaseStatusLabel(status) {
-  const labels = { active: "Đang kích hoạt", draft: "Bản nháp", archived: "Đã lưu trữ" };
-  return labels[status] || status || "Không xác định";
-}
-
-function releasePackageListHtml() {
-  if (!systemUpdate.releases.length) return '<p class="section-note">Chưa có gói phát hành trên máy chủ. Hãy tạo gói đầu tiên bằng đủ các tệp hệ thống bắt buộc.</p>';
-  return systemUpdate.releases.map((release) => {
-    const selected = release.id === systemUpdate.selectedDraftId;
-    const files = Array.isArray(release.files) ? release.files : [];
-    const requiredFileCount = files.filter((file) => RELEASE_PACKAGE_REQUIRED_PATHS.includes(file.path)).length;
-    const canSelect = release.status !== "active" && (release.complete === true || release.status === "draft");
-    return `
-      <article class="release-package-item${selected ? " is-selected" : ""}${release.status === "active" ? " is-active" : ""}">
-        <div class="release-package-item-main">
-          <strong>v${escapeHtml(release.version || "-")}</strong>
-          <span>${escapeHtml(releaseStatusLabel(release.status))}</span>
-          <small>${escapeHtml(releaseDateLabel(release.publishedAt || release.createdAt))} · ${requiredFileCount}/${RELEASE_PACKAGE_REQUIRED_PATHS.length} tệp bắt buộc${release.complete ? "" : " · Chưa đủ tệp"}</small>
-          ${releaseNotes(release) ? `<p>${escapeHtml(releaseNotes(release))}</p>` : ""}
-        </div>
-        <div class="release-package-item-actions">
-          ${canSelect ? `<button class="ghost" type="button" data-select-release="${escapeHtml(release.id)}">${selected ? "Đã chọn" : release.status === "draft" ? "Sửa nháp" : "Chọn"}</button>` : ""}
-          ${release.status === "draft" ? `<button class="icon-button danger-action" type="button" data-delete-release="${escapeHtml(release.id)}" title="Xóa bản nháp" aria-label="Xóa bản nháp">×</button>` : ""}
-        </div>
-      </article>`;
-  }).join("");
-}
-
-function renderSystemUpdateControls() {
-  const panel = byId("systemUpdatePanel");
-  if (!panel) return;
-  panel.classList.toggle("is-hidden", !isAdmin());
-  if (!isAdmin()) return;
-
-  const active = activeSystemRelease();
-  const selected = selectedSystemRelease();
-  const syncInfo = systemUpdateSyncInfo();
-  byId("systemUpdateCurrentVersion").textContent = active ? `v${active.version}` : `v${APP_RELEASE.version}`;
-  byId("systemUpdateCurrentBuild").textContent = active ? "Gói mã từ kho phát hành" : `Bản gốc ${APP_RELEASE.build}`;
-  byId("systemUpdateAvailableVersion").textContent = active ? `v${active.version}` : "Chưa kích hoạt";
-  byId("systemUpdateReleaseDate").textContent = active ? `Kích hoạt ${releaseDateLabel(active.publishedAt || active.createdAt)}` : "Gói đầu tiên sẽ được kích hoạt từ giao diện này";
-  byId("systemUpdateSyncState").textContent = syncInfo.title;
-  byId("systemUpdateSyncDetail").textContent = syncInfo.details;
-
-  const status = byId("systemUpdateStatus");
-  const message = systemUpdate.uploading
-    ? "Đang kiểm tra và tải tệp mã lên kho phát hành. Không đóng trang này."
-    : systemUpdate.applying
-      ? "Đang sao lưu, đồng bộ lần cuối và kích hoạt gói đã chọn. Không đóng trang này."
-      : systemUpdate.checking
-        ? "Đang tải danh sách gói phát hành..."
-        : systemUpdate.error
-          ? systemUpdate.error
-          : selected
-            ? `Đã chọn gói v${selected.version}. Kích hoạt chỉ thực hiện sau khi sao lưu và đồng bộ thành công.`
-            : active
-              ? "Có thể tạo gói nháp mới hoặc chọn một gói đã lưu trữ để quay lại phiên bản trước."
-              : "Chưa có gói nào được kích hoạt. Gói đầu tiên cần tải đủ tệp hệ thống bắt buộc.";
-  status.textContent = message;
-  status.className = `section-note system-update-status is-${systemUpdate.error ? "warning" : syncInfo.tone}`;
-  byId("systemUpdateNotes").innerHTML = releaseNotes(active) ? `<li>${escapeHtml(releaseNotes(active))}</li>` : "";
-  byId("releasePackageList").innerHTML = releasePackageListHtml();
-
-  const busy = systemUpdate.checking || systemUpdate.uploading || systemUpdate.applying;
-  byId("applySystemUpdate").disabled = !selected || selected.complete !== true || busy;
-  byId("checkSystemUpdate").disabled = busy;
-  byId("backupBeforeSystemUpdate").disabled = busy;
-  byId("createReleasePackage").disabled = busy;
-  byId("createReleasePackage").textContent = selected?.status === "draft" ? "Bổ sung tệp vào bản nháp" : "Tải tệp và lưu nháp";
-}
-
-async function checkSystemUpdate() {
-  if (!isAdmin() || systemUpdate.checking || systemUpdate.uploading || systemUpdate.applying) return;
-  systemUpdate.checking = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    if (window.location.protocol === "file:") throw new Error("Bản mở trực tiếp từ tệp không thể quản lý gói cập nhật trực tuyến.");
-    const [current, list] = await Promise.all([
-      releaseApiRequest("release-current"),
-      releaseApiRequest("release-list"),
-    ]);
-    systemUpdate.activeRelease = current?.release || null;
-    systemUpdate.releases = Array.isArray(list?.releases) ? list.releases : [];
-    if (systemUpdate.selectedDraftId && !systemUpdate.releases.some((release) => release.id === systemUpdate.selectedDraftId)) {
-      systemUpdate.selectedDraftId = "";
-    }
-    systemUpdate.checkedAt = new Date().toISOString();
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể tải danh sách gói cập nhật.";
-  } finally {
-    systemUpdate.checking = false;
-    renderSystemUpdateControls();
-  }
-}
-
-async function createSystemUpdateBackup() {
-  return {
-    format: SYSTEM_UPDATE_BACKUP_FORMAT,
-    version: 1,
-    createdAt: new Date().toISOString(),
-    application: { ...APP_RELEASE },
-    activeRelease: activeSystemRelease(),
-    actor: currentActorInfo(),
-    state: await stateForExport(),
-  };
-}
-
-function systemUpdateBackupFilename() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `sao-luu-truoc-cap-nhat-v${activeSystemRelease()?.version || APP_RELEASE.version}-${stamp}.json`;
-}
-
-async function downloadSystemUpdateBackup() {
-  if (!isAdmin() || systemUpdate.applying || systemUpdate.uploading) return false;
-  const backup = await createSystemUpdateBackup();
-  downloadJsonFile(systemUpdateBackupFilename(), backup);
-  systemUpdate.error = "";
-  byId("systemUpdateStatus").textContent = "Đã tạo bản sao lưu toàn hệ thống trên thiết bị này.";
-  return true;
-}
-
-async function ensureSystemUpdateReady() {
-  if (!isAdmin()) throw new Error("Chỉ Admin được phép quản lý gói cập nhật.");
-  if (!sharedSyncSupported() || !usingSupabaseSync()) throw new Error("Cập nhật trực tuyến yêu cầu cấu hình Supabase hợp lệ.");
-  if (!sharedSync.session || !sharedSync.sessionToken) throw new Error("Phiên đồng bộ đã hết hạn. Hãy đăng nhập lại rồi thử cập nhật.");
-  if (!(await probeSharedSync({ force: true }))) throw new Error("Không thể xác minh máy chủ đồng bộ. Dữ liệu chưa đủ điều kiện để cập nhật an toàn.");
-  if (sharedSync.inFlight) throw new Error("Đồng bộ đang chạy. Hãy chờ hoàn tất rồi thử lại.");
-  if (sharedSync.dirty || sharedSync.pending) {
-    sharedSync.pending = true;
-    const result = await flushSharedStateSync();
-    if (!result.ok || sharedSync.dirty || sharedSync.pending || sharedSync.inFlight) {
-      throw new Error("Không thể đồng bộ hết thay đổi trước khi cập nhật. Hệ thống chưa làm mới để tránh mất dữ liệu.");
-    }
-  }
-}
-
-async function createReleasePackage(event) {
-  event.preventDefault();
-  if (!isAdmin() || systemUpdate.uploading || systemUpdate.applying) return;
-  const selectedDraft = selectedSystemRelease()?.status === "draft" ? selectedSystemRelease() : null;
-  const version = byId("releasePackageVersion").value.trim();
-  const notes = byId("releasePackageNotes").value.trim();
-  if (!selectedDraft && !releaseVersionParts(version)) {
-    systemUpdate.error = "Phiên bản phải theo dạng 2.3.0 hoặc v2.3.0.";
-    renderSystemUpdateControls();
-    return;
-  }
-  if (!systemUpdate.selectedFiles.length) {
-    systemUpdate.error = "Hãy chọn ít nhất một tệp mã hợp lệ cho gói phát hành.";
-    renderSystemUpdateControls();
-    return;
-  }
-  systemUpdate.uploading = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    await ensureSystemUpdateReady();
-    const created = selectedDraft
-      ? { release: selectedDraft }
-      : await releaseApiRequest("release-create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version, notes }),
-      });
-    let release = created.release;
-    for (const item of systemUpdate.selectedFiles) {
-      const form = new FormData();
-      form.append("releaseId", release.id);
-      form.append("path", item.path);
-      form.append("file", item.file, item.file.name);
-      const uploaded = await releaseApiRequest("release-file", { method: "POST", body: form });
-      release = uploaded.release;
-    }
-    systemUpdate.selectedDraftId = release.id;
-    systemUpdate.selectedFiles = [];
-    byId("releasePackageFiles").value = "";
-    byId("releasePackageNotes").value = "";
-    byId("releasePackageVersion").value = "";
-    updateReleaseFileSelection([]);
-    logActivity({
-      action: "Tạo mới",
-      module: "Cấu hình hệ thống",
-      targetType: "applicationReleaseDraft",
-      targetId: release.id,
-      title: `${selectedDraft ? "Bổ sung" : "Tạo"} gói cập nhật v${release.version}`,
-      details: `Bản nháp hiện có ${release.files?.length || 0} tệp mã.`,
-    });
-    saveState();
-    await flushSharedStateSync();
-    systemUpdate.uploading = false;
-    await checkSystemUpdate();
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể tạo gói cập nhật.";
-  } finally {
-    systemUpdate.uploading = false;
-    renderSystemUpdateControls();
-  }
-}
-
-function registerPwaForUpdates() {
-  if (!("serviceWorker" in navigator) || window.location.protocol === "file:") return Promise.resolve(null);
-  if (!pwaRegistrationPromise) {
-    const staticBase = window.PHUC_THINH_STATIC_APP_BASE || new URL(".", window.location.href).href;
-    pwaRegistrationPromise = navigator.serviceWorker
-      .register(new URL("service-worker.js", staticBase).href, { updateViaCache: "none" })
-      .catch((error) => {
-        console.warn("PWA registration failed:", error);
-        return null;
-      });
-  }
-  return pwaRegistrationPromise;
-}
-
-async function applySystemUpdate() {
-  const selected = selectedSystemRelease();
-  if (!isAdmin() || !selected || selected.complete !== true || systemUpdate.applying) return;
-  systemUpdate.applying = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    await ensureSystemUpdateReady();
-    const backup = await createSystemUpdateBackup();
-    downloadJsonFile(systemUpdateBackupFilename(), backup);
-    logActivity({
-      action: "Cập nhật",
-      module: "Cấu hình hệ thống",
-      targetType: "applicationRelease",
-      targetId: selected.id,
-      title: `Kích hoạt gói v${selected.version}`,
-      details: "Đã sao lưu và đồng bộ dữ liệu trước khi chuyển gói mã.",
-    });
-    saveState();
-    const finalSync = await flushSharedStateSync();
-    if (!finalSync.ok || sharedSync.dirty || sharedSync.pending || sharedSync.inFlight) {
-      throw new Error("Không thể lưu nhật ký cập nhật lên máy chủ. Hệ thống chưa làm mới để tránh mất dữ liệu.");
-    }
-    await releaseApiRequest("release-activate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ releaseId: selected.id }),
-    });
-    window.location.href = window.location.href.replace(/([?&])release-base=1&?/, "$1").replace(/[?&]$/, "");
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể kích hoạt gói cập nhật.";
-    systemUpdate.applying = false;
-    renderSystemUpdateControls();
-  }
-}
-
 function applySystemCustomization() {
   state.systemCustomization = normalizeSystemCustomization(state.systemCustomization);
   const layout = state.systemCustomization.layout;
@@ -12451,51 +11890,6 @@ byId("systemThemeForm").addEventListener("submit", (event) => {
   renderAll();
 });
 
-byId("checkSystemUpdate").addEventListener("click", checkSystemUpdate);
-byId("backupBeforeSystemUpdate").addEventListener("click", async () => {
-  try {
-    await downloadSystemUpdateBackup();
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể tạo bản sao lưu trên thiết bị này.";
-    renderSystemUpdateControls();
-  }
-});
-byId("applySystemUpdate").addEventListener("click", applySystemUpdate);
-byId("releasePackageFiles").addEventListener("change", (event) => {
-  updateReleaseFileSelection(event.target.files);
-});
-byId("releasePackageForm").addEventListener("submit", createReleasePackage);
-byId("releasePackageList").addEventListener("click", async (event) => {
-  const selectId = event.target.closest("[data-select-release]")?.dataset.selectRelease;
-  const deleteId = event.target.closest("[data-delete-release]")?.dataset.deleteRelease;
-  if (selectId) {
-    systemUpdate.selectedDraftId = selectId;
-    systemUpdate.error = "";
-    renderSystemUpdateControls();
-    return;
-  }
-  if (!deleteId || !isAdmin() || systemUpdate.uploading || systemUpdate.applying) return;
-  if (!confirm("Xóa bản nháp gói cập nhật này?")) return;
-  systemUpdate.uploading = true;
-  systemUpdate.error = "";
-  renderSystemUpdateControls();
-  try {
-    await releaseApiRequest("release-delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ releaseId: deleteId }),
-    });
-    if (systemUpdate.selectedDraftId === deleteId) systemUpdate.selectedDraftId = "";
-    systemUpdate.uploading = false;
-    await checkSystemUpdate();
-  } catch (error) {
-    systemUpdate.error = error?.message || "Không thể xóa bản nháp gói cập nhật.";
-  } finally {
-    systemUpdate.uploading = false;
-    renderSystemUpdateControls();
-  }
-});
-
 byId("accountSearch").addEventListener("input", debounce(renderAccountTable, 160));
 
 byId("accountTable").addEventListener("click", (event) => {
@@ -14058,11 +13452,8 @@ migrateTaskAttachmentsToIndexedDb();
 // ⏳ KÍCH HOẠT CHU KỲ ĐỒNG BỘ NỀN SUPABASE STORAGE DIRECT (8 GIÂY/LẦN)
 // =========================================================================
 
-// Keep PWA updates dormant until an administrator explicitly applies a released version.
+// Register the static application shell only.
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (systemUpdate.reloadOnControllerChange) window.location.reload();
-  });
   window.addEventListener("load", () => {
     registerPwaForUpdates();
   });
