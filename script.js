@@ -4265,7 +4265,7 @@ function canCopyTask(task) {
 
 function canReportTask(task) {
   const person = currentPerson();
-  return !!task && !!person && task.ownerId === person.id;
+  return !!task && !!person && taskParticipantPersonId(task.ownerId) === person.id;
 }
 
 function canReviewTaskCompletionForPerson(personId) {
@@ -4634,11 +4634,17 @@ function taskCollaboratorIds(task) {
       .split(",")
       .map((id) => id.trim())
       .filter(Boolean);
-  return uniquePersonIds([...ids, task?.collaboratorId]);
+  return uniquePersonIds([...ids, task?.collaboratorId].map(taskParticipantPersonId));
+}
+
+function taskParticipantPersonId(value) {
+  const id = String(value || "").trim();
+  if (!id || personById(id)) return id;
+  return String(accountById(id)?.personId || id);
 }
 
 function taskParticipantIds(task) {
-  return uniquePersonIds([task?.ownerId, ...taskCollaboratorIds(task)]);
+  return uniquePersonIds([taskParticipantPersonId(task?.ownerId), ...taskCollaboratorIds(task)]);
 }
 
 function taskHasParticipantInDepartment(task, departmentId) {

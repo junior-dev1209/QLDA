@@ -1,4 +1,4 @@
-const CACHE_NAME = "phuc-thinh-kpi-v281";
+const CACHE_NAME = "phuc-thinh-kpi-v282";
 const APP_SHELL = [
   "./",
   "./index.html",
