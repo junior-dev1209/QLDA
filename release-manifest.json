@@ -2,15 +2,15 @@
   "manifestVersion": 1,
   "channel": "stable",
   "latest": {
-    "version": "2.2.5",
+    "version": "2.2.6",
     "build": "2026.08.04",
     "releasedAt": "2026-08-04T00:00:00+07:00",
     "dataSchemaVersion": 1,
     "requiresBackup": true,
     "summary": [
-      "Cho phép Người thực hiện, Người phối hợp và cấp quản lý cập nhật tiến độ công việc quá hạn theo đúng quyền.",
-      "Đồng bộ an toàn trạng thái Chờ đánh giá mà không cho phép tự duyệt hoặc tự nhập chất lượng.",
-      "Gộp thay đổi tiến độ khi có cập nhật song song và giữ nguyên các trường khác của công việc."
+      "Tương thích cập nhật tiến độ với Edge Function cũ trong khi chờ triển khai máy chủ mới.",
+      "Không gửi các trường duyệt hoàn thành ngoài quyền của Người thực hiện hoặc Người phối hợp.",
+      "Không đồng bộ lại KPI cá nhân của người khác khi Người phối hợp chỉ cập nhật tiến độ công việc."
     ]
   }
 }

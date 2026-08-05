@@ -24,6 +24,14 @@ Neu mot buoc that bai, goi ma cu van duoc giu nguyen.
 
 Sau buoc nay, hosting chi giu trinh khoi dong on dinh. Trinh khoi dong tu tai goi ma dang kich hoat trong Supabase Storage khi nguoi dung mo lai he thong.
 
+## Khac phuc ban online chay ma cu
+
+Khi website hien thong bao dong bo khong dung, thieu anh hoac thiet bi van chay giao dien cu, khong chi tai rieng `script.js`. Upload dong bo cac tep goc `index.html`, `styles.css`, `people-data.js`, `supabase-config.js`, `release-bootstrap.js`, `script.js`, `service-worker.js`, `manifest.webmanifest`, `app-icon-phuc-thinh.png`, `icon.svg` va toan bo thu muc `assets`.
+
+Sau khi upload, kiem tra `service-worker.js` co `phuc-thinh-kpi-v278`, mo lai bang mot cua so an danh hoac hard refresh mot lan. Neu hosting co CDN, xoa cache CDN cho cac tep tren truoc khi kiem tra. Khong xoa du lieu trinh duyet cua nguoi dung trong luc dang dong bo.
+
+Khuyen nghi deploy Edge Function `kpi-sync` cung luc voi giao dien de dung co che gop an toan cac cap nhat tien do tu nhieu thiet bi. Giao dien 2.2.6 van tuong thich tam thoi voi Edge Function cu, nhung phien ban `2026.08.04.3` tro len la bat buoc de co day du xu ly dong thoi va phan quyen tien do o may chu.
+
 ## Tao goi dau tien
 
 1. Dang nhap Admin va chon `Kiem tra phien ban`.
