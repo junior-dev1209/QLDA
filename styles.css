@@ -5317,6 +5317,55 @@ td:last-child {
   gap: 7px;
 }
 
+.task-behavior-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #f1b6b6;
+  border-radius: 8px;
+  background: #fff8f8;
+}
+
+.task-behavior-summary > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.task-behavior-summary strong {
+  color: #991b1b;
+  font-size: 0.9rem;
+}
+
+.task-behavior-summary small {
+  color: #7f1d1d;
+  overflow-wrap: anywhere;
+}
+
+.task-behavior-summary button {
+  flex: 0 0 auto;
+}
+
+.criteria-violation-button {
+  color: #b42318;
+  border-color: #f1b6b6;
+  background: #fff5f5;
+}
+
+.criteria-violation-button:hover {
+  color: #991b1b;
+  border-color: #dc2626;
+  background: #ffebeb;
+}
+
+.task-behavior-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .task-violation-link {
   width: 100%;
   display: grid;
@@ -6198,6 +6247,16 @@ td:last-child {
   .task-violation {
     overflow-wrap: anywhere;
     font-size: 0.82rem;
+  }
+
+  .task-behavior-summary {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .task-behavior-summary button {
+    align-self: flex-start;
   }
 
   .task-column-head {

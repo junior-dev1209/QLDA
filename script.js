@@ -4868,6 +4868,30 @@ function taskBehaviorRuleIndexes() {
   };
 }
 
+function personalCriterionForTask(task, personId) {
+  const person = personById(personId);
+  const criteria = roleById(person?.roleId)?.criteria || [];
+  const category = String(task?.category || "").trim();
+  if (category) {
+    const directCriterion = criteria.find(([criterionName]) => {
+      const normalizedCategory = normalizeSearchText(category);
+      const normalizedCriterion = normalizeSearchText(criterionName);
+      return normalizedCategory === normalizedCriterion
+        || normalizedCategory.includes(normalizedCriterion)
+        || normalizedCriterion.includes(normalizedCategory);
+    });
+    if (directCriterion) return directCriterion[0];
+  }
+  const matchedCriterion = criteria.find(([criterionName]) => taskMatchesKpiCriterion(task, criterionName));
+  return matchedCriterion?.[0] || category || "Chưa gắn tiêu chí KPI";
+}
+
+function taskBehaviorViolationCount(links, criterionName) {
+  return links
+    .filter((item) => item.criterionName === criterionName)
+    .reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
+}
+
 function automaticTaskBehaviorForPerson(personId, period) {
   const indexes = taskBehaviorRuleIndexes();
   const counts = {};
@@ -4886,6 +4910,7 @@ function automaticTaskBehaviorForPerson(personId, period) {
         title: task.title,
         due: task.due,
         dueTime: task.dueTime || "",
+        criterionName: personalCriterionForTask(task, personId),
         reasons,
       });
     });
@@ -6358,6 +6383,7 @@ function renderCriteriaInputs(existing = {}) {
   const person = personById(byId("evalPerson").value);
   const role = person ? roleById(person.roleId) : null;
   const period = byId("evalPeriod").value || state.activePeriod;
+  const automaticBehaviorLinks = person ? automaticTaskBehaviorForPerson(person.id, period).links : [];
   byId("roleHint").textContent = role
     ? `${role.name}. Kế hoạch tự động lấy từ số công việc trong kỳ ${formatMonthPeriod(period)}; Thực hiện tự động cộng từ điểm chất lượng của các công việc hoàn thành. Hệ thống tự tính % hoàn thành = Thực hiện / Kế hoạch, tối đa 120% theo quy chế.`
     : "Chọn nhân sự để hiển thị bộ tiêu chí.";
@@ -6367,12 +6393,14 @@ function renderCriteriaInputs(existing = {}) {
           const plan = plannedTaskCountForPersonalCriterion(person.id, period, criterion[0]);
           const actual = actualTaskScoreForPersonalCriterion(person.id, period, criterion[0]);
           const result = calculateCriterionResult(plan, actual, criterion[1]);
+          const violationCount = taskBehaviorViolationCount(automaticBehaviorLinks, criterion[0]);
           return `
             <article class="criteria-item">
               <div class="criteria-top">
                 <strong>${escapeHtml(criterion[0])}</strong>
                 <span class="criteria-actions">
                   <span class="badge">Trọng số ${criterion[1]}</span>
+                  ${violationCount ? `<button class="ghost criteria-detail-button criteria-violation-button" data-kpi-behavior-criterion="${escapeHtml(criterion[0])}" type="button" title="Xem lỗi tự động từ công việc liên quan">${violationCount} lỗi</button>` : ""}
                   <button class="ghost criteria-detail-button" data-kpi-detail="personal" data-kpi-criterion="${escapeHtml(criterion[0])}" type="button">Chi tiết</button>
                 </span>
               </div>
@@ -6410,18 +6438,16 @@ function renderTaskBehaviorLinks(links = []) {
     container.innerHTML = '<span class="muted">Chưa có lỗi tự động từ công việc trong kỳ này.</span>';
     return;
   }
+  const violationCount = links.reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
+  const criteriaCount = new Set(links.map((item) => item.criterionName).filter(Boolean)).size;
   container.innerHTML = `
-    <strong>Lỗi tự động từ công việc</strong>
-    ${links
-      .map(
-        (item) => `
-          <button class="task-violation-link" data-task-behavior-link="${escapeHtml(item.taskId)}" type="button">
-            <span>${escapeHtml(item.title)}</span>
-            <small>${escapeHtml(formatTaskDeadline(item) || "chưa có ngày hoàn thành")} · ${escapeHtml(item.reasons.join("; "))}</small>
-          </button>
-        `,
-      )
-      .join("")}
+    <div class="task-behavior-summary">
+      <div>
+        <strong>Lỗi tự động từ công việc</strong>
+        <small>${links.length} công việc · ${violationCount} lỗi · ${criteriaCount} tiêu chí KPI liên quan</small>
+      </div>
+      <button class="ghost criteria-detail-button" data-task-behavior-detail type="button">Chi tiết</button>
+    </div>
   `;
 }
 
@@ -6701,6 +6727,71 @@ function renderKpiTaskDetailItem(task) {
       ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
     </article>
   `;
+}
+
+function taskBehaviorDetailsForCurrentEvaluation(criterionName = "") {
+  const personId = byId("evalPerson").value;
+  const period = byId("evalPeriod").value || state.activePeriod;
+  const person = personById(personId);
+  const links = automaticTaskBehaviorForPerson(personId, period).links
+    .filter((item) => !criterionName || item.criterionName === criterionName)
+    .map((item) => ({ ...item, task: state.tasks.find((task) => task.id === item.taskId) }))
+    .filter((item) => item.task && canViewTaskRecord(item.task))
+    .sort((a, b) => sortKpiDetailTasks(a.task, b.task));
+  return {
+    person,
+    period,
+    criterionName,
+    links,
+  };
+}
+
+function renderTaskBehaviorDetailItem(item) {
+  const task = item.task;
+  const owner = personById(task.ownerId);
+  const collaboratorNames = taskCollaboratorNames(task);
+  return `
+    <article class="kpi-task-detail-item task-behavior-detail-item">
+      <div class="section-head">
+        <div>
+          <span class="badge bad">Lỗi tự động</span>
+          <h3>${escapeHtml(item.title || task.title || "Công việc")}</h3>
+        </div>
+        <button class="ghost criteria-detail-button" data-open-kpi-criterion="${escapeHtml(item.criterionName)}" type="button">Mở tiêu chí</button>
+      </div>
+      <div class="kpi-task-detail-meta">
+        <span><strong>Tiêu chí KPI theo vị trí:</strong> ${escapeHtml(item.criterionName || "Chưa gắn tiêu chí KPI")}</span>
+        <span><strong>Trạng thái:</strong> ${escapeHtml(getDueStatus(task))}</span>
+        <span><strong>Người thực hiện:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
+        <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
+        <span><strong>Ngày hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa cập nhật")}</span>
+        <span><strong>Danh mục công việc:</strong> ${escapeHtml(task.category || "Chưa phân loại")}</span>
+      </div>
+      <div class="task-violation"><strong>Lỗi ghi nhận:</strong> ${escapeHtml(item.reasons.join("; "))}</div>
+      <div class="task-behavior-detail-actions">
+        <button class="ghost criteria-detail-button" data-open-kpi-task="${escapeHtml(task.id)}" type="button">Mở công việc</button>
+      </div>
+    </article>
+  `;
+}
+
+function openTaskBehaviorDetailDialog(criterionName = "") {
+  const detail = taskBehaviorDetailsForCurrentEvaluation(criterionName);
+  const violationCount = detail.links.reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
+  const criteriaCount = new Set(detail.links.map((item) => item.criterionName).filter(Boolean)).size;
+  const title = criterionName || "Lỗi tự động từ công việc";
+  byId("kpiTaskDetailTitle").textContent = title;
+  byId("kpiTaskDetailSubtitle").textContent = `KPI cá nhân · ${detail.person?.name || "Chưa chọn nhân sự"} · kỳ ${formatPeriod(detail.period)}`;
+  byId("kpiTaskDetailContext").innerHTML = `
+    <span><strong>${detail.links.length}</strong> công việc có lỗi</span>
+    <span><strong>${violationCount}</strong> lỗi tự động</span>
+    <span><strong>${criteriaCount}</strong> tiêu chí KPI liên quan</span>
+  `;
+  byId("kpiTaskDetailList").innerHTML = detail.links.length
+    ? detail.links.map(renderTaskBehaviorDetailItem).join("")
+    : '<div class="empty-state">Chưa có lỗi tự động từ công việc thuộc tiêu chí này trong kỳ đã chọn.</div>';
+  byId("kpiTaskDetailDialog").classList.remove("is-hidden");
+  byId("kpiTaskDetailDialog").setAttribute("aria-hidden", "false");
 }
 
 function openKpiTaskDetailDialog(scope, criterionName) {
@@ -12149,6 +12240,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     mergedRecord.completionReviewedById = "";
     mergedRecord.completionReviewedByName = "";
     mergedRecord.completionReviewNote = "";
+    mergedRecord.lateCompletion = false;
     if (!adminOverride) mergedRecord.qualityPercent = "";
     mergedRecord.qualityAssessedAt = "";
     mergedRecord.qualityAssessedById = "";
@@ -12564,6 +12656,11 @@ byId("kpiTaskDetailDialog").addEventListener("click", (event) => {
   }
 });
 byId("kpiTaskDetailList").addEventListener("click", (event) => {
+  const criterionName = event.target.closest("[data-open-kpi-criterion]")?.dataset.openKpiCriterion;
+  if (criterionName) {
+    openKpiTaskDetailDialog("personal", criterionName);
+    return;
+  }
   const taskId = event.target.closest("[data-open-kpi-task]")?.dataset.openKpiTask;
   if (!taskId) return;
   closeKpiTaskDetailDialog();
@@ -12771,6 +12868,11 @@ byId("evalPeriod").addEventListener("change", () => {
 });
 byId("evalDepartmentScore").addEventListener("input", updateScorePreview);
 byId("criteriaInputs").addEventListener("click", (event) => {
+  const behaviorCriterion = event.target.closest("[data-kpi-behavior-criterion]")?.dataset.kpiBehaviorCriterion;
+  if (behaviorCriterion) {
+    openTaskBehaviorDetailDialog(behaviorCriterion);
+    return;
+  }
   const detailButton = event.target.closest("[data-kpi-detail]");
   if (!detailButton) return;
   openKpiTaskDetailDialog(detailButton.dataset.kpiDetail, detailButton.dataset.kpiCriterion || "");
@@ -12904,6 +13006,10 @@ byId("evaluationTable").addEventListener("click", (event) => {
 });
 
 byId("taskBehaviorLinks").addEventListener("click", (event) => {
+  if (event.target.closest("[data-task-behavior-detail]")) {
+    openTaskBehaviorDetailDialog();
+    return;
+  }
   const taskId = event.target.closest("[data-task-behavior-link]")?.dataset.taskBehaviorLink;
   if (!taskId) return;
   openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
