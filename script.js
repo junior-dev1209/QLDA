@@ -1167,6 +1167,7 @@ const sharedSync = {
   conflictNotified: false,
   baseState: null,
   serverBaseState: null,
+  deploymentVersion: "",
   accountId: "",
   dirtyAccountId: "",
   localChangeVersion: 0,
@@ -2768,6 +2769,7 @@ async function probeSharedSync({ force = false } = {}) {
     const { response, payload } = await sharedJsonRequest("status");
     sharedSync.available = response.ok && payload?.available === true;
     sharedSync.initialized = sharedSync.available ? Boolean(payload?.initialized) : null;
+    sharedSync.deploymentVersion = sharedSync.available ? String(payload?.deploymentVersion || "") : "";
   } catch {
     // Do not cache a transient connection failure. The next online/focus/poll
     // event must be able to reconnect without forcing the user to reload.
@@ -2775,6 +2777,25 @@ async function probeSharedSync({ force = false } = {}) {
     sharedSync.initialized = null;
   }
   return sharedSync.available === true;
+}
+
+function deploymentVersionAtLeast(actual, required) {
+  const parse = (value) => String(value || "").match(/\d+/g)?.map(Number) || [];
+  const current = parse(actual);
+  const minimum = parse(required);
+  if (!current.length || !minimum.length) return false;
+  const length = Math.max(current.length, minimum.length);
+  for (let index = 0; index < length; index += 1) {
+    const currentPart = current[index] || 0;
+    const minimumPart = minimum[index] || 0;
+    if (currentPart !== minimumPart) return currentPart > minimumPart;
+  }
+  return true;
+}
+
+function sharedSyncSupportsTaskProgressLifecycle() {
+  if (!usingSupabaseSync()) return true;
+  return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.04.3");
 }
 
 async function adoptSharedState(payload, { render = true } = {}) {
@@ -4305,6 +4326,25 @@ function canUpdateTaskCollaborators(task) {
 
 function canUpdateTaskProgress(task) {
   return canReportTask(task) || canCollaborateTask(task) || canManageDepartmentTaskProgress(task);
+}
+
+function preserveLegacyTaskProgressLifecycle(record, existing) {
+  const fields = [
+    "completionReviewStatus",
+    "completionReviewedAt",
+    "completionReviewedById",
+    "completionReviewedByName",
+    "completionReviewNote",
+    "lateCompletion",
+    "qualityPercent",
+    "qualityAssessedAt",
+    "qualityAssessedById",
+    "qualityAssessedByName",
+  ];
+  fields.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(existing || {}, field)) record[field] = existing[field];
+    else delete record[field];
+  });
 }
 
 function isTaskAssigner(task) {
@@ -6578,7 +6618,15 @@ function syncPersonalEvaluationTaskScoresForTask(task, previousTask = null) {
     const period = taskPeriod(item);
     taskParticipantIds(item).forEach((personId) => addTarget(personId, period));
   });
-  targets.forEach((item) => syncPersonalEvaluationTaskScores(item.personId, item.period));
+  targets
+    .filter((item) => {
+      if (isAdmin() || isDirector()) return true;
+      if (item.period !== currentMonth()) return false;
+      const person = personById(item.personId);
+      if ((isManager() || isDeputyManager()) && person?.departmentId === currentDepartmentId()) return true;
+      return item.personId === currentPerson()?.id;
+    })
+    .forEach((item) => syncPersonalEvaluationTaskScores(item.personId, item.period));
 }
 
 function sortKpiDetailTasks(a, b) {
@@ -12723,6 +12771,9 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     mergedRecord.qualityAssessedAt = timestamp;
     mergedRecord.qualityAssessedById = actor.id;
     mergedRecord.qualityAssessedByName = actor.name;
+  }
+  if (existingTask && !adminOverride && canUpdateReport && !sharedSyncSupportsTaskProgressLifecycle()) {
+    preserveLegacyTaskProgressLifecycle(mergedRecord, existingTask);
   }
 
   if (recordKind === TASK_KIND_ASSIGNED && canEditDetails) {
