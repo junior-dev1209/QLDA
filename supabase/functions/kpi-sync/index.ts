@@ -648,7 +648,7 @@ function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
     "qualityAssessedByName",
   ];
   const cleared = completionFields.every((field) => isBlankTaskField(next[field]));
-  if (!cleared || Boolean(next.lateCompletion)) return false;
+  if (!cleared) return false; // 🌟 Đã bỏ Boolean(next.lateCompletion)
   if (completedTaskStatus(next.status)) return String(next.completionReviewStatus || "") === "pending";
   return isBlankTaskField(next.completionReviewStatus);
 }
@@ -808,28 +808,24 @@ function shouldNormalizeTaskProgressUpdate(
   return taskProgressChangeIntent(base, candidate, true);
 }
 
-function canUpdateTask(state: JsonRecord, actor: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
-  if (isAdmin(actor)) return true;
+function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
+  if (isAdmin(account)) return true;
 
-  // 🌟 MỚI: Cho phép Người thực hiện / Người phối hợp cập nhật tiến độ & báo cáo
-  if (taskParticipantForAccount(state, previous, actor)) {
-    // Nếu thông tin cốt lõi (Tên công việc, Người thực hiện, Hạn hoàn thành, Vị trí KPI) giữ nguyên
-    const coreFieldsUnchanged = sameJson(
-      withoutKeys(previous, [...taskProgressMutableFields, "collaboratorIds", "collaboratorId", "note"]),
-      withoutKeys(next, [...taskProgressMutableFields, "collaboratorIds", "collaboratorId", "note"])
-    );
-    if (coreFieldsUnchanged) return true;
-    if (!taskProgressIsLocked(previous) && taskProgressOnlyChange(previous, next, true)) return true;
+  // 🌟 MỚI: Cho phép Người thực hiện / Người phối hợp cập nhật báo cáo & tiến độ dù công việc quá hạn hay không
+  if (taskParticipantForAccount(state, previous, account)) {
+    if (!taskProgressIsLocked(previous)) {
+      return true; // Cho phép nhân viên cập nhật nếu công việc chưa bị Trưởng phòng khóa/duyệt
+    }
   }
 
-  const canManageDepartmentProgress = isDirector(actor)
-    || (hasDepartmentTaskAccess(actor) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, actor)));
-  if (!taskProgressIsLocked(previous) && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
-  if (canReviewTaskCompletion(state, actor, previous) && taskCompletionReviewChange(previous, next)) return true;
-  if (canAssessTaskQuality(state, actor, previous) && taskQualityOnlyChange(previous, next)) return true;
-  if (assignedTask(previous) && taskAssigner(previous, actor) && (isDirector(actor) || hasDepartmentManagement(actor))) {
-    if (isDirector(actor)) return true;
-    return personIsInManagedDepartment(state, actor, next.ownerId);
+  const canManageDepartmentProgress = isDirector(account)
+    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
+  if (!taskProgressIsLocked(previous) && canManageDepartmentProgress) return true;
+  if (canReviewTaskCompletion(state, account, previous) && taskCompletionReviewChange(previous, next)) return true;
+  if (canAssessTaskQuality(state, account, previous) && taskQualityOnlyChange(previous, next)) return true;
+  if (assignedTask(previous) && taskAssigner(previous, account) && (isDirector(account) || hasDepartmentManagement(account))) {
+    if (isDirector(account)) return true;
+    return personIsInManagedDepartment(state, account, next.ownerId);
   }
   return false;
 }
