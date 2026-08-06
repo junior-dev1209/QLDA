@@ -811,16 +811,14 @@ function shouldNormalizeTaskProgressUpdate(
 function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
   if (isAdmin(account)) return true;
 
-  // 🌟 MỚI: Cho phép Người thực hiện / Người phối hợp cập nhật báo cáo & tiến độ dù công việc quá hạn hay không
+  // 🌟 Cho phép Người thực hiện / Người phối hợp cập nhật tiến độ công việc
   if (taskParticipantForAccount(state, previous, account)) {
-    if (!taskProgressIsLocked(previous)) {
-      return true; // Cho phép nhân viên cập nhật nếu công việc chưa bị Trưởng phòng khóa/duyệt
-    }
+    return true;
   }
 
   const canManageDepartmentProgress = isDirector(account)
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
-  if (!taskProgressIsLocked(previous) && canManageDepartmentProgress) return true;
+  if (canManageDepartmentProgress) return true;
   if (canReviewTaskCompletion(state, account, previous) && taskCompletionReviewChange(previous, next)) return true;
   if (canAssessTaskQuality(state, account, previous) && taskQualityOnlyChange(previous, next)) return true;
   if (assignedTask(previous) && taskAssigner(previous, account) && (isDirector(account) || hasDepartmentManagement(account))) {
