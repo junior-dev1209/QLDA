@@ -4310,7 +4310,12 @@ function canUpdateTaskCollaborators(task) {
   return canManageDepartmentTaskProgress(task);
 }
 
+function taskProgressLockedAfterApproval(task) {
+  return !!task && taskCompletionIsApproved(task);
+}
+
 function canUpdateTaskProgress(task) {
+  if (!task || (!isAdmin() && taskProgressLockedAfterApproval(task))) return false;
   return canReportTask(task) || canCollaborateTask(task) || canManageDepartmentTaskProgress(task);
 }
 
@@ -4354,7 +4359,7 @@ function canEndTaskAssignment(task) {
 }
 
 function canOpenTask(task) {
-  return canEditTaskDetails(task) || canDeleteTask(task) || canUpdateTaskProgress(task) || canReviewTaskCompletion(task);
+  return canViewTaskRecord(task) || canEditTaskDetails(task) || canDeleteTask(task) || canUpdateTaskProgress(task) || canReviewTaskCompletion(task);
 }
 
 function canViewTaskRecord(task) {
@@ -4890,6 +4895,17 @@ function taskBehaviorViolationCount(links, criterionName) {
   return links
     .filter((item) => item.criterionName === criterionName)
     .reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
+}
+
+function taskBehaviorReasonsForRule(reasons = [], ruleName = "") {
+  const list = Array.isArray(reasons) ? reasons : [];
+  if (ruleName === "Không báo cáo đúng hạn") {
+    return list.filter((reason) => reason.includes("phản hồi") || reason.includes("báo cáo"));
+  }
+  if (ruleName === "Chậm thời hạn hoàn thành") {
+    return list.filter((reason) => reason.includes("Chậm thời hạn hoàn thành"));
+  }
+  return [];
 }
 
 function automaticTaskBehaviorForPerson(personId, period) {
@@ -5868,7 +5884,7 @@ function renderTaskBoard(options = {}) {
             const editable = canEditTaskDetails(task);
             const deletable = canDeleteTask(task);
             const copyable = canCopyTask(task);
-            const reportable = canUpdateTaskProgress(task) && !taskHasQualityPercent(task);
+            const reportable = canUpdateTaskProgress(task);
             const reviewable = canReviewTaskCompletion(task);
             const attachments = task.attachments || [];
             const latestReport = latestTaskProgressReport(task);
@@ -6174,7 +6190,7 @@ function taskDetailActionMarkup(task) {
   const assigned = isAssignedTask(task);
   const editable = canEditTaskDetails(task);
   const copyable = canCopyTask(task);
-  const reportable = canUpdateTaskProgress(task) && (!taskHasQualityPercent(task) || isAdmin());
+  const reportable = canUpdateTaskProgress(task);
   const reviewable = canReviewTaskCompletion(task);
   const endable = canEndTaskAssignment(task);
   const deletable = canDeleteTask(task);
@@ -6397,12 +6413,12 @@ function renderCriteriaInputs(existing = {}) {
           return `
             <article class="criteria-item">
               <div class="criteria-top">
-                <strong>${escapeHtml(criterion[0])}</strong>
                 <span class="criteria-actions">
                   <span class="badge">Trọng số ${criterion[1]}</span>
                   ${violationCount ? `<button class="ghost criteria-detail-button criteria-violation-button" data-kpi-behavior-criterion="${escapeHtml(criterion[0])}" type="button" title="Xem lỗi tự động từ công việc liên quan">${violationCount} lỗi</button>` : ""}
                   <button class="ghost criteria-detail-button" data-kpi-detail="personal" data-kpi-criterion="${escapeHtml(criterion[0])}" type="button">Chi tiết</button>
                 </span>
+                <strong class="criteria-title">${escapeHtml(criterion[0])}</strong>
               </div>
               <div class="criteria-input-grid">
                 <label>Kế hoạch
@@ -6434,21 +6450,8 @@ function behaviorManualValues(existing = {}) {
 function renderTaskBehaviorLinks(links = []) {
   const container = byId("taskBehaviorLinks");
   if (!container) return;
-  if (!links.length) {
-    container.innerHTML = '<span class="muted">Chưa có lỗi tự động từ công việc trong kỳ này.</span>';
-    return;
-  }
-  const violationCount = links.reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
-  const criteriaCount = new Set(links.map((item) => item.criterionName).filter(Boolean)).size;
-  container.innerHTML = `
-    <div class="task-behavior-summary">
-      <div>
-        <strong>Lỗi tự động từ công việc</strong>
-        <small>${links.length} công việc · ${violationCount} lỗi · ${criteriaCount} tiêu chí KPI liên quan</small>
-      </div>
-      <button class="ghost criteria-detail-button" data-task-behavior-detail type="button">Chi tiết</button>
-    </div>
-  `;
+  container.classList.add("is-hidden");
+  container.innerHTML = "";
 }
 
 function renderBehaviorInputs(existing = {}) {
@@ -6461,11 +6464,19 @@ function renderBehaviorInputs(existing = {}) {
         const automaticCount = automatic.counts[index] || 0;
         const manualValue = hasOwnValue(manualValues, index) ? manualValues[index] : "";
         return `
-        <label class="behavior-item">
-          <span class="behavior-top"><strong>${rule[0]}</strong><span class="badge ${rule[1] > 0 ? "good" : "bad"}">${rule[1] > 0 ? "+" : ""}${rule[1]}/lần</span></span>
-          <input id="behavior-${index}" type="number" min="0" value="${escapeHtml(manualValue)}" data-score-input>
+        <article class="behavior-item">
+          <div class="behavior-top">
+            <span class="behavior-actions">
+              <span class="badge ${rule[1] > 0 ? "good" : "bad"}">${rule[1] > 0 ? "+" : ""}${rule[1]}/lần</span>
+              <button class="ghost criteria-detail-button" data-task-behavior-rule="${index}" type="button">Chi tiết</button>
+            </span>
+            <strong class="behavior-title">${rule[0]}</strong>
+          </div>
+          <label class="behavior-count-field">Số lần ghi nhận
+            <input id="behavior-${index}" type="number" min="0" value="${escapeHtml(manualValue)}" data-score-input>
+          </label>
           ${automaticCount ? `<span class="field-note is-warning">Tự động từ công việc: ${automaticCount} lỗi</span>` : ""}
-        </label>
+        </article>
       `;
       },
     )
@@ -6487,11 +6498,11 @@ function renderDepartmentCriteriaInputs(existing = {}) {
           return `
             <article class="criteria-item department-criteria-item">
               <div class="criteria-top">
-                <strong>${escapeHtml(criterion[0])}</strong>
                 <span class="criteria-actions">
                   <span class="badge">Trọng số ${criterion[1]}</span>
                   <button class="ghost criteria-detail-button" data-kpi-detail="department" data-kpi-criterion="${escapeHtml(criterion[0])}" type="button">Chi tiết</button>
                 </span>
+                <strong class="criteria-title">${escapeHtml(criterion[0])}</strong>
               </div>
               <div class="criteria-input-grid">
                 <label>Kế hoạch
@@ -6729,12 +6740,18 @@ function renderKpiTaskDetailItem(task) {
   `;
 }
 
-function taskBehaviorDetailsForCurrentEvaluation(criterionName = "") {
+function taskBehaviorDetailsForCurrentEvaluation(criterionName = "", behaviorRuleIndex = null) {
   const personId = byId("evalPerson").value;
   const period = byId("evalPeriod").value || state.activePeriod;
   const person = personById(personId);
+  const behaviorRuleName = Number.isInteger(behaviorRuleIndex) ? behaviorRules[behaviorRuleIndex]?.[0] || "" : "";
   const links = automaticTaskBehaviorForPerson(personId, period).links
     .filter((item) => !criterionName || item.criterionName === criterionName)
+    .map((item) => ({
+      ...item,
+      reasons: behaviorRuleName ? taskBehaviorReasonsForRule(item.reasons, behaviorRuleName) : item.reasons,
+    }))
+    .filter((item) => item.reasons.length)
     .map((item) => ({ ...item, task: state.tasks.find((task) => task.id === item.taskId) }))
     .filter((item) => item.task && canViewTaskRecord(item.task))
     .sort((a, b) => sortKpiDetailTasks(a.task, b.task));
@@ -6742,6 +6759,7 @@ function taskBehaviorDetailsForCurrentEvaluation(criterionName = "") {
     person,
     period,
     criterionName,
+    behaviorRuleName,
     links,
   };
 }
@@ -6775,11 +6793,11 @@ function renderTaskBehaviorDetailItem(item) {
   `;
 }
 
-function openTaskBehaviorDetailDialog(criterionName = "") {
-  const detail = taskBehaviorDetailsForCurrentEvaluation(criterionName);
+function openTaskBehaviorDetailDialog(criterionName = "", behaviorRuleIndex = null) {
+  const detail = taskBehaviorDetailsForCurrentEvaluation(criterionName, behaviorRuleIndex);
   const violationCount = detail.links.reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
   const criteriaCount = new Set(detail.links.map((item) => item.criterionName).filter(Boolean)).size;
-  const title = criterionName || "Lỗi tự động từ công việc";
+  const title = detail.behaviorRuleName || criterionName || "Lỗi tự động từ công việc";
   byId("kpiTaskDetailTitle").textContent = title;
   byId("kpiTaskDetailSubtitle").textContent = `KPI cá nhân · ${detail.person?.name || "Chưa chọn nhân sự"} · kỳ ${formatPeriod(detail.period)}`;
   byId("kpiTaskDetailContext").innerHTML = `
@@ -6789,7 +6807,7 @@ function openTaskBehaviorDetailDialog(criterionName = "") {
   `;
   byId("kpiTaskDetailList").innerHTML = detail.links.length
     ? detail.links.map(renderTaskBehaviorDetailItem).join("")
-    : '<div class="empty-state">Chưa có lỗi tự động từ công việc thuộc tiêu chí này trong kỳ đã chọn.</div>';
+    : `<div class="empty-state">Chưa có lỗi tự động từ công việc thuộc ${escapeHtml(detail.behaviorRuleName || criterionName || "tiêu chí này")} trong kỳ đã chọn.</div>`;
   byId("kpiTaskDetailDialog").classList.remove("is-hidden");
   byId("kpiTaskDetailDialog").setAttribute("aria-hidden", "false");
 }
@@ -10173,11 +10191,11 @@ function updateTaskFormLock(task = null) {
     : kind === TASK_KIND_ASSIGNED
       ? canAssignTasks()
       : canCreateRegularTasks();
-  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
-  const canUpdateReport = existingTask ? !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
-  const canUpdateCollaborators = existingTask ? !reportLockedByQuality && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
+  const reportLockedByApproval = !!existingTask && taskProgressLockedAfterApproval(existingTask) && !adminOverride;
+  const canUpdateReport = existingTask ? !reportLockedByApproval && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
+  const canUpdateCollaborators = existingTask ? !reportLockedByApproval && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
   const canEditQuality = !!existingTask && adminOverride;
-  const isReportOnly = !!existingTask && !canEditDetails && canUpdateTaskProgress(existingTask) && !reportLockedByQuality;
+  const isReportOnly = !!existingTask && !canEditDetails && canUpdateTaskProgress(existingTask) && !reportLockedByApproval;
   byId("taskOwnerLabelText").textContent = kind === TASK_KIND_ASSIGNED ? "Người được giao" : "Người thực hiện";
   byId("taskNoteLabelText").textContent = isReportOnly ? "Nội dung công việc / Báo cáo tiến độ mới" : kind === TASK_KIND_ASSIGNED ? "Yêu cầu giao việc" : "Nội dung công việc / Báo cáo tiến độ";
   byId("taskNote").placeholder =
@@ -10197,7 +10215,7 @@ function updateTaskFormLock(task = null) {
     .forEach((input) => {
       input.disabled = !canEditDetails;
     });
-  byId("taskNote").disabled = reportLockedByQuality || (!canEditDetails && !canUpdateReport);
+  byId("taskNote").disabled = reportLockedByApproval || (!canEditDetails && !canUpdateReport);
   byId("taskCollaborators")
     .querySelectorAll('input[type="checkbox"]')
     .forEach((input) => {
@@ -10227,11 +10245,11 @@ function updateTaskFormLock(task = null) {
   qualityInput.title = canEditQuality
     ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
     : "Đánh giá chất lượng được nhập cùng kết quả Đạt tại màn hình Duyệt hoàn thành.";
-  if (reportLockedByQuality) {
+  if (reportLockedByApproval) {
     const progressMeta = byId("taskProgressMeta");
     if (progressMeta) {
       const baseText = progressMeta.dataset.baseText || progressMeta.textContent || "";
-      progressMeta.textContent = `${baseText ? `${baseText} ` : ""}Công việc đã được đánh giá chất lượng, báo cáo tiến độ đã khóa.`;
+      progressMeta.textContent = `${baseText ? `${baseText} ` : ""}Công việc đã được đánh giá hoàn thành là Đạt, báo cáo tiến độ đã khóa.`;
     }
   }
   byId("taskForm").querySelector("button[type='submit']").disabled = !canEditDetails && !canUpdateReport && !canEditQuality;
@@ -10263,9 +10281,9 @@ function updateAssignmentTaskFormLock(task = null) {
   const adminOverride = isAdmin();
   const isClosed = existingTask && normalizeTaskStatus(existingTask.status) === TASK_STATUS_CLOSED;
   const canEditDetails = existingTask ? (!isClosed || adminOverride) && canEditTaskDetails(existingTask) : canAssignTaskToPerson(byId("assignmentTaskOwner").value) || canAssignTasks();
-  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
-  const canUpdateReport = existingTask ? (!isClosed || adminOverride) && !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
-  const canUpdateCollaborators = existingTask ? (!isClosed || adminOverride) && !reportLockedByQuality && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
+  const reportLockedByApproval = !!existingTask && taskProgressLockedAfterApproval(existingTask) && !adminOverride;
+  const canUpdateReport = existingTask ? (!isClosed || adminOverride) && !reportLockedByApproval && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
+  const canUpdateCollaborators = existingTask ? (!isClosed || adminOverride) && !reportLockedByApproval && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
   const canEditQuality = (!!existingTask && adminOverride) && (!isClosed || adminOverride);
   byId("assignmentTaskAssignerLabel").value = existingTask?.assignedByName || existingTask?.createdBy || (canAssignTasks() ? currentActorInfo().name : "");
   byId("assignmentTaskForm")
@@ -10288,21 +10306,21 @@ function updateAssignmentTaskFormLock(task = null) {
   qualityInput.title = canEditQuality
     ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
     : "Đánh giá chất lượng được nhập cùng kết quả Đạt tại màn hình Duyệt hoàn thành.";
-  const canRespondToAssignment = !!existingTask && (!isClosed || adminOverride) && !reportLockedByQuality && (adminOverride || canReportTask(existingTask));
+  const canRespondToAssignment = !!existingTask && (!isClosed || adminOverride) && !reportLockedByApproval && (adminOverride || canReportTask(existingTask));
   const collaboratorProgressOnly = !!existingTask && !canEditDetails && canCollaborateTask(existingTask) && !canReportTask(existingTask);
   const departmentManagementProgressOnly = !!existingTask && !canEditDetails && canManageDepartmentTaskProgress(existingTask) && !canReportTask(existingTask);
   const progressOnly = collaboratorProgressOnly || departmentManagementProgressOnly;
   byId("assignmentTaskResponseStatus").disabled = !canRespondToAssignment;
-  byId("assignmentTaskResponseNote").disabled = !(existingTask && (!isClosed || adminOverride) && !reportLockedByQuality && canUpdateReport);
+  byId("assignmentTaskResponseNote").disabled = !(existingTask && (!isClosed || adminOverride) && !reportLockedByApproval && canUpdateReport);
   byId("assignmentTaskResponseNoteLabel").textContent = progressOnly ? "Báo cáo tiến độ mới" : "Nội dung phản hồi / Báo cáo tiến độ";
   byId("assignmentTaskResponseNote").placeholder = progressOnly
     ? "Nhập nội dung báo cáo tiến độ mới. Mỗi lần lưu sẽ tạo một dòng lịch sử riêng."
     : "Xác nhận nhận việc, lý do cần trao đổi hoặc báo cáo tiến độ thực hiện...";
-  if (reportLockedByQuality) {
+  if (reportLockedByApproval) {
     const progressMeta = byId("assignmentTaskProgressMeta");
     if (progressMeta) {
       const baseText = progressMeta.dataset.baseText || progressMeta.textContent || "";
-      progressMeta.textContent = `${baseText ? `${baseText} ` : ""}Công việc đã được đánh giá chất lượng, báo cáo tiến độ đã khóa.`;
+      progressMeta.textContent = `${baseText ? `${baseText} ` : ""}Công việc đã được đánh giá hoàn thành là Đạt, báo cáo tiến độ đã khóa.`;
     }
   }
   byId("assignmentTaskForm").querySelector("button[type='submit']").disabled = !canEditDetails && !canUpdateReport && !canEditQuality;
@@ -12130,10 +12148,10 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     : recordKind === TASK_KIND_ASSIGNED
       ? canAssignTaskToPerson(preparedRecord.ownerId)
       : canCreateRegularTaskForPerson(preparedRecord.ownerId);
-  const reportLockedByQuality = !!existingTask && taskHasQualityPercent(existingTask) && !adminOverride;
-  const canUpdateReport = existingTask ? !reportLockedByQuality && (adminOverride || canUpdateTaskProgress(existingTask)) : false;
-  const canUpdateCollaborators = !!existingTask && !reportLockedByQuality && (canEditDetails || canUpdateTaskCollaborators(existingTask));
-  if (reportLockedByQuality) {
+  const reportLockedByApproval = !!existingTask && taskProgressLockedAfterApproval(existingTask) && !adminOverride;
+  const canUpdateReport = existingTask ? !reportLockedByApproval && (adminOverride || canUpdateTaskProgress(existingTask)) : false;
+  const canUpdateCollaborators = !!existingTask && !reportLockedByApproval && (canEditDetails || canUpdateTaskCollaborators(existingTask));
+  if (reportLockedByApproval) {
     preparedRecord.status = existingTask.status;
     preparedRecord.progress = existingTask.progress;
     preparedRecord.attachments = existingTask.attachments || [];
@@ -12314,7 +12332,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
   const shouldAppendProgressNote = !!progressReportNoteText && (!canEditDetails || progressReportNoteText !== (existingTask?.note || ""));
   const updateChangeLabels = existingTask ? taskUpdateChangeLabels(existingTask, mergedRecord) : [];
   const hasTaskUpdate = updateChangeLabels.length > 0;
-  if ((existingTask && !reportLockedByQuality && (canUpdateReport || canEditDetails)) && (shouldAppendProgressNote || hasTaskUpdate)) {
+  if ((existingTask && !reportLockedByApproval && (canUpdateReport || canEditDetails)) && (shouldAppendProgressNote || hasTaskUpdate)) {
     const updateAction = statusChanged
       ? "Chuyển trạng thái công việc"
       : qualityChanged
@@ -13005,14 +13023,10 @@ byId("evaluationTable").addEventListener("click", (event) => {
   }
 });
 
-byId("taskBehaviorLinks").addEventListener("click", (event) => {
-  if (event.target.closest("[data-task-behavior-detail]")) {
-    openTaskBehaviorDetailDialog();
-    return;
-  }
-  const taskId = event.target.closest("[data-task-behavior-link]")?.dataset.taskBehaviorLink;
-  if (!taskId) return;
-  openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
+byId("behaviorInputs").addEventListener("click", (event) => {
+  const ruleIndex = Number(event.target.closest("[data-task-behavior-rule]")?.dataset.taskBehaviorRule);
+  if (!Number.isInteger(ruleIndex) || ruleIndex < 0) return;
+  openTaskBehaviorDetailDialog("", ruleIndex);
 });
 
 byId("historyType").addEventListener("change", () => {
