@@ -4773,7 +4773,8 @@ function taskUpdateChangeLabels(previousTask, nextTask) {
 function getDueStatus(task) {
   const status = normalizeTaskStatus(task.status);
   if (status === TASK_STATUS_CLOSED) return status;
-  if (status === TASK_STATUS_COMPLETED && taskCompletionIsApproved(task)) return status;
+  // 🌟 Ưu tiên chuyển sang cột Hoàn thành khi trạng thái là "Hoàn thành"
+  if (status === TASK_STATUS_COMPLETED) return status;
   if (!task.due) return status;
   const due = taskDeadlineDate(task);
   return due && due < new Date() ? "Quá hạn" : status;
