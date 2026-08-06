@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="KPI Phúc Thịnh">
+  <rect width="512" height="512" rx="96" fill="#0f2d3a"/>
+  <path d="M112 348h288" stroke="#d8e0e8" stroke-width="28" stroke-linecap="round"/>
+  <path d="M130 332l74-82 64 44 106-132" fill="none" stroke="#d88c1f" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="204" cy="250" r="22" fill="#ffffff"/>
+  <circle cx="268" cy="294" r="22" fill="#ffffff"/>
+  <circle cx="374" cy="162" r="22" fill="#ffffff"/>
+  <path d="M122 394h120" stroke="#6fb3c8" stroke-width="24" stroke-linecap="round"/>
+</svg>

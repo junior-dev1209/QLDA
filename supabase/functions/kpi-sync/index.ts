@@ -11,11 +11,9 @@ const offlineLoginProofIterations = 60000;
 const stateId = "primary";
 const maxUploadBytes = 10 * 1024 * 1024;
 const presenceWindowMs = 2 * 60 * 1000;
-const maxPresenceLoginEvents = 10000;
-const maxUsageHistoryLoginEvents = 20000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.07.31.2";
+const deploymentVersion = "2026.08.05.4";
 
 const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "deletedIds"] as const;
@@ -44,6 +42,15 @@ type OnlineAccount = {
   role: string;
   departmentId: string;
   lastSeenAt: string;
+};
+type LoginActivityRow = {
+  accountId: string;
+  period: string;
+  loginCount: number;
+  activeToday: boolean;
+  activeWeek: boolean;
+  activeMonth: boolean;
+  lastLoginAt: string;
 };
 
 if (!supabaseUrl || !serviceRoleKey) {
@@ -242,7 +249,8 @@ async function snapshot(): Promise<StateSnapshot> {
     updatedAt: String(data.updated_at || ""),
     state: validState(data.state) ? clone(data.state) : defaultState(),
   };
-  if (!purgeRetiredAssignmentTasks(current.state)) return current;
+  const repairedLinks = repairPersonnelAccountLinks(current.state) + repairTaskParticipantLinks(current.state);
+  if (!purgeRetiredAssignmentTasks(current.state) && !repairedLinks) return current;
   const { data: updated, error: updateError } = await admin.rpc("kpi_update_shared_state", {
     expected_revision: current.revision,
     next_state: current.state,
@@ -386,6 +394,68 @@ function accountRole(account: JsonRecord): string {
   return String(account.role || "");
 }
 
+function normalizedIdentity(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u0111/g, "d")
+    .replace(/\u0110/g, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function personnelAccountRoleForPerson(person: JsonRecord): string {
+  const roleId = String(person.roleId || "");
+  if (roleId.startsWith("truong-phong-")) return "manager";
+  if (roleId.startsWith("pho-phong-")) return "deputy_manager";
+  if (roleId.startsWith("truong-bo-phan-")) return "section_head";
+  return "employee";
+}
+
+function isPersonnelAccount(account: JsonRecord): boolean {
+  const role = accountRole(account);
+  return Boolean(account.autoCreated) || !role || ["employee", "section_head", "manager", "deputy_manager"].includes(role);
+}
+
+function linkedPersonForAccount(state: JsonRecord, account: JsonRecord | undefined): JsonRecord | undefined {
+  if (!account) return undefined;
+  const direct = personForId(state, String(account.personId || "").trim());
+  if (direct) return direct;
+  if (!isPersonnelAccount(account)) return undefined;
+
+  const accountKeys = new Set(
+    [normalizedIdentity(account.username), normalizedIdentity(account.displayName)].filter(Boolean),
+  );
+  if (!accountKeys.size) return undefined;
+  const matches = records(state, "people").filter((person) => accountKeys.has(normalizedIdentity(person.name)));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function resolvedPersonnelAccount(state: JsonRecord, account: JsonRecord): JsonRecord {
+  const person = linkedPersonForAccount(state, account);
+  if (!person) return account;
+  const role = accountRole(account);
+  const shouldSyncRole = !role || isPersonnelAccount(account);
+  return {
+    ...account,
+    personId: String(person.id || ""),
+    departmentId: String(person.departmentId || ""),
+    ...(shouldSyncRole ? { role: personnelAccountRoleForPerson(person) } : {}),
+  };
+}
+
+function repairPersonnelAccountLinks(state: JsonRecord): number {
+  let changed = 0;
+  records(state, "accounts").forEach((account) => {
+    const repaired = resolvedPersonnelAccount(state, account);
+    if (sameJson(account, repaired)) return;
+    Object.assign(account, repaired);
+    changed += 1;
+  });
+  return changed;
+}
+
 function isAdmin(account: JsonRecord): boolean {
   return accountRole(account) === "admin";
 }
@@ -423,12 +493,16 @@ function hasDepartmentManagement(account: JsonRecord): boolean {
   return ["manager", "deputy_manager"].includes(accountRole(account));
 }
 
-function accountDepartmentId(state: JsonRecord, account: JsonRecord): string {
-  return String(account.departmentId || personForId(state, String(account.personId || ""))?.departmentId || "");
+function hasDepartmentTaskAccess(account: JsonRecord): boolean {
+  return hasDepartmentManagement(account) || accountRole(account) === "section_head";
 }
 
-function accountPersonId(account: JsonRecord): string {
-  return String(account.personId || "");
+function accountDepartmentId(state: JsonRecord, account: JsonRecord): string {
+  return String(account.departmentId || linkedPersonForAccount(state, account)?.departmentId || "");
+}
+
+function accountPersonId(state: JsonRecord, account: JsonRecord): string {
+  return String(linkedPersonForAccount(state, account)?.id || "");
 }
 
 function isCurrentPeriod(value: unknown): boolean {
@@ -436,7 +510,8 @@ function isCurrentPeriod(value: unknown): boolean {
 }
 
 function personIsInManagedDepartment(state: JsonRecord, account: JsonRecord, personId: unknown): boolean {
-  const person = personForId(state, String(personId || ""));
+  const participantId = String(personId || "");
+  const person = personForId(state, participantId) || linkedPersonForAccount(state, accountForId(state, participantId));
   return Boolean(person && String(person.departmentId || "") === accountDepartmentId(state, account));
 }
 
@@ -446,6 +521,57 @@ function taskParticipant(task: JsonRecord, personId: string): boolean {
     ? task.collaboratorIds.map((value) => String(value || ""))
     : String(task.collaboratorIds || "").split(",").map((value) => value.trim());
   return String(task.ownerId || "") === personId || collaborators.includes(personId) || String(task.collaboratorId || "") === personId;
+}
+
+function taskParticipantForAccount(state: JsonRecord, task: JsonRecord, account: JsonRecord): boolean {
+  const personId = accountPersonId(state, account);
+  return taskParticipant(task, personId) || taskParticipant(task, String(account.id || ""));
+}
+
+function remapTaskParticipantId(state: JsonRecord, value: unknown): string {
+  const id = String(value || "").trim();
+  if (!id) return "";
+  return String(linkedPersonForAccount(state, accountForId(state, id))?.id || id);
+}
+
+function repairTaskParticipantLinks(state: JsonRecord): number {
+  const tasks = records(state, "tasks");
+  let changed = 0;
+  const repairedTasks = tasks.map((task) => {
+    const next = clone(task);
+    let taskChanged = false;
+    const ownerId = remapTaskParticipantId(state, task.ownerId);
+    if (ownerId && ownerId !== String(task.ownerId || "")) {
+      next.ownerId = ownerId;
+      taskChanged = true;
+    }
+    if (Array.isArray(task.collaboratorIds)) {
+      const collaboratorIds = task.collaboratorIds.map((value) => remapTaskParticipantId(state, value)).filter(Boolean);
+      if (!sameJson(task.collaboratorIds, collaboratorIds)) {
+        next.collaboratorIds = collaboratorIds;
+        taskChanged = true;
+      }
+    } else if (String(task.collaboratorIds || "").trim()) {
+      const collaboratorIds = String(task.collaboratorIds)
+        .split(",")
+        .map((value) => remapTaskParticipantId(state, value))
+        .filter(Boolean)
+        .join(",");
+      if (collaboratorIds !== String(task.collaboratorIds || "")) {
+        next.collaboratorIds = collaboratorIds;
+        taskChanged = true;
+      }
+    }
+    const collaboratorId = remapTaskParticipantId(state, task.collaboratorId);
+    if (collaboratorId && collaboratorId !== String(task.collaboratorId || "")) {
+      next.collaboratorId = collaboratorId;
+      taskChanged = true;
+    }
+    if (taskChanged) changed += 1;
+    return next;
+  });
+  if (changed) state.tasks = repairedTasks;
+  return changed;
 }
 
 function taskAssigner(task: JsonRecord, account: JsonRecord): boolean {
@@ -464,7 +590,7 @@ function canCreateTask(state: JsonRecord, account: JsonRecord, next: JsonRecord)
   if (!ownerId) return false;
   if (assignedTask(next)) return hasDepartmentManagement(account) && personIsInManagedDepartment(state, account, ownerId);
   if (hasDepartmentManagement(account)) return personIsInManagedDepartment(state, account, ownerId);
-  return ownerId === accountPersonId(account);
+  return ownerId === accountPersonId(state, account);
 }
 
 function appendOnly(previous: unknown, next: unknown): boolean {
@@ -472,26 +598,135 @@ function appendOnly(previous: unknown, next: unknown): boolean {
   return previous.every((item, index) => sameJson(item, next[index]));
 }
 
-function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord): boolean {
-  const permitted = [
+const taskProgressMutableFields = [
     "status",
     "progress",
     "attachments",
     "progressReports",
-    "responseStatus",
-    "responseNote",
-    "responseAt",
-    "responseById",
-    "responseByName",
     "completedAt",
     "completedById",
     "completedByName",
+    "completionReviewStatus",
+    "completionReviewedAt",
+    "completionReviewedById",
+    "completionReviewedByName",
+    "completionReviewNote",
+    "lateCompletion",
+    "qualityPercent",
+    "qualityAssessedAt",
+    "qualityAssessedById",
+    "qualityAssessedByName",
     "updatedAt",
     "updatedBy",
     "updatedById",
+  "responseStatus",
+  "responseNote",
+  "responseAt",
+  "responseById",
+  "responseByName",
+] as const;
+
+function taskProgressFields(allowCollaboratorChanges = false): string[] {
+  return allowCollaboratorChanges
+    ? [...taskProgressMutableFields, "collaboratorIds", "collaboratorId"]
+    : [...taskProgressMutableFields];
+}
+
+function isBlankTaskField(value: unknown): boolean {
+  return String(value ?? "").trim() === "";
+}
+
+function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
+  const completionFields = [
+    "completionReviewedAt",
+    "completionReviewedById",
+    "completionReviewedByName",
+    "completionReviewNote",
+    "qualityPercent",
+    "qualityAssessedAt",
+    "qualityAssessedById",
+    "qualityAssessedByName",
   ];
+  const cleared = completionFields.every((field) => isBlankTaskField(next[field]));
+  if (!cleared || Boolean(next.lateCompletion)) return false;
+  if (completedTaskStatus(next.status)) return String(next.completionReviewStatus || "") === "pending";
+  return isBlankTaskField(next.completionReviewStatus);
+}
+
+function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
   if (!appendOnly(previous.progressReports || [], next.progressReports || [])) return false;
-  return sameJson(withoutKeys(previous, permitted), withoutKeys(next, permitted));
+  return taskProgressLifecycleIsSafe(next) && taskProgressFieldsOnlyChange(previous, next, allowCollaboratorChanges);
+}
+
+function taskProgressFieldsOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
+  return sameJson(
+    withoutKeys(previous, taskProgressFields(allowCollaboratorChanges)),
+    withoutKeys(next, taskProgressFields(allowCollaboratorChanges)),
+  );
+}
+
+function taskProgressChangeIntent(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
+  return appendOnly(previous.progressReports || [], next.progressReports || [])
+    && taskProgressFieldsOnlyChange(previous, next, allowCollaboratorChanges);
+}
+
+function taskProgressIsLocked(task: JsonRecord): boolean {
+  return String(task.completionReviewStatus || "") === "passed" || !isBlankTaskField(task.qualityPercent);
+}
+
+function normalizeTaskProgressLifecycle(next: JsonRecord): JsonRecord {
+  const normalized = clone(next);
+  const clearFields = [
+    "completionReviewedAt",
+    "completionReviewedById",
+    "completionReviewedByName",
+    "completionReviewNote",
+    "qualityPercent",
+    "qualityAssessedAt",
+    "qualityAssessedById",
+    "qualityAssessedByName",
+  ];
+  clearFields.forEach((field) => {
+    normalized[field] = "";
+  });
+  normalized.lateCompletion = false;
+  if (completedTaskStatus(normalized.status)) {
+    normalized.completionReviewStatus = "pending";
+  } else {
+    normalized.completionReviewStatus = "";
+    normalized.completedAt = "";
+    normalized.completedById = "";
+    normalized.completedByName = "";
+  }
+  return normalized;
+}
+
+function rebaseTaskProgressReports(live: JsonRecord, base: JsonRecord, next: JsonRecord): JsonRecord[] {
+  const baseReports = Array.isArray(base.progressReports) ? base.progressReports : [];
+  const nextReports = Array.isArray(next.progressReports) ? next.progressReports : [];
+  const liveReports = Array.isArray(live.progressReports) ? clone(live.progressReports) : [];
+  const addedReports = nextReports.slice(baseReports.length).filter(isRecord);
+  const knownIds = new Set(liveReports.map((report) => recordId(report)).filter(Boolean));
+  addedReports.forEach((report) => {
+    const id = recordId(report);
+    if (id && knownIds.has(id)) return;
+    liveReports.push(clone(report));
+    if (id) knownIds.add(id);
+  });
+  return liveReports;
+}
+
+function rebaseTaskProgressChange(live: JsonRecord, base: JsonRecord, next: JsonRecord): JsonRecord | null {
+  if (!taskProgressOnlyChange(base, next, true)) return null;
+  const changedFields = taskProgressFields(true).filter((field) => !sameJson(base[field], next[field]));
+  if (!changedFields.length) return null;
+  const rebased = clone(live);
+  changedFields.forEach((field) => {
+    rebased[field] = field === "progressReports"
+      ? rebaseTaskProgressReports(live, base, next)
+      : next[field];
+  });
+  return rebased;
 }
 
 function taskQualityOnlyChange(previous: JsonRecord, next: JsonRecord): boolean {
@@ -509,11 +744,16 @@ function inProgressTaskStatus(status: unknown): boolean {
   return value === "Dang thuc hien" || value === "\u0110ang th\u1ef1c hi\u1ec7n";
 }
 
+function overdueTaskStatus(status: unknown): boolean {
+  const value = String(status || "");
+  return value === "Qua han" || value === "Qu\u00e1 h\u1ea1n";
+}
+
 function taskCompletionReviewChange(previous: JsonRecord, next: JsonRecord): boolean {
   const decision = String(next.completionReviewStatus || "");
   if (!completedTaskStatus(previous.status) || !["passed", "failed"].includes(decision)) return false;
   if (decision === "passed" && (!completedTaskStatus(next.status) || !String(next.qualityPercent ?? "").trim())) return false;
-  if (decision === "failed" && (!inProgressTaskStatus(next.status) || String(next.qualityPercent ?? "").trim())) return false;
+  if (decision === "failed" && (!(inProgressTaskStatus(next.status) || overdueTaskStatus(next.status)) || String(next.qualityPercent ?? "").trim())) return false;
   const permitted = [
     "status",
     "completionReviewStatus",
@@ -546,13 +786,34 @@ function canReviewTaskCompletion(state: JsonRecord, account: JsonRecord, task: J
 function canAssessTaskQuality(state: JsonRecord, account: JsonRecord, task: JsonRecord): boolean {
   const status = String(task.status || "");
   if (status !== "Hoan thanh" && status !== "Ho\u00e0n th\u00e0nh") return false;
-  return isAdmin(account);
+  if (isAdmin(account) || isDirector(account)) return true;
+  return hasDepartmentManagement(account) && personIsInManagedDepartment(state, account, task.ownerId);
+}
+
+function canUpdateTaskProgress(state: JsonRecord, account: JsonRecord, task: JsonRecord): boolean {
+  if (taskParticipantForAccount(state, task, account)) return true;
+  return isDirector(account)
+    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, task, accountDepartmentId(state, account)));
+}
+
+function shouldNormalizeTaskProgressUpdate(
+  state: JsonRecord,
+  account: JsonRecord,
+  current: JsonRecord,
+  base: JsonRecord,
+  candidate: JsonRecord,
+): boolean {
+  if (!canUpdateTaskProgress(state, account, current) || taskProgressIsLocked(current)) return false;
+  if (taskCompletionReviewChange(base, candidate) || taskQualityOnlyChange(base, candidate)) return false;
+  return taskProgressChangeIntent(base, candidate, true);
 }
 
 function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
   if (isAdmin(account)) return true;
-  const currentPersonId = accountPersonId(account);
-  if (taskParticipant(previous, currentPersonId) && taskProgressOnlyChange(previous, next)) return true;
+  if (!taskProgressIsLocked(previous) && taskParticipantForAccount(state, previous, account) && taskProgressOnlyChange(previous, next)) return true;
+  const canManageDepartmentProgress = isDirector(account)
+    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
+  if (!taskProgressIsLocked(previous) && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
   if (canReviewTaskCompletion(state, account, previous) && taskCompletionReviewChange(previous, next)) return true;
   if (canAssessTaskQuality(state, account, previous) && taskQualityOnlyChange(previous, next)) return true;
   if (assignedTask(previous) && taskAssigner(previous, account) && (isDirector(account) || hasDepartmentManagement(account))) {
@@ -566,7 +827,7 @@ function canChangeEvaluation(state: JsonRecord, account: JsonRecord, value: Json
   if (!isCurrentPeriod(value.period)) return isAdmin(account) || isDirector(account);
   if (isAdmin(account) || isDirector(account)) return true;
   const personId = String(value.personId || "");
-  return (hasDepartmentManagement(account) && personIsInManagedDepartment(state, account, personId)) || personId === accountPersonId(account);
+  return (hasDepartmentManagement(account) && personIsInManagedDepartment(state, account, personId)) || personId === accountPersonId(state, account);
 }
 
 function canChangeDepartmentEvaluation(state: JsonRecord, account: JsonRecord, value: JsonRecord): boolean {
@@ -643,23 +904,28 @@ function canChangeField(actor: JsonRecord, key: ScalarField): boolean {
   return scalarFields.includes(key);
 }
 
+function taskParticipantDepartmentId(state: JsonRecord, participantId: string): string {
+  const person = personForId(state, participantId) || linkedPersonForAccount(state, accountForId(state, participantId));
+  return String(person?.departmentId || "");
+}
+
 function taskHasParticipantInDepartment(state: JsonRecord, task: JsonRecord, departmentId: string): boolean {
   const participantIds = [String(task.ownerId || "")];
   const collaborators = Array.isArray(task.collaboratorIds)
     ? task.collaboratorIds.map((value) => String(value || ""))
     : String(task.collaboratorIds || "").split(",").map((value) => value.trim());
   participantIds.push(...collaborators, String(task.collaboratorId || ""));
-  return participantIds.some((personId) => String(personForId(state, personId)?.departmentId || "") === departmentId);
+  return participantIds.some((personId) => taskParticipantDepartmentId(state, personId) === departmentId);
 }
 
 function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
   const output = clone(state);
   if (isAdmin(account) || isDirector(account)) return sanitizedState(output);
 
-  const personId = accountPersonId(account);
+  const personId = accountPersonId(state, account);
   const departmentId = accountDepartmentId(state, account);
   const departmentScoped = hasDepartmentManagement(account) || accountRole(account) === "section_head";
-  output.accounts = records(state, "accounts").filter((item) => String(item.id || "") === String(account.id || ""));
+  output.accounts = [resolvedPersonnelAccount(state, account)];
   output.people = departmentScoped
     ? records(state, "people").filter((person) => String(person.departmentId || "") === departmentId)
     : records(state, "people").filter((person) => String(person.id || "") === personId);
@@ -711,7 +977,7 @@ function canUploadFile(state: JsonRecord, account: JsonRecord, key: string): boo
     return moduleIsAvailableToAccount(state, account, "archive") && (isAdmin(account) || accountAccessGrants(account).archiveWrite);
   }
   if (key.startsWith("task-file-")) {
-    return moduleIsAvailableToAccount(state, account, "tasks") && Boolean(isAdmin(account) || isDirector(account) || accountPersonId(account));
+    return moduleIsAvailableToAccount(state, account, "tasks") && Boolean(isAdmin(account) || isDirector(account) || accountPersonId(state, account));
   }
   return false;
 }
@@ -771,15 +1037,33 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         denied.push({ scope: collection, id: id || "unknown", reason: "Invalid record." });
         return;
       }
-      if (previous && !sameJson(operation.baseValue, collection === "accounts" ? sanitizedAccount(previous) : previous)) {
-        denied.push({ scope: collection, id, reason: "Record changed by another user." });
-        return;
+      const serverValue = collection === "accounts" && previous ? sanitizedAccount(previous) : previous;
+      let candidate = value;
+      const taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
+      if (
+        collection === "tasks"
+        && previous
+        && taskBaseValue
+        && shouldNormalizeTaskProgressUpdate(next, actor, previous, taskBaseValue, candidate)
+      ) {
+        // Progress reporters may only change progress data. Clear stale review data before authorization.
+        candidate = normalizeTaskProgressLifecycle(candidate);
       }
-      if (!canUpsert(next, actor, collection, previous, value)) {
+      if (previous && !sameJson(operation.baseValue, serverValue)) {
+        const rebased = collection === "tasks" && isRecord(operation.baseValue)
+          ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
+          : null;
+        if (!rebased) {
+          denied.push({ scope: collection, id, reason: "Record changed by another user." });
+          return;
+        }
+        candidate = rebased;
+      }
+      if (!canUpsert(next, actor, collection, previous, candidate)) {
         denied.push({ scope: collection, id, reason: "Permission denied." });
         return;
       }
-      const saved = collection === "accounts" ? mergeAccountPassword(previous, value) : clone(value);
+      const saved = collection === "accounts" ? mergeAccountPassword(previous, candidate) : clone(candidate);
       values.set(id, saved);
       changed += 1;
     });
@@ -839,25 +1123,47 @@ async function activeAccount(request: Request, current: StateSnapshot): Promise<
   return data.account_id;
 }
 
+async function loginActivityRows(
+  historyStart: string,
+  dayStart: string,
+  weekStart: string,
+  monthStart: string,
+): Promise<LoginActivityRow[]> {
+  const { data, error } = await admin.rpc("kpi_login_activity_summary", {
+    history_start_at: historyStart,
+    day_start_at: dayStart,
+    week_start_at: weekStart,
+    month_start_at: monthStart,
+  });
+  if (error) throw error;
+  return (data || [])
+    .map((row) => ({
+      accountId: String(row.account_id || ""),
+      period: String(row.period || ""),
+      loginCount: Number(row.login_count) || 0,
+      activeToday: Boolean(row.active_today),
+      activeWeek: Boolean(row.active_week),
+      activeMonth: Boolean(row.active_month),
+      lastLoginAt: String(row.last_login_at || ""),
+    }))
+    .filter((row) => Boolean(row.accountId && /^\d{4}-\d{2}$/.test(row.period)));
+}
+
 async function accountPresenceSummary(current: StateSnapshot): Promise<Record<string, unknown>> {
   const now = new Date();
   const nowIso = now.toISOString();
   const activeSince = new Date(now.getTime() - presenceWindowMs).toISOString();
-  const [sessionsResult, loginEventsResult] = await Promise.all([
+  const dayStart = vietnamDayStartIso(now);
+  const monthStart = vietnamMonthStartIso(now);
+  const [sessionsResult, loginRows] = await Promise.all([
     admin
       .from("kpi_sync_sessions")
       .select("account_id, last_seen_at")
       .gt("expires_at", nowIso)
       .gte("last_seen_at", activeSince),
-    admin
-      .from("kpi_account_login_events")
-      .select("account_id, logged_in_at")
-      .gte("logged_in_at", vietnamMonthStartIso(now))
-      .order("logged_in_at", { ascending: false })
-      .limit(maxPresenceLoginEvents),
+    loginActivityRows(monthStart, dayStart, monthStart, monthStart),
   ]);
   if (sessionsResult.error) throw sessionsResult.error;
-  if (loginEventsResult.error) throw loginEventsResult.error;
 
   const latestSessionByAccount = new Map<string, string>();
   (sessionsResult.data || []).forEach((session) => {
@@ -868,6 +1174,7 @@ async function accountPresenceSummary(current: StateSnapshot): Promise<Record<st
   });
 
   const accounts = records(current.state, "accounts");
+  const activeAccountIds = new Set(accounts.filter((account) => recordId(account) && !Boolean(account.disabled)).map(recordId));
   const onlineAccounts = [...latestSessionByAccount.entries()]
     .map<OnlineAccount | null>(([accountId, lastSeenAt]) => {
       const account = accountForId(current.state, accountId);
@@ -884,15 +1191,12 @@ async function accountPresenceSummary(current: StateSnapshot): Promise<Record<st
     .filter((account): account is OnlineAccount => account !== null)
     .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt));
 
-  const dayStart = vietnamDayStartIso(now);
   const monthAccounts = new Set<string>();
   const dayAccounts = new Set<string>();
-  (loginEventsResult.data || []).forEach((event) => {
-    const accountId = String(event.account_id || "");
-    const loggedInAt = String(event.logged_in_at || "");
-    if (!accountId || !accounts.some((account) => String(account.id || "") === accountId)) return;
-    monthAccounts.add(accountId);
-    if (loggedInAt >= dayStart) dayAccounts.add(accountId);
+  loginRows.forEach((row) => {
+    if (!activeAccountIds.has(row.accountId)) return;
+    if (row.activeMonth) monthAccounts.add(row.accountId);
+    if (row.activeToday) dayAccounts.add(row.accountId);
   });
 
   return {
@@ -910,31 +1214,48 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
   const currentMonth = vietnamMonthKey(now);
   const historyStartMonth = monthKeyOffset(currentMonth, -(usageHistoryMonths - 1));
   const historyStart = monthStartIsoForKey(historyStartMonth);
-  const loginEventsResult = await admin
-    .from("kpi_account_login_events")
-    .select("account_id, logged_in_at")
-    .gte("logged_in_at", historyStart)
-    .order("logged_in_at", { ascending: false })
-    .limit(maxUsageHistoryLoginEvents);
-  if (loginEventsResult.error) throw loginEventsResult.error;
-
   const activeAccounts = records(current.state, "accounts").filter((account) => recordId(account) && !Boolean(account.disabled));
   const accountsById = new Map(activeAccounts.map((account) => [recordId(account), account]));
-  const loginEvents = (loginEventsResult.data || [])
-    .map((event) => ({
-      accountId: String(event.account_id || ""),
-      loggedInAt: String(event.logged_in_at || ""),
-    }))
-    .filter((event) => Boolean(event.accountId && event.loggedInAt && accountsById.has(event.accountId)));
+  const dayStart = vietnamDayStartIso(now);
+  const weekStart = vietnamWeekStartIso(now);
+  const monthStart = vietnamMonthStartIso(now);
+  const loginRows = (await loginActivityRows(historyStart, dayStart, weekStart, monthStart)).filter((row) => accountsById.has(row.accountId));
   const latestLoginByAccount = new Map<string, string>();
-  loginEvents.forEach((event) => {
-    if ((latestLoginByAccount.get(event.accountId) || "") < event.loggedInAt) latestLoginByAccount.set(event.accountId, event.loggedInAt);
-  });
 
   const totalByDepartment = new Map<string, number>();
   activeAccounts.forEach((account) => {
     const departmentId = accountDepartmentId(current.state, account) || "unassigned";
     totalByDepartment.set(departmentId, (totalByDepartment.get(departmentId) || 0) + 1);
+  });
+
+  const dayLoggedInAccounts = new Set<string>();
+  const weekLoggedInAccounts = new Set<string>();
+  const monthLoggedInAccounts = new Set<string>();
+  const monthlyActivity = new Map<string, {
+    accountIds: Set<string>;
+    loginCount: number;
+    departments: Map<string, { accountIds: Set<string>; loginCount: number }>;
+  }>();
+  loginRows.forEach((row) => {
+    if ((latestLoginByAccount.get(row.accountId) || "") < row.lastLoginAt) latestLoginByAccount.set(row.accountId, row.lastLoginAt);
+    if (row.activeToday) dayLoggedInAccounts.add(row.accountId);
+    if (row.activeWeek) weekLoggedInAccounts.add(row.accountId);
+    if (row.activeMonth) monthLoggedInAccounts.add(row.accountId);
+    const account = accountsById.get(row.accountId);
+    if (!account) return;
+    const departmentId = accountDepartmentId(current.state, account) || "unassigned";
+    const periodActivity = monthlyActivity.get(row.period) || {
+      accountIds: new Set<string>(),
+      loginCount: 0,
+      departments: new Map<string, { accountIds: Set<string>; loginCount: number }>(),
+    };
+    periodActivity.accountIds.add(row.accountId);
+    periodActivity.loginCount += row.loginCount;
+    const departmentActivity = periodActivity.departments.get(departmentId) || { accountIds: new Set<string>(), loginCount: 0 };
+    departmentActivity.accountIds.add(row.accountId);
+    departmentActivity.loginCount += row.loginCount;
+    periodActivity.departments.set(departmentId, departmentActivity);
+    monthlyActivity.set(row.period, periodActivity);
   });
 
   const groupInactiveAccounts = (loggedInSince: Set<string>) => {
@@ -963,29 +1284,20 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
       .sort((left, right) => left.departmentId.localeCompare(right.departmentId));
   };
 
-  const weekStart = vietnamWeekStartIso(now);
-  const monthStart = vietnamMonthStartIso(now);
-  const weekLoggedInAccounts = new Set(loginEvents.filter((event) => event.loggedInAt >= weekStart).map((event) => event.accountId));
-  const monthLoggedInAccounts = new Set(loginEvents.filter((event) => event.loggedInAt >= monthStart).map((event) => event.accountId));
   const departmentIds = [...totalByDepartment.keys()].sort((left, right) => left.localeCompare(right));
   const monthlyHistory = Array.from({ length: usageHistoryMonths }, (_, index) => monthKeyOffset(currentMonth, -index)).map((period) => {
-    const periodStart = monthStartIsoForKey(period);
-    const periodEnd = monthStartIsoForKey(monthKeyOffset(period, 1));
-    const periodEvents = loginEvents.filter((event) => event.loggedInAt >= periodStart && event.loggedInAt < periodEnd);
-    const uniqueAccounts = new Set(periodEvents.map((event) => event.accountId));
+    const periodActivity = monthlyActivity.get(period);
+    const uniqueAccounts = periodActivity?.accountIds || new Set<string>();
     const departments = departmentIds.map((departmentId) => {
-      const departmentEvents = periodEvents.filter((event) => {
-        const account = accountsById.get(event.accountId);
-        return account && (accountDepartmentId(current.state, account) || "unassigned") === departmentId;
-      });
-      const departmentAccounts = new Set(departmentEvents.map((event) => event.accountId));
+      const departmentActivity = periodActivity?.departments.get(departmentId);
+      const departmentAccounts = departmentActivity?.accountIds || new Set<string>();
       const totalAccounts = totalByDepartment.get(departmentId) || 0;
       return {
         departmentId,
         totalAccounts,
         uniqueAccounts: departmentAccounts.size,
         inactiveAccounts: Math.max(0, totalAccounts - departmentAccounts.size),
-        loginCount: departmentEvents.length,
+        loginCount: departmentActivity?.loginCount || 0,
       };
     });
     return {
@@ -993,7 +1305,7 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
       totalAccounts: activeAccounts.length,
       uniqueAccounts: uniqueAccounts.size,
       inactiveAccounts: Math.max(0, activeAccounts.length - uniqueAccounts.size),
-      loginCount: periodEvents.length,
+      loginCount: periodActivity?.loginCount || 0,
       departments,
     };
   });
@@ -1001,7 +1313,13 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
   return {
     generatedAt: now.toISOString(),
     historyStart,
-    historyTruncated: (loginEventsResult.data || []).length >= maxUsageHistoryLoginEvents,
+    databaseAggregate: true,
+    inactiveDay: {
+      periodStart: dayStart,
+      inactiveCount: activeAccounts.length - dayLoggedInAccounts.size,
+      totalAccounts: activeAccounts.length,
+      groups: groupInactiveAccounts(dayLoggedInAccounts),
+    },
     inactiveWeek: {
       periodStart: weekStart,
       inactiveCount: activeAccounts.length - weekLoggedInAccounts.size,
@@ -1067,10 +1385,10 @@ Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(request) });
   if (!originAllowed(request)) return json(request, { error: "Origin is not allowed." }, 403);
 
+  let action = "";
   try {
     const url = new URL(request.url);
-    const action = url.searchParams.get("action") || "";
-
+    action = url.searchParams.get("action") || "";
     if (action === "status") {
       const current = await snapshot();
       const configuredOrigins = (Deno.env.get("KPI_ALLOWED_ORIGIN") || "")
@@ -1083,6 +1401,7 @@ Deno.serve(async (request) => {
         revision: current.revision,
         updatedAt: current.updatedAt,
         deploymentVersion,
+        releaseUpdates: false,
         originRestricted: configuredOrigins.length > 0 && !configuredOrigins.includes("*"),
       });
     }
@@ -1203,6 +1522,9 @@ Deno.serve(async (request) => {
     return json(request, { error: "Unknown endpoint." }, 404);
   } catch (error) {
     console.error(error);
+    if (action === "presence" || action === "usage-history") {
+      return json(request, { error: "Usage monitoring is unavailable. Apply the current database migrations and redeploy kpi-sync." }, 503);
+    }
     return json(request, { error: "Server error." }, 500);
   }
 });
