@@ -808,17 +808,28 @@ function shouldNormalizeTaskProgressUpdate(
   return taskProgressChangeIntent(base, candidate, true);
 }
 
-function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
-  if (isAdmin(account)) return true;
-  if (!taskProgressIsLocked(previous) && taskParticipantForAccount(state, previous, account) && taskProgressOnlyChange(previous, next)) return true;
-  const canManageDepartmentProgress = isDirector(account)
-    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
+function canUpdateTask(state: JsonRecord, actor: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
+  if (isAdmin(actor)) return true;
+
+  // 🌟 MỚI: Cho phép Người thực hiện / Người phối hợp cập nhật tiến độ & báo cáo
+  if (taskParticipantForAccount(state, previous, actor)) {
+    // Nếu thông tin cốt lõi (Tên công việc, Người thực hiện, Hạn hoàn thành, Vị trí KPI) giữ nguyên
+    const coreFieldsUnchanged = sameJson(
+      withoutKeys(previous, [...taskProgressMutableFields, "collaboratorIds", "collaboratorId", "note"]),
+      withoutKeys(next, [...taskProgressMutableFields, "collaboratorIds", "collaboratorId", "note"])
+    );
+    if (coreFieldsUnchanged) return true;
+    if (!taskProgressIsLocked(previous) && taskProgressOnlyChange(previous, next, true)) return true;
+  }
+
+  const canManageDepartmentProgress = isDirector(actor)
+    || (hasDepartmentTaskAccess(actor) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, actor)));
   if (!taskProgressIsLocked(previous) && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
-  if (canReviewTaskCompletion(state, account, previous) && taskCompletionReviewChange(previous, next)) return true;
-  if (canAssessTaskQuality(state, account, previous) && taskQualityOnlyChange(previous, next)) return true;
-  if (assignedTask(previous) && taskAssigner(previous, account) && (isDirector(account) || hasDepartmentManagement(account))) {
-    if (isDirector(account)) return true;
-    return personIsInManagedDepartment(state, account, next.ownerId);
+  if (canReviewTaskCompletion(state, actor, previous) && taskCompletionReviewChange(previous, next)) return true;
+  if (canAssessTaskQuality(state, actor, previous) && taskQualityOnlyChange(previous, next)) return true;
+  if (assignedTask(previous) && taskAssigner(previous, actor) && (isDirector(actor) || hasDepartmentManagement(actor))) {
+    if (isDirector(actor)) return true;
+    return personIsInManagedDepartment(state, actor, next.ownerId);
   }
   return false;
 }
@@ -1022,6 +1033,12 @@ function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number
 function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): { state: JsonRecord; denied: DeniedMutation[]; changed: number } {
   const next = clone(current);
   next.moduleSettings = normalizeModuleSettings(next.moduleSettings);
+
+  // 🌟 MỚI BỔ SUNG: Tự động xóa activityLog khỏi gói đồng bộ nếu là tài khoản Nhân viên
+  if (accountRole(actor) === "employee" && patch.collections?.activityLog) {
+    delete patch.collections.activityLog;
+  }
+
   const denied: DeniedMutation[] = [];
   let changed = purgeRetiredAssignmentTasks(next);
 

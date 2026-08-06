@@ -4425,6 +4425,12 @@ function applyRecordAudit(record, existing) {
 }
 
 function logActivity(entry) {
+  // Nếu là tài khoản Nhân viên, không đẩy activityLog vào state đồng bộ server
+  // để tránh bị máy chủ từ chối quyền (denied)
+  if (isEmployee()) {
+    return null;
+  }
+
   const timestamp = entry.timestamp || new Date().toISOString();
   const actor = currentActorInfo();
   const activity = {
