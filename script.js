@@ -5625,11 +5625,18 @@ function taskProjectOptions() {
 }
 
 function renderTaskProjectOptions() {
-  const options = [{ value: "", label: "Chưa chọn danh mục dự án" }, ...taskProjectOptions()];
+  const search = normalizeSearchText(byId("taskProjectSearch")?.value || "");
+  const allProjects = taskProjectOptions();
   ["taskProjectId"].forEach((selectId) => {
     const select = byId(selectId);
     if (!select) return;
     const selected = select.value;
+    const projects = search
+      ? allProjects.filter((project) => (
+          normalizeSearchText(project.label).includes(search) || project.value === selected
+        ))
+      : allProjects;
+    const options = [{ value: "", label: projects.length || !search ? "Chưa chọn danh mục dự án" : "Không tìm thấy dự án phù hợp" }, ...projects];
     fillSelect(select, options, selected);
   });
 }
@@ -10822,6 +10829,7 @@ function resetPersonForm() {
 function resetTaskForm() {
   byId("taskForm").reset();
   byId("taskId").value = "";
+  byId("taskProjectSearch").value = "";
   renderTaskProjectOptions();
   byId("taskProjectId").value = "";
   byId("taskCollaborators").innerHTML = "";
@@ -12473,6 +12481,13 @@ byId("taskForm").addEventListener("submit", async (event) => {
     restoreTaskDetailInlineEditor();
     openTaskDetailDialog(taskId);
   }
+});
+
+byId("taskProjectSearch").addEventListener("input", renderTaskProjectOptions);
+byId("taskProjectId").addEventListener("change", () => {
+  if (!byId("taskProjectId").value) return;
+  byId("taskProjectSearch").value = "";
+  renderTaskProjectOptions();
 });
 
 byId("assignmentTaskForm")?.addEventListener("submit", async (event) => {

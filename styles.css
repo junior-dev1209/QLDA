@@ -2696,6 +2696,13 @@ body.is-customization-resizing {
   grid-column: span 4;
 }
 
+#taskForm .task-project-field input[type="search"] {
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 2px;
+  background: var(--surface-2);
+}
+
 #taskForm .task-owner-field {
   grid-column: span 5;
 }
