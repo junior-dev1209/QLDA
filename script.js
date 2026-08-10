@@ -4671,7 +4671,60 @@ function taskCollaboratorNames(task) {
 function selectedTaskCollaboratorIds() {
   return uniquePersonIds(
     Array.from(byId("taskCollaborators")?.querySelectorAll('input[type="checkbox"]:checked') || []).map((input) => input.value),
-  ).filter((id) => id !== byId("taskOwner").value);
+  ).filter((id) => !selectedTaskOwnerIds().includes(id));
+}
+
+function selectedTaskOwnerIds() {
+  const container = byId("taskOwners");
+  const inputs = Array.from(container?.querySelectorAll('input[type="checkbox"]') || []);
+  const checked = inputs.filter((input) => input.checked).map((input) => input.value);
+  return uniquePersonIds(inputs.length ? checked : [byId("taskOwner")?.value]);
+}
+
+function updateTaskOwnerSummary() {
+  const ids = selectedTaskOwnerIds();
+  byId("taskOwner").value = ids[0] || "";
+  const names = ids.map((id) => personById(id)?.name).filter(Boolean);
+  byId("taskOwnerSummary").textContent = names.length === 1 ? names[0] : names.length ? `Đã chọn ${names.length} người thực hiện` : "Chọn người thực hiện";
+}
+
+function filterTaskOwnerOptions() {
+  const query = normalizeSearchText(byId("taskOwnerSearch")?.value || "");
+  let visibleCount = 0;
+  byId("taskOwners")?.querySelectorAll(".checkbox-option").forEach((option) => {
+    const visible = !query || normalizeSearchText(option.textContent).includes(query);
+    option.classList.toggle("is-hidden", !visible);
+    if (visible) visibleCount += 1;
+  });
+  byId("taskOwnerSearchEmpty")?.classList.toggle("is-hidden", !query || visibleCount > 0);
+}
+
+function updateTaskOwnerOptions(selectedValues = []) {
+  const container = byId("taskOwners");
+  if (!container) return;
+  const selectedIds = uniquePersonIds(selectedValues.length ? selectedValues : selectedTaskOwnerIds());
+  container.innerHTML = visiblePeopleForTasks().map((person) => `
+    <label class="checkbox-option">
+      <input type="checkbox" value="${escapeHtml(person.id)}" ${selectedIds.includes(person.id) ? "checked" : ""}>
+      <span>${escapeHtml(person.name)} - ${escapeHtml(roleById(person.roleId)?.name || "Chưa rõ vị trí")}</span>
+    </label>
+  `).join("");
+  updateTaskOwnerSummary();
+  filterTaskOwnerOptions();
+}
+
+function setTaskOwnerPickerOpen(open) {
+  const picker = byId("taskOwnerPicker");
+  const panel = byId("taskOwnerPanel");
+  const toggle = byId("taskOwnerToggle");
+  if (!picker || !panel || !toggle) return;
+  const shouldOpen = Boolean(open) && !picker.classList.contains("is-disabled");
+  picker.classList.toggle("is-open", shouldOpen);
+  panel.classList.toggle("is-hidden", !shouldOpen);
+  toggle.setAttribute("aria-expanded", String(shouldOpen));
+  if (!shouldOpen) byId("taskOwnerSearch").value = "";
+  filterTaskOwnerOptions();
+  if (shouldOpen) requestAnimationFrame(() => byId("taskOwnerSearch")?.focus());
 }
 
 function updateTaskCollaboratorSummary() {
@@ -5276,8 +5329,8 @@ function updateTaskCategoryOptions(selectedValue, ownerSelectId = "taskOwner", c
 
 function updateTaskCollaboratorOptions(selectedValues = []) {
   const container = byId("taskCollaborators");
-  const ownerId = byId("taskOwner").value;
-  const selectedIds = uniquePersonIds(selectedValues.length ? selectedValues : selectedTaskCollaboratorIds()).filter((id) => id !== ownerId);
+  const ownerIds = selectedTaskOwnerIds();
+  const selectedIds = uniquePersonIds(selectedValues.length ? selectedValues : selectedTaskCollaboratorIds()).filter((id) => !ownerIds.includes(id));
   const taskPeople = visiblePeopleForTasks();
   const peopleWithSelected = [...taskPeople];
   selectedIds.forEach((personId) => {
@@ -5287,7 +5340,7 @@ function updateTaskCollaboratorOptions(selectedValues = []) {
     }
   });
   const options = peopleWithSelected
-    .filter((person) => person.id !== ownerId)
+    .filter((person) => !ownerIds.includes(person.id))
     .map((person) => ({
       value: person.id,
       label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
@@ -5310,7 +5363,8 @@ function updateTaskCollaboratorOptions(selectedValues = []) {
 }
 
 function renderPersonOptions() {
-  const currentTaskOwner = byId("taskOwner").value;
+  const currentTaskOwners = selectedTaskOwnerIds();
+  const currentTaskOwner = currentTaskOwners[0] || byId("taskOwner").value;
   const currentTaskCollaborators = selectedTaskCollaboratorIds();
   const taskPeople = visiblePeopleForTasks();
   const taskPeopleWithSelected =
@@ -5348,6 +5402,7 @@ function renderPersonOptions() {
     placeholder.concat(taskSelectOptions),
     selectedTaskOwner,
   );
+  updateTaskOwnerOptions(currentTaskOwners.length ? currentTaskOwners : [selectedTaskOwner]);
   updateTaskCollaboratorOptions(currentTaskCollaborators);
   updateTaskCategoryOptions(byId("taskCategory").value);
   fillSelect(byId("evalPerson"), placeholder.concat(evaluationOptions), selectedEvalPerson);
@@ -5625,20 +5680,43 @@ function taskProjectOptions() {
 }
 
 function renderTaskProjectOptions() {
-  const search = normalizeSearchText(byId("taskProjectSearch")?.value || "");
   const allProjects = taskProjectOptions();
   ["taskProjectId"].forEach((selectId) => {
     const select = byId(selectId);
     if (!select) return;
     const selected = select.value;
-    const projects = search
-      ? allProjects.filter((project) => (
-          normalizeSearchText(project.label).includes(search) || project.value === selected
-        ))
-      : allProjects;
-    const options = [{ value: "", label: projects.length || !search ? "Chưa chọn danh mục dự án" : "Không tìm thấy dự án phù hợp" }, ...projects];
+    const options = [{ value: "", label: "Chưa chọn danh mục dự án" }, ...allProjects];
     fillSelect(select, options, selected);
   });
+  renderTaskProjectPicker();
+}
+
+function renderTaskProjectPicker() {
+  const container = byId("taskProjectOptions");
+  if (!container) return;
+  const selected = byId("taskProjectId").value;
+  const query = normalizeSearchText(byId("taskProjectSearch")?.value || "");
+  const projects = taskProjectOptions().filter((project) => !query || normalizeSearchText(project.label).includes(query));
+  container.innerHTML = projects.map((project) => `
+    <button class="checkbox-option${project.value === selected ? " is-selected" : ""}" type="button" role="option" aria-selected="${project.value === selected}" data-select-task-project="${escapeHtml(project.value)}">
+      <span>${escapeHtml(project.label)}</span>
+    </button>
+  `).join("");
+  byId("taskProjectSearchEmpty")?.classList.toggle("is-hidden", projects.length > 0);
+  byId("taskProjectSummary").textContent = taskProjectOptions().find((project) => project.value === selected)?.label || "Chưa chọn danh mục dự án";
+}
+
+function setTaskProjectPickerOpen(open) {
+  const picker = byId("taskProjectPicker");
+  const panel = byId("taskProjectPanel");
+  const toggle = byId("taskProjectToggle");
+  if (!picker || !panel || !toggle) return;
+  picker.classList.toggle("is-open", Boolean(open));
+  panel.classList.toggle("is-hidden", !open);
+  toggle.setAttribute("aria-expanded", String(Boolean(open)));
+  if (!open) byId("taskProjectSearch").value = "";
+  renderTaskProjectPicker();
+  if (open) requestAnimationFrame(() => byId("taskProjectSearch")?.focus());
 }
 
 function resetTaskProjectCatalogForm() {
@@ -10075,7 +10153,9 @@ function populateTaskForm(task) {
   byId("taskTitle").value = task.title;
   renderTaskProjectOptions();
   byId("taskProjectId").value = projectIdForTask(task);
+  renderTaskProjectPicker();
   byId("taskOwner").value = task.ownerId;
+  updateTaskOwnerOptions([task.ownerId]);
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
   updateTaskCategoryOptions(task.category);
   byId("taskWorkType").value = normalizeTaskWorkType(task);
@@ -10242,8 +10322,19 @@ function updateTaskFormLock(task = null) {
     collaboratorPicker.setAttribute("aria-disabled", String(!canUpdateCollaborators));
     if (!canUpdateCollaborators) setTaskCollaboratorPickerOpen(false);
   }
+  ["taskProjectPicker", "taskOwnerPicker"].forEach((pickerId) => {
+    const picker = byId(pickerId);
+    if (!picker) return;
+    picker.classList.toggle("is-disabled", !canEditDetails);
+    picker.setAttribute("aria-disabled", String(!canEditDetails));
+  });
+  if (!canEditDetails) {
+    setTaskProjectPickerOpen(false);
+    setTaskOwnerPickerOpen(false);
+  }
   if (isEmployee() && kind === TASK_KIND_REGULAR) {
     byId("taskOwner").disabled = true;
+    byId("taskOwnerPicker")?.classList.add("is-disabled");
   }
   byId("taskStatus").disabled = !canUpdateReport;
   byId("taskForm")
@@ -10382,7 +10473,9 @@ function copyRegularTaskToForm(task) {
   resetTaskForm();
   byId("taskTitle").value = copiedTaskTitle(task.title);
   byId("taskProjectId").value = projectIdForTask(task);
+  renderTaskProjectPicker();
   byId("taskOwner").value = task.ownerId || "";
+  updateTaskOwnerOptions([task.ownerId]);
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
   updateTaskCategoryOptions(task.category);
   byId("taskWorkType").value = normalizeTaskWorkType(task);
@@ -10832,6 +10925,9 @@ function resetTaskForm() {
   byId("taskProjectSearch").value = "";
   renderTaskProjectOptions();
   byId("taskProjectId").value = "";
+  setTaskProjectPickerOpen(false);
+  byId("taskOwners").innerHTML = "";
+  setTaskOwnerPickerOpen(false);
   byId("taskCollaborators").innerHTML = "";
   setTaskCollaboratorPickerOpen(false);
   renderPersonOptions();
@@ -12450,44 +12546,67 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
 
 byId("taskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const taskId = byId("taskId").value || uid("task");
-  const saved = await saveTaskRecord(
-    {
-      id: taskId,
-      kind: TASK_KIND_REGULAR,
-      title: byId("taskTitle").value.trim(),
-      projectId: byId("taskProjectId").value,
-      ownerId: byId("taskOwner").value,
-      collaboratorIds: selectedTaskCollaboratorIds(),
-      category: byId("taskCategory").value,
-      workType: byId("taskWorkType").value,
-      recurrence: byId("taskRecurrence").value,
-      startDate: byId("taskStartDate").value,
-      due: byId("taskDue").value,
-      dueTime: byId("taskDueTime").value,
-      status: normalizeTaskStatus(byId("taskStatus").value),
-      progress: clamp(byId("taskProgress").value, 0, 100),
-      qualityPercent: normalizeTaskQualityInput(byId("taskQualityPercent").value),
-      note: byId("taskNote").value.trim(),
-    },
-    byId("taskAttachments"),
-    taskAttachmentDraft,
-    "",
-    "",
-    byId("taskNote").value.trim(),
-    resetTaskForm,
-  );
-  if (saved && taskDetailInlineEditor?.taskId === taskId) {
+  const existingTaskId = byId("taskId").value;
+  const ownerIds = selectedTaskOwnerIds();
+  if (!byId("taskProjectId").value) {
+    alert("Vui lòng chọn danh mục dự án.");
+    setTaskProjectPickerOpen(true);
+    return;
+  }
+  if (!ownerIds.length) {
+    alert("Vui lòng chọn ít nhất một người thực hiện.");
+    setTaskOwnerPickerOpen(true);
+    return;
+  }
+  const ownersToSave = existingTaskId ? ownerIds.slice(0, 1) : ownerIds;
+  let saved = false;
+  let savedTaskId = existingTaskId || "";
+  for (let index = 0; index < ownersToSave.length; index += 1) {
+    const taskId = existingTaskId || uid("task");
+    savedTaskId = taskId;
+    saved = await saveTaskRecord(
+      {
+        id: taskId,
+        kind: TASK_KIND_REGULAR,
+        title: byId("taskTitle").value.trim(),
+        projectId: byId("taskProjectId").value,
+        ownerId: ownersToSave[index],
+        collaboratorIds: selectedTaskCollaboratorIds(),
+        category: byId("taskCategory").value,
+        workType: byId("taskWorkType").value,
+        recurrence: byId("taskRecurrence").value,
+        startDate: byId("taskStartDate").value,
+        due: byId("taskDue").value,
+        dueTime: byId("taskDueTime").value,
+        status: normalizeTaskStatus(byId("taskStatus").value),
+        progress: clamp(byId("taskProgress").value, 0, 100),
+        qualityPercent: normalizeTaskQualityInput(byId("taskQualityPercent").value),
+        note: byId("taskNote").value.trim(),
+      },
+      byId("taskAttachments"),
+      taskAttachmentDraft,
+      "",
+      "",
+      byId("taskNote").value.trim(),
+      index === ownersToSave.length - 1 ? resetTaskForm : () => {},
+    );
+    if (!saved) break;
+  }
+  if (saved && taskDetailInlineEditor?.taskId === savedTaskId) {
     restoreTaskDetailInlineEditor();
-    openTaskDetailDialog(taskId);
+    openTaskDetailDialog(savedTaskId);
   }
 });
 
 byId("taskProjectSearch").addEventListener("input", renderTaskProjectOptions);
-byId("taskProjectId").addEventListener("change", () => {
-  if (!byId("taskProjectId").value) return;
-  byId("taskProjectSearch").value = "";
-  renderTaskProjectOptions();
+byId("taskProjectToggle").addEventListener("click", () => {
+  setTaskProjectPickerOpen(byId("taskProjectPanel").classList.contains("is-hidden"));
+});
+byId("taskProjectOptions").addEventListener("click", (event) => {
+  const projectId = event.target.closest("[data-select-task-project]")?.dataset.selectTaskProject;
+  if (!projectId) return;
+  byId("taskProjectId").value = projectId;
+  setTaskProjectPickerOpen(false);
 });
 
 byId("assignmentTaskForm")?.addEventListener("submit", async (event) => {
@@ -12557,6 +12676,17 @@ byId("taskOwner").addEventListener("change", () => {
   updateTaskCategoryOptions();
   updateTaskFormLock();
 });
+byId("taskOwners").addEventListener("change", () => {
+  updateTaskOwnerSummary();
+  byId("taskCategory").value = "";
+  updateTaskCollaboratorOptions();
+  updateTaskCategoryOptions();
+  updateTaskFormLock();
+});
+byId("taskOwnerSearch").addEventListener("input", debounce(filterTaskOwnerOptions, 150));
+byId("taskOwnerToggle").addEventListener("click", () => {
+  setTaskOwnerPickerOpen(byId("taskOwnerPanel").classList.contains("is-hidden"));
+});
 byId("taskCollaborators").addEventListener("change", updateTaskCollaboratorSummary);
 byId("taskCollaboratorSearch").addEventListener("input", debounce(filterTaskCollaboratorOptions, 150));
 byId("taskCollaboratorSearch").addEventListener("keydown", (event) => {
@@ -12569,8 +12699,9 @@ byId("taskCollaboratorToggle").addEventListener("click", () => {
 });
 document.addEventListener("pointerdown", (event) => {
   const picker = byId("taskCollaboratorPicker");
-  if (!isTaskCollaboratorPickerOpen() || picker?.contains(event.target)) return;
-  setTaskCollaboratorPickerOpen(false);
+  if (isTaskCollaboratorPickerOpen() && !picker?.contains(event.target)) setTaskCollaboratorPickerOpen(false);
+  if (!byId("taskProjectPanel")?.classList.contains("is-hidden") && !byId("taskProjectPicker")?.contains(event.target)) setTaskProjectPickerOpen(false);
+  if (!byId("taskOwnerPanel")?.classList.contains("is-hidden") && !byId("taskOwnerPicker")?.contains(event.target)) setTaskOwnerPickerOpen(false);
 });
 byId("taskStatus").addEventListener("change", () => {
   updateTaskFormLock();

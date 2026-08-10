@@ -510,20 +510,41 @@
           <label class="task-title-field">Tên công việc
             <input id="taskTitle" required placeholder="Hoàn thiện hồ sơ dự án...">
           </label>
-          <label class="task-project-field">Danh mục dự án
-            <input id="taskProjectSearch" type="search" autocomplete="off" placeholder="Tìm kiếm dự án..." aria-label="Tìm kiếm dự án">
-            <select id="taskProjectId" required>
+          <div class="task-project-field task-field-group">
+            <span class="task-field-label">Danh mục dự án</span>
+            <select id="taskProjectId" class="task-picker-native" tabindex="-1" aria-hidden="true">
               <option value="">Chưa chọn danh mục dự án</option>
             </select>
-          </label>
+            <div id="taskProjectPicker" class="collaborator-picker">
+              <button id="taskProjectToggle" class="collaborator-picker-toggle" type="button" aria-expanded="false" aria-controls="taskProjectPanel">
+                <span id="taskProjectSummary">Chưa chọn danh mục dự án</span>
+              </button>
+              <div id="taskProjectPanel" class="collaborator-picker-panel is-hidden">
+                <input id="taskProjectSearch" type="search" autocomplete="off" placeholder="Tìm kiếm dự án..." aria-label="Tìm kiếm dự án">
+                <div id="taskProjectOptions" class="checkbox-list task-project-option-list" role="listbox" aria-label="Danh mục dự án"></div>
+                <p id="taskProjectSearchEmpty" class="collaborator-search-empty is-hidden">Không tìm thấy dự án phù hợp.</p>
+              </div>
+            </div>
+          </div>
           <label class="task-category-field">Danh mục KPI cá nhân
             <select id="taskCategory" required>
               <option>Chọn người được giao để lấy danh mục KPI</option>
             </select>
           </label>
-          <label class="task-owner-field"><span id="taskOwnerLabelText">Người được giao</span>
-            <select id="taskOwner" required></select>
-          </label>
+          <div class="task-owner-field task-field-group">
+            <span id="taskOwnerLabelText" class="task-field-label">Người thực hiện</span>
+            <select id="taskOwner" class="task-picker-native" tabindex="-1" aria-hidden="true"></select>
+            <div id="taskOwnerPicker" class="collaborator-picker">
+              <button id="taskOwnerToggle" class="collaborator-picker-toggle" type="button" aria-expanded="false" aria-controls="taskOwnerPanel">
+                <span id="taskOwnerSummary">Chọn người thực hiện</span>
+              </button>
+              <div id="taskOwnerPanel" class="collaborator-picker-panel is-hidden">
+                <input id="taskOwnerSearch" type="search" autocomplete="off" placeholder="Tìm người thực hiện..." aria-label="Tìm người thực hiện">
+                <div id="taskOwners" class="checkbox-list task-owner-list" role="group" aria-label="Người thực hiện"></div>
+                <p id="taskOwnerSearchEmpty" class="collaborator-search-empty is-hidden">Không tìm thấy người thực hiện phù hợp.</p>
+              </div>
+            </div>
+          </div>
           <div id="taskCollaboratorField" class="regular-only task-collaborator-field">
             <span class="task-field-label">Người phối hợp</span>
             <div id="taskCollaboratorPicker" class="collaborator-picker">

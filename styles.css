@@ -2696,10 +2696,31 @@ body.is-customization-resizing {
   grid-column: span 4;
 }
 
-#taskForm .task-project-field input[type="search"] {
-  width: 100%;
+.task-field-group {
+  display: grid;
   min-width: 0;
-  margin-bottom: 2px;
+  gap: 4px;
+  font-size: 0.86rem;
+}
+
+.task-picker-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.task-project-option-list .checkbox-option {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-project-option-list .checkbox-option.is-selected {
+  color: var(--primary);
   background: var(--surface-2);
 }
 
