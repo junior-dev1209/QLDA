@@ -1,5 +1,10 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
+const APP_VERSION = "3.0.14";
+const LOGIN_GUARD_KEY = "phuc-thinh-login-guard-v1";
+const LOGIN_GUARD_MAX_FAILURES = 5;
+const LOGIN_GUARD_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_GUARD_LOCK_MS = 15 * 60 * 1000;
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -17,8 +22,10 @@ const SHARED_SYNC_SESSION_TOKEN_KEY = "phuc-thinh-shared-sync-session-v1";
 const SHARED_SYNC_DIRTY_KEY = "phuc-thinh-shared-sync-dirty-v1";
 const OFFLINE_LOGIN_PROOFS_KEY = "phuc-thinh-offline-login-proofs-v1";
 const STATE_SAVED_AT_KEY = "phuc-thinh-state-saved-at-v1";
-const SHARED_SYNC_REFRESH_MS = 10000;
-const SHARED_SYNC_REFRESH_JITTER_MS = 4000;
+// Poll less often while a tab is idle. Focus/online events still refresh at
+// once, and the server returns only a revision check when nothing changed.
+const SHARED_SYNC_REFRESH_MS = 20000;
+const SHARED_SYNC_REFRESH_JITTER_MS = 5000;
 const SHARED_SYNC_RETRY_INITIAL_MS = 2500;
 const SHARED_SYNC_RETRY_MAX_MS = 60000;
 const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
@@ -27,11 +34,14 @@ const OFFLINE_LOGIN_PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_LOGIN_PBKDF2_ITERATIONS = 120000;
 const OFFLINE_LOGIN_PROOF_MAX_ENTRIES = 500;
 const MAX_DELETED_ID_HISTORY = 2000;
-const ACCOUNT_PRESENCE_HEARTBEAT_MS = 45000;
-const SHARED_SYNC_COLLECTIONS = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "activityLog"];
+const ACCOUNT_PRESENCE_HEARTBEAT_MS = 60000;
+const SHARED_SYNC_COLLECTIONS = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"];
 const SHARED_SYNC_SCALAR_FIELDS = [
   "moduleSettings",
   "systemCustomization",
+  "departments",
+  "roles",
+  "behaviorRules",
   "importedPeopleVersion",
   "canBoGpmbKpiCatalogVersion",
   "deletedIds",
@@ -45,7 +55,7 @@ function debounce(fn, delay = 200) {
 }
 
 const IMPORTED_PEOPLE_VERSION = "excel-2026-05-07-v1";
-const CAN_BO_GPMB_KPI_CATALOG_VERSION = "2026-07-13-v1";
+const CAN_BO_GPMB_KPI_CATALOG_VERSION = "2026-08-12-v2";
 // ... Toàn bộ logic hệ thống phía dưới giữ nguyên vẹn ...
 const legacyCanBoGpmbTaskCategories = {
   "Kiểm đếm đất đai": "Điều tra, kiểm đếm đất đai / Trích đo, quy chủ",
@@ -58,7 +68,7 @@ const legacyCanBoGpmbTaskCategories = {
 };
 const importedPeopleFromExcel = Array.isArray(window.PHUC_THINH_IMPORTED_PEOPLE) ? window.PHUC_THINH_IMPORTED_PEOPLE : [];
 
-const departments = [
+const defaultDepartments = [
   {
     id: "ke-hoach",
     name: "phòng KHTH",
@@ -127,9 +137,16 @@ const departments = [
       ["Phối hợp", 10],
     ],
   },
+  {
+    id: "ban-giam-doc",
+    name: "Ban giám đốc",
+    leadershipOnly: true,
+    kpiExempt: true,
+    criteria: [],
+  },
 ];
 
-const roles = [
+const defaultRoles = [
   {
     id: "truong-phong-ke-hoach",
     departmentId: "ke-hoach",
@@ -459,6 +476,15 @@ const roles = [
     ],
   },
   {
+    id: "nhan-vien-tong-hop-gpmb",
+    departmentId: "gpmb",
+    name: "Nhân viên tổng hợp",
+    criteria: [
+      ["Tổng hợp số liệu/Tiến độ dự án", 50],
+      ["Nhập liệu hồ sơ dự án", 50],
+    ],
+  },
+  {
     id: "truong-phong-ha-tang",
     departmentId: "ha-tang",
     name: "Trưởng phòng QLHT",
@@ -486,10 +512,22 @@ const roles = [
       ["Phối hợp công việc", 10],
     ],
   },
+  {
+    id: "giam-doc-ban-giam-doc",
+    departmentId: "ban-giam-doc",
+    name: "Giám đốc",
+    criteria: [],
+  },
+  {
+    id: "pho-giam-doc-ban-giam-doc",
+    departmentId: "ban-giam-doc",
+    name: "Phó giám đốc",
+    criteria: [],
+  },
 ];
 
-departments.forEach((department) => {
-  roles.push(
+defaultDepartments.filter((department) => !department.leadershipOnly).forEach((department) => {
+  defaultRoles.push(
     {
       id: `pho-phong-${department.id}`,
       departmentId: department.id,
@@ -519,7 +557,7 @@ departments.forEach((department) => {
   );
 });
 
-const behaviorRules = [
+const defaultBehaviorRules = [
   ["Đi làm muộn", -1],
   ["Không báo cáo đúng hạn", -2],
   ["Vi phạm quy trình", -5],
@@ -532,6 +570,116 @@ const behaviorRules = [
   ["Được khen bằng văn bản/đạt thi khen thưởng phong trào thi đua", 2],
   ["Sáng kiến cải tiến trong công việc (mức 2 điểm)", 2],
 ];
+
+function cloneKpiCatalog(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function catalogText(value, maxLength = 180) {
+  return String(value || "").trim().replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function catalogNumber(value, fallback = 0, min = 0, max = 120) {
+  const number = Number(String(value ?? "").replace(",", "."));
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function normalizeKpiCriteria(value) {
+  if (!Array.isArray(value)) return [];
+  const names = new Set();
+  return value
+    .slice(0, 60)
+    .map((criterion) => {
+      const name = catalogText(Array.isArray(criterion) ? criterion[0] : criterion?.name);
+      const weight = catalogNumber(Array.isArray(criterion) ? criterion[1] : criterion?.weight);
+      if (!name || names.has(name.toLocaleLowerCase("vi"))) return null;
+      names.add(name.toLocaleLowerCase("vi"));
+      return [name, weight];
+    })
+    .filter(Boolean);
+}
+
+function normalizeDepartmentsCatalog(value) {
+  const source = Array.isArray(value) && value.length ? value : defaultDepartments;
+  const ids = new Set();
+  return source
+    .slice(0, 40)
+    .map((department, index) => {
+      const id = catalogText(department?.id, 96) || `department-${index + 1}`;
+      const name = catalogText(department?.name);
+      if (!name || ids.has(id)) return null;
+      ids.add(id);
+      return {
+        id,
+        name,
+        criteria: normalizeKpiCriteria(department?.criteria),
+        leadershipOnly: department?.leadershipOnly === true,
+        kpiExempt: department?.kpiExempt === true,
+      };
+    })
+    .filter(Boolean);
+}
+
+const configurablePersonnelAccountRoles = ["employee", "section_head", "manager", "deputy_manager", "director"];
+
+function defaultAccountRoleForCatalogRole(role) {
+  const configured = String(role?.accountRole || "");
+  if (configurablePersonnelAccountRoles.includes(configured)) return configured;
+  const roleId = String(role?.id || "");
+  if (roleId.startsWith("giam-doc-") || roleId.startsWith("pho-giam-doc-") || role?.departmentId === "ban-giam-doc") return "director";
+  if (roleId.startsWith("truong-phong-")) return "manager";
+  if (roleId.startsWith("pho-phong-")) return "deputy_manager";
+  if (roleId.startsWith("truong-bo-phan-")) return "section_head";
+  return "employee";
+}
+
+function normalizeRolesCatalog(value) {
+  const source = Array.isArray(value) && value.length ? value : defaultRoles;
+  const ids = new Set();
+  return source
+    .slice(0, 160)
+    .map((role, index) => {
+      const id = catalogText(role?.id, 96) || `role-${index + 1}`;
+      const departmentId = catalogText(role?.departmentId, 96);
+      const name = catalogText(role?.name);
+      if (!name || !departmentId || ids.has(id)) return null;
+      ids.add(id);
+      return {
+        id,
+        departmentId,
+        name,
+        accountRole: defaultAccountRoleForCatalogRole(role),
+        criteria: normalizeKpiCriteria(role?.criteria),
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeBehaviorRulesCatalog(value) {
+  const source = Array.isArray(value) && value.length ? value : defaultBehaviorRules;
+  const names = new Set();
+  return source
+    .slice(0, 80)
+    .map((rule) => {
+      const name = catalogText(Array.isArray(rule) ? rule[0] : rule?.name);
+      const points = catalogNumber(Array.isArray(rule) ? rule[1] : rule?.points, 0, -120, 120);
+      if (!name || names.has(name.toLocaleLowerCase("vi"))) return null;
+      names.add(name.toLocaleLowerCase("vi"));
+      return [name, points];
+    })
+    .filter(Boolean);
+}
+
+let departments = normalizeDepartmentsCatalog(defaultDepartments);
+let roles = normalizeRolesCatalog(defaultRoles);
+let behaviorRules = normalizeBehaviorRulesCatalog(defaultBehaviorRules);
+
+function applyRuntimeKpiCatalogs(payload) {
+  departments = normalizeDepartmentsCatalog(payload?.departments);
+  roles = normalizeRolesCatalog(payload?.roles);
+  behaviorRules = normalizeBehaviorRulesCatalog(payload?.behaviorRules);
+}
 
 const accountRoleLabels = {
   admin: "Admin",
@@ -677,6 +825,7 @@ const systemModules = [
   { id: "history", label: "Lịch sử", note: "Dòng thời gian hoạt động của phòng ban và nhân viên." },
   { id: "accounts", label: "Tài khoản", note: "Quản lý tài khoản sử dụng hệ thống." },
   { id: "rules", label: "Quy chế", note: "Quy chế thi đua, khen thưởng và cách tính KPI." },
+  { id: "help", label: "Trợ giúp", note: "Hướng dẫn sử dụng, yêu cầu hỗ trợ và phản hồi từ Admin." },
 ];
 
 // These defaults preserve the existing business permissions. Admin can still
@@ -692,8 +841,9 @@ const moduleDefaultRoleAccess = {
   history: ["director", "manager", "deputy_manager"],
   accounts: [...moduleAccessRoles],
   rules: [...moduleAccessRoles],
+  help: [...moduleAccessRoles],
 };
-const MODULE_SETTINGS_VERSION = 2;
+const MODULE_SETTINGS_VERSION = 3;
 
 const customFieldScopes = [
   { id: "people", label: "Nhân sự", formId: "personForm" },
@@ -730,53 +880,9 @@ const defaultKpiParameters = {
 };
 
 function defaultAccounts() {
-  return [
-    {
-      id: "account-admin",
-      username: "admin",
-      password: "123456",
-      displayName: "Admin tổng hợp",
-      role: "admin",
-      personId: "",
-      departmentId: "",
-    },
-    {
-      id: "account-director",
-      username: "giamdoc",
-      password: "123456",
-      displayName: "Giám đốc",
-      role: "director",
-      personId: "",
-      departmentId: "",
-    },
-    {
-      id: "account-deputy-1",
-      username: "phogiamdoc1",
-      password: "123456",
-      displayName: "Phó giám đốc 1",
-      role: "director",
-      personId: "",
-      departmentId: "",
-    },
-    {
-      id: "account-deputy-2",
-      username: "phogiamdoc2",
-      password: "123456",
-      displayName: "Phó giám đốc 2",
-      role: "director",
-      personId: "",
-      departmentId: "",
-    },
-    {
-      id: "account-deputy-3",
-      username: "phogiamdoc3",
-      password: "123456",
-      displayName: "Phó giám đốc 3",
-      role: "director",
-      personId: "",
-      departmentId: "",
-    },
-  ];
+  // Credentials are never embedded in the browser bundle. A new offline
+  // browser profile must be initialized from an authenticated data backup.
+  return [];
 }
 
 function ensureDefaultAccounts(accounts, { bootstrap = false } = {}) {
@@ -788,9 +894,13 @@ function ensureDefaultAccounts(accounts, { bootstrap = false } = {}) {
 
 function accountRoleForPerson(person) {
   const roleId = person?.roleId || "";
+  const configuredRole = roleById(roleId)?.accountRole;
+  if (configurablePersonnelAccountRoles.includes(configuredRole)) return configuredRole;
+  if (roleId.startsWith("giam-doc-") || roleId.startsWith("pho-giam-doc-")) return "director";
   if (roleId.startsWith("truong-phong-")) return "manager";
   if (roleId.startsWith("pho-phong-")) return "deputy_manager";
   if (roleId.startsWith("truong-bo-phan-")) return "section_head";
+  if (roleId === "nhan-vien-tong-hop-gpmb") return "employee";
   return "employee";
 }
 
@@ -817,12 +927,29 @@ function uniqueUsernameForPerson(person, accounts) {
   return username;
 }
 
+function createTemporaryPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
+  const bytes = new Uint8Array(16);
+  if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  return `Pht!${Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("")}`;
+}
+
+function isStrongAccountPassword(password) {
+  const value = String(password || "");
+  const groups = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(value)).length;
+  return value.length >= 10 && value.length <= 128 && groups >= 3;
+}
+
 function createPersonnelAccount(person, accounts) {
   const timestamp = new Date().toISOString();
   return {
     id: `account-person-${person.id}`,
     username: uniqueUsernameForPerson(person, accounts),
-    password: "123456",
+    password: createTemporaryPassword(),
+    // Existing and newly created accounts keep their password until the
+    // account owner or an authorized administrator changes it voluntarily.
+    passwordChangeRequired: false,
     displayName: person.name,
     role: accountRoleForPerson(person),
     personId: person.id,
@@ -1072,6 +1199,7 @@ function normalizeSystemCustomization(customization = {}) {
 }
 
 const state = loadState();
+applyRuntimeKpiCatalogs(state);
 restoreCustomizationLayoutDefaults(state);
 if (localStorage.getItem(SESSION_KEY)) {
   const hideLoginNow = () => {
@@ -1101,6 +1229,7 @@ let archiveFileDraft = [];
 let bulletinResizeRefreshQueued = false;
 let taskAttachmentDraft = [];
 let assignmentAttachmentDraft = [];
+let taskBulkImportState = { rows: [], errors: [], fileName: "" };
 let taskDetailInlineEditor = null;
 let personDetailInlineEditor = null;
 let dashboardRefreshQueued = false;
@@ -1127,6 +1256,9 @@ let offlineLoginProofCacheTimer = 0;
 let offlineLoginProofCacheInFlight = false;
 const storedFileDataCache = new Map();
 const storedFileObjectUrlCache = new Map();
+const taskSearchTextCache = new WeakMap();
+const archiveSearchTextCache = new WeakMap();
+let searchIndexGeneration = 0;
 const DASHBOARD_CHART_ANIMATION_MS = 720;
 const sharedSync = {
   available: null,
@@ -1207,6 +1339,23 @@ const MAX_BULLETIN_MEDIA_BYTES = MAX_SHARED_FILE_BYTES;
 const MAX_BULLETIN_MEDIA_TOTAL_BYTES = 120 * 1024 * 1024;
 const MAX_ARCHIVE_FILE_BYTES = MAX_SHARED_FILE_BYTES;
 const MAX_ARCHIVE_FILE_TOTAL_BYTES = 300 * 1024 * 1024;
+const TASK_BULK_IMPORT_MAX_ROWS = 500;
+const TASK_BULK_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+const taskBulkImportHeaders = {
+  title: ["tên công việc", "công việc", "nội dung công việc", "title"],
+  project: ["danh mục dự án", "tên dự án", "dự án", "project"],
+  owner: ["người thực hiện", "người phụ trách", "nhân sự thực hiện", "owner"],
+  collaborators: ["người phối hợp", "phối hợp", "collaborators"],
+  category: ["danh mục kpi cá nhân", "kpi cá nhân", "tiêu chí kpi", "danh mục kpi", "kpi"],
+  workType: ["loại công việc", "loại"],
+  recurrence: ["định kỳ", "lặp lại"],
+  startDate: ["ngày bắt đầu", "start date"],
+  due: ["ngày hoàn thành", "hạn hoàn thành", "deadline", "due date"],
+  status: ["trạng thái", "status"],
+  progress: ["tiến độ", "tiến độ (%)", "phần trăm tiến độ", "progress"],
+  note: ["nội dung công việc / báo cáo tiến độ", "nội dung", "báo cáo tiến độ", "ghi chú", "note"],
+};
 
 function currentMonth() {
   const date = new Date();
@@ -1359,7 +1508,7 @@ function taskCompletionReviewValueHtml(task) {
     return `<span class="task-completion-review-value is-passed">Đạt${taskCompletionTimingBadgeHtml(task)}</span>`;
   }
   if (status === "failed") return "Không đạt · Yêu cầu tiếp tục thực hiện";
-  if (status === "pending") return "Chờ đánh giá Đạt/Không đạt";
+  if (status === "pending") return '<strong class="task-completion-review-pending">Chờ đánh giá Đạt/Không đạt</strong>';
   return "Chưa yêu cầu";
 }
 
@@ -1812,8 +1961,12 @@ function defaultStatePayload() {
     evaluations: [],
     departmentEvaluations: [],
     accounts: defaultAccounts(),
+    supportRequests: [],
     moduleSettings: defaultModuleSettings(),
     systemCustomization: defaultSystemCustomization(),
+    departments: normalizeDepartmentsCatalog(defaultDepartments),
+    roles: normalizeRolesCatalog(defaultRoles),
+    behaviorRules: normalizeBehaviorRulesCatalog(defaultBehaviorRules),
     activityLog: [],
     importedPeopleVersion: "",
     canBoGpmbKpiCatalogVersion: "",
@@ -1921,8 +2074,12 @@ function normalizeStatePayload(parsed) {
     evaluations: Array.isArray(parsed.evaluations) ? parsed.evaluations : [],
     departmentEvaluations: Array.isArray(parsed.departmentEvaluations) ? parsed.departmentEvaluations : [],
     accounts: Array.isArray(parsed.accounts) ? parsed.accounts : fallback.accounts,
+    supportRequests: Array.isArray(parsed.supportRequests) ? parsed.supportRequests : [],
     moduleSettings: normalizeModuleSettings(parsed.moduleSettings),
     systemCustomization: normalizeSystemCustomization(parsed.systemCustomization),
+    departments: normalizeDepartmentsCatalog(parsed.departments),
+    roles: normalizeRolesCatalog(parsed.roles),
+    behaviorRules: normalizeBehaviorRulesCatalog(parsed.behaviorRules),
     activityLog: Array.isArray(parsed.activityLog)
       ? parsed.activityLog.filter((entry) => !retiredAssignmentTaskIds.has(String(entry?.targetId || "")))
       : [],
@@ -1988,6 +2145,7 @@ async function restoreDurableState() {
     if (localSerialized === serialized) return false;
     if (localSavedAt > durableSavedAt) return false;
     Object.assign(state, normalizeStatePayload(JSON.parse(serialized)));
+    applyRuntimeKpiCatalogs(state);
     try {
       localStorage.setItem(STORAGE_KEY, serialized);
     } catch {
@@ -2445,6 +2603,32 @@ function accountUsageMonthlyEntryForDepartment(entry, departmentId) {
   };
 }
 
+function accountUsageVisitEntryForDepartment(entry, departmentId) {
+  if (!departmentId) return entry || {};
+  const department = (Array.isArray(entry?.departments) ? entry.departments : []).find(
+    (item) => String(item.departmentId || "unassigned") === departmentId,
+  );
+  return {
+    ...entry,
+    uniqueAccounts: Number(department?.uniqueAccounts) || 0,
+    visitCount: Number(department?.visitCount) || 0,
+  };
+}
+
+function renderAccountVisitHistory(entries, departmentId, emptyText) {
+  const rows = (Array.isArray(entries) ? entries : []).map((source) => accountUsageVisitEntryForDepartment(source, departmentId));
+  if (!rows.length) return `<p class="muted">${escapeHtml(emptyText)}</p>`;
+  return rows
+    .map((entry) => `
+      <article class="account-usage-visit-row">
+        <time datetime="${escapeHtml(entry.period || "")}">${escapeHtml(formatDate(entry.period) || entry.period || "-")}</time>
+        <span><strong>${Number(entry.visitCount) || 0}</strong> lượt truy cập</span>
+        <span><strong>${Number(entry.uniqueAccounts) || 0}</strong> tài khoản</span>
+      </article>
+    `)
+    .join("");
+}
+
 function renderAccountInactiveUsageGroups(groups, emptyText) {
   if (!Array.isArray(groups) || !groups.length) return `<p class="muted">${escapeHtml(emptyText)}</p>`;
   return groups
@@ -2462,7 +2646,7 @@ function renderAccountInactiveUsageGroups(groups, emptyText) {
             ${accounts
               .map((account) => {
                 const role = accountRoleLabels[account.role] || account.role || "Tài khoản";
-                const lastLogin = account.lastLoginAt ? `Đăng nhập gần nhất: ${formatDateTime(account.lastLoginAt)}` : "Chưa có đăng nhập trong 12 tháng gần đây";
+                const lastLogin = account.lastLoginAt ? `Hoạt động gần nhất: ${formatDateTime(account.lastLoginAt)}` : "Chưa có hoạt động trong 12 tháng gần đây";
                 return `
                   <article class="account-usage-person">
                     <div>
@@ -2490,7 +2674,10 @@ function renderAccountUsageDetails() {
   const monthList = byId("accountInactiveMonthList");
   const historyStatus = byId("accountUsageHistoryStatus");
   const historyList = byId("accountUsageMonthlyHistory");
-  if (!dayCount || !weekCount || !monthCount || !dayList || !weekList || !monthList || !historyStatus || !historyList) return;
+  const dailyVisitList = byId("accountUsageDailyVisitHistory");
+  const todayVisitCount = byId("accountVisitTodayCount");
+  const monthVisitCount = byId("accountVisitMonthCount");
+  if (!dayCount || !weekCount || !monthCount || !dayList || !weekList || !monthList || !historyStatus || !historyList || !dailyVisitList || !todayVisitCount || !monthVisitCount) return;
 
   renderAccountUsageDepartmentFilter();
   const departmentId = accountUsageSelectedDepartmentId();
@@ -2505,6 +2692,9 @@ function renderAccountUsageDetails() {
     monthList.innerHTML = `<p class="muted">${connectionMessage}</p>`;
     historyStatus.textContent = "Chưa có kết nối";
     historyList.innerHTML = '<p class="muted">Lịch sử hoạt động được tổng hợp từ máy chủ.</p>';
+    dailyVisitList.innerHTML = '<p class="muted">Kết nối máy chủ để xem lượt truy cập theo ngày.</p>';
+    todayVisitCount.textContent = "-";
+    monthVisitCount.textContent = "-";
     return;
   }
 
@@ -2519,6 +2709,9 @@ function renderAccountUsageDetails() {
     monthList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
     historyStatus.textContent = accountPresence.usageError ? "Không thể tải dữ liệu" : "Đang tải";
     historyList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+    dailyVisitList.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+    todayVisitCount.textContent = "...";
+    monthVisitCount.textContent = "...";
     return;
   }
 
@@ -2540,6 +2733,25 @@ function renderAccountUsageDetails() {
   monthList.innerHTML = renderAccountInactiveUsageGroups(filteredMonthGroups, `${emptyPrefix}tháng này.`);
 
   const monthlyHistory = Array.isArray(payload.monthlyHistory) ? payload.monthlyHistory : [];
+  const dailyVisitHistory = Array.isArray(payload.dailyVisitHistory) ? payload.dailyVisitHistory : [];
+  const dailyVisitsAvailable = payload.dailyVisitAvailable !== false;
+  const todayVisits = accountUsageVisitEntryForDepartment(
+    dailyVisitHistory.find((entry) => entry.period === payload.todayVisitPeriod) || {},
+    departmentId,
+  );
+  const monthVisits = accountUsageMonthlyEntryForDepartment(
+    monthlyHistory.find((entry) => entry.period === payload.monthVisitPeriod) || {},
+    departmentId,
+  );
+  todayVisitCount.textContent = dailyVisitsAvailable ? String(Number(todayVisits.visitCount) || 0) : "-";
+  monthVisitCount.textContent = String(Number(monthVisits.loginCount) || 0);
+  dailyVisitList.innerHTML = dailyVisitsAvailable
+    ? renderAccountVisitHistory(
+        dailyVisitHistory,
+        departmentId,
+        departmentId ? "Phòng đã chọn chưa có lượt truy cập trong 30 ngày gần nhất." : "Chưa có lượt truy cập được ghi nhận trong 30 ngày gần nhất.",
+      )
+    : '<p class="muted">Máy chủ chưa cập nhật bảng tổng hợp lượt truy cập theo ngày. Hãy chạy migration và triển khai lại kpi-sync.</p>';
   historyStatus.textContent = `Cập nhật: ${formatDateTime(payload.generatedAt)}`;
   historyList.innerHTML = monthlyHistory.length
     ? monthlyHistory
@@ -2555,8 +2767,8 @@ function renderAccountUsageDetails() {
                 <span>${escapeHtml(departmentSummary || "Chưa có phòng ban")}</span>
               </div>
               <div class="account-usage-month-metrics">
-                <span><strong>${Number(entry.uniqueAccounts) || 0}/${Number(entry.totalAccounts) || 0}</strong> đã đăng nhập</span>
-                <span><strong>${Number(entry.loginCount) || 0}</strong> lượt đăng nhập</span>
+                <span><strong>${Number(entry.uniqueAccounts) || 0}/${Number(entry.totalAccounts) || 0}</strong> tài khoản truy cập</span>
+                <span><strong>${Number(entry.loginCount) || 0}</strong> lượt truy cập</span>
                 <span><strong>${Number(entry.inactiveAccounts) || 0}</strong> chưa đăng nhập</span>
               </div>
             </article>
@@ -2774,6 +2986,7 @@ async function adoptSharedState(payload, { render = true } = {}) {
   const normalized = normalizeStatePayload(payload);
   normalized.activePeriod = localActivePeriod || normalized.activePeriod;
   Object.assign(state, normalized);
+  applyRuntimeKpiCatalogs(state);
   sharedSync.baseState = cloneStatePayload(normalized);
   sharedSync.serverBaseState = sharedServerBasePayload(payload);
   persistState();
@@ -2799,6 +3012,7 @@ async function retainUnsyncedLocalChanges(remotePayload, { render = true } = {})
   const base = sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : cloneStatePayload(remote);
   const merged = mergeRemoteStateWithUnsyncedChanges(base, local, remote);
   Object.assign(state, merged);
+  applyRuntimeKpiCatalogs(state);
   sharedSync.baseState = cloneStatePayload(remote);
   sharedSync.serverBaseState = sharedServerBasePayload(remotePayload);
   sharedSync.pending = true;
@@ -3136,6 +3350,7 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
     evaluations: "KPI cá nhân",
     departmentEvaluations: "KPI phòng",
     accounts: "Tài khoản",
+    supportRequests: "Yêu cầu hỗ trợ",
     activityLog: "Lịch sử hoạt động",
     field: "Cấu hình hệ thống",
   };
@@ -3356,6 +3571,7 @@ async function flushSharedStateSync() {
         : state;
       const merged = mergeRemoteStateWithUnsyncedChanges(snapshot, currentForMerge, payload.state);
       Object.assign(state, merged);
+      applyRuntimeKpiCatalogs(state);
       sharedSync.baseState = cloneStatePayload(normalizeStatePayload(payload.state));
       sharedSync.serverBaseState = sharedServerBasePayload(payload.state);
     } else {
@@ -3591,6 +3807,7 @@ function scheduleVisibleViewWork(viewId, callback, delay = 80) {
 
 function reloadStateFromStorage() {
   Object.assign(state, loadState());
+  applyRuntimeKpiCatalogs(state);
   if (byId("activePeriod")) byId("activePeriod").value = state.activePeriod;
   scheduleDashboardRefresh();
 }
@@ -3792,6 +4009,17 @@ function migrateCanBoGpmbKpiCatalog() {
   return changed;
 }
 
+function clearMandatoryPasswordChangeFlags() {
+  if (!Array.isArray(state.accounts)) return false;
+  let changed = false;
+  state.accounts = state.accounts.map((account) => {
+    if (!account || account.passwordChangeRequired !== true) return account;
+    changed = true;
+    return { ...account, passwordChangeRequired: false };
+  });
+  return changed;
+}
+
 migrateDepartmentTermLabels();
 migrateLegacyProjectDepartments();
 mergeImportedPeopleIntoState();
@@ -3801,7 +4029,8 @@ if (isOfflineFileRuntime()) {
   scheduleLocalOfflineLoginProofCache(state.accounts);
 }
 migrateCanBoGpmbKpiCatalog();
-if (syncPersonnelAccounts()) saveState();
+const passwordPolicyUpdated = clearMandatoryPasswordChangeFlags();
+if (syncPersonnelAccounts() || passwordPolicyUpdated) saveState();
 
 function departmentById(id) {
   return departments.find((item) => item.id === id);
@@ -3809,6 +4038,18 @@ function departmentById(id) {
 
 function roleById(id) {
   return roles.find((item) => item.id === id);
+}
+
+function isKpiExemptDepartment(departmentId) {
+  return departmentById(departmentId)?.kpiExempt === true;
+}
+
+function isKpiEligiblePerson(person) {
+  return Boolean(person) && !isKpiExemptDepartment(person.departmentId);
+}
+
+function kpiEligibleDepartments() {
+  return departments.filter((department) => !department.kpiExempt);
 }
 
 function personById(id) {
@@ -4010,6 +4251,10 @@ function canViewAllData() {
   return isDirector() || isAdmin();
 }
 
+function canViewSystemContent(account = currentAccount()) {
+  return canViewAllData() || accountAccessGrants(account).viewSystemContent;
+}
+
 function currentPersonRoleId() {
   return currentPerson()?.roleId || "";
 }
@@ -4055,7 +4300,7 @@ function canEditOwnAccount() {
 }
 
 function canViewPeople() {
-  return canViewAllData() || hasDepartmentManagementAccess();
+  return canViewSystemContent() || hasDepartmentManagementAccess();
 }
 
 function canEditPeople() {
@@ -4063,11 +4308,11 @@ function canEditPeople() {
 }
 
 function canViewTasks() {
-  return canViewAllData() || hasDepartmentTaskAccess() || !!currentPerson();
+  return canViewSystemContent() || hasDepartmentTaskAccess() || !!currentPerson();
 }
 
 function canViewDepartmentEvaluations() {
-  return canViewAllData() || hasDepartmentManagementAccess();
+  return canViewSystemContent() || hasDepartmentManagementAccess();
 }
 
 function accountAccessGrants(account = currentAccount()) {
@@ -4075,6 +4320,7 @@ function accountAccessGrants(account = currentAccount()) {
   return {
     bulletinPublish: grants.bulletinPublish === true,
     archiveWrite: grants.archiveWrite === true,
+    viewSystemContent: grants.viewSystemContent === true,
   };
 }
 
@@ -4114,14 +4360,14 @@ function canAccessView(viewId) {
 function firstAccessibleView() {
   const preferred = canViewAllData()
     ? systemModules.map((module) => module.id)
-    : ["evaluations", "tasks", "bulletin", "archive", "people", "department-evaluations", "history", "accounts", "rules", "dashboard"];
+    : ["evaluations", "tasks", "bulletin", "archive", "people", "department-evaluations", "history", "accounts", "rules", "help", "dashboard"];
   return preferred.find((viewId) => canAccessView(viewId)) || "accounts";
 }
 
 function canEvaluatePerson(personId) {
   const account = currentAccount();
   const person = personById(personId);
-  if (!account || !person) return false;
+  if (!account || !isKpiEligiblePerson(person)) return false;
   if (isDirector() || isAdmin()) return true;
   if (isManager()) return person.departmentId === currentDepartmentId();
   return person.id === account.personId;
@@ -4133,19 +4379,19 @@ function canEditEvaluation(personId, period) {
 
 function canEditEvaluationBehavior(personId, period) {
   const person = personById(personId);
-  if (!person || !canEditPeriod(period)) return false;
+  if (!isKpiEligiblePerson(person) || !canEditPeriod(period)) return false;
   if (isDirector() || isAdmin()) return true;
   return isManager() && person.departmentId === currentDepartmentId();
 }
 
 function canReportDepartmentEvaluation(departmentId, period) {
-  if (!departmentId || !canEditPeriod(period)) return false;
+  if (!departmentId || isKpiExemptDepartment(departmentId) || !canEditPeriod(period)) return false;
   if (isAdmin()) return true;
   return hasDepartmentManagementAccess() && departmentId === currentDepartmentId();
 }
 
 function canConfirmDepartmentEvaluation(departmentId, period) {
-  if (!departmentId || !canEditPeriod(period)) return false;
+  if (!departmentId || isKpiExemptDepartment(departmentId) || !canEditPeriod(period)) return false;
   return isDirector() || isAdmin();
 }
 
@@ -4154,42 +4400,42 @@ function canEditDepartmentEvaluation(departmentId, period) {
 }
 
 function visiblePeopleForEvaluation() {
-  if (canViewAllData()) return state.people;
-  if (isManager()) return state.people.filter((person) => person.departmentId === currentDepartmentId());
+  if (canViewSystemContent()) return state.people.filter(isKpiEligiblePerson);
+  if (isManager()) return state.people.filter((person) => person.departmentId === currentDepartmentId() && isKpiEligiblePerson(person));
   const person = currentPerson();
-  return person ? [person] : [];
+  return isKpiEligiblePerson(person) ? [person] : [];
 }
 
 function visiblePeopleForPeopleView() {
-  if (canViewAllData()) return state.people;
+  if (canViewSystemContent()) return state.people;
   if (hasDepartmentTaskAccess()) return state.people.filter((person) => person.departmentId === currentDepartmentId());
   const person = currentPerson();
   return person ? [person] : [];
 }
 
 function visiblePeopleForTasks() {
-  if (canViewAllData()) return state.people;
+  if (canViewSystemContent()) return state.people;
   if (hasDepartmentTaskAccess()) return state.people.filter((person) => person.departmentId === currentDepartmentId());
   const person = currentPerson();
   return person ? [person] : [];
 }
 
 function visiblePeopleForHistory() {
-  if (canViewAllData()) return state.people;
+  if (canViewSystemContent()) return state.people;
   const person = currentPerson();
   return person ? [person] : [];
 }
 
 function visibleDepartmentsForHistory() {
-  if (canViewAllData()) return departments;
+  if (canViewSystemContent()) return departments;
   const departmentId = currentDepartmentId();
   return departments.filter((department) => department.id === departmentId);
 }
 
 function visibleDepartmentsForDepartmentEvaluations() {
-  if (canViewAllData()) return departments;
+  if (canViewSystemContent()) return kpiEligibleDepartments();
   const departmentId = currentDepartmentId();
-  return departmentId ? departments.filter((department) => department.id === departmentId) : [];
+  return departmentId ? kpiEligibleDepartments().filter((department) => department.id === departmentId) : [];
 }
 
 function canAssignTasks() {
@@ -4351,7 +4597,7 @@ function isTaskAssigner(task) {
 }
 
 function canViewAssignedTask(task) {
-  return !!task && isAssignedTask(task) && (canViewAllData() || isTaskAssigner(task) || canReportTask(task) || canCollaborateTask(task) || (hasDepartmentTaskAccess() && taskHasParticipantInDepartment(task, currentDepartmentId())));
+  return !!task && isAssignedTask(task) && (canViewSystemContent() || isTaskAssigner(task) || canReportTask(task) || canCollaborateTask(task) || (hasDepartmentTaskAccess() && taskHasParticipantInDepartment(task, currentDepartmentId())));
 }
 
 function canEndTaskAssignment(task) {
@@ -4365,7 +4611,7 @@ function canOpenTask(task) {
 function canViewTaskRecord(task) {
   if (!task) return false;
   if (isAssignedTask(task)) return canViewAssignedTask(task);
-  if (canViewAllData()) return true;
+  if (canViewSystemContent()) return true;
   if (hasDepartmentTaskAccess() && taskHasParticipantInDepartment(task, currentDepartmentId())) return true;
   if (canCollaborateTask(task)) return true;
   return canReportTask(task);
@@ -4379,20 +4625,40 @@ function personIsVisible(personId) {
   return visiblePeopleForEvaluation().some((person) => person.id === personId);
 }
 
+function recordUpdatedTime(record, index) {
+  const timestamp = Date.parse(record?.updatedAt || record?.createdAt || "");
+  return Number.isFinite(timestamp) ? timestamp : index;
+}
+
+function latestRecordsForPeriod(records, entityKey, period, isEligible) {
+  const latestByEntity = new Map();
+  (records || []).forEach((record, index) => {
+    const entityId = String(record?.[entityKey] || "").trim();
+    if (!entityId || record?.period !== period || !isEligible(entityId, record)) return;
+    const existing = latestByEntity.get(entityId);
+    if (!existing || recordUpdatedTime(record, index) >= existing.updatedTime) {
+      latestByEntity.set(entityId, { record, updatedTime: recordUpdatedTime(record, index) });
+    }
+  });
+  return [...latestByEntity.values()].map((item) => item.record);
+}
+
 function evaluationsForPeriod(period = state.activePeriod) {
-  return state.evaluations.filter((item) => item.period === period);
+  return latestRecordsForPeriod(state.evaluations, "personId", period, (personId) => isKpiEligiblePerson(personById(personId)));
 }
 
 function latestEvaluation(personId, period = state.activePeriod) {
-  return state.evaluations.find((item) => item.personId === personId && item.period === period);
+  if (!isKpiEligiblePerson(personById(personId))) return undefined;
+  return evaluationsForPeriod(period).find((item) => item.personId === personId);
 }
 
 function departmentEvaluationsForPeriod(period = state.activePeriod) {
-  return state.departmentEvaluations.filter((item) => item.period === period);
+  return latestRecordsForPeriod(state.departmentEvaluations, "departmentId", period, (departmentId) => !isKpiExemptDepartment(departmentId));
 }
 
 function latestDepartmentEvaluation(departmentId, period = state.activePeriod) {
-  return [...state.departmentEvaluations].reverse().find((item) => item.departmentId === departmentId && item.period === period);
+  if (isKpiExemptDepartment(departmentId)) return undefined;
+  return departmentEvaluationsForPeriod(period).find((item) => item.departmentId === departmentId);
 }
 
 function currentActorInfo() {
@@ -4425,12 +4691,6 @@ function applyRecordAudit(record, existing) {
 }
 
 function logActivity(entry) {
-  // Nếu là tài khoản Nhân viên, không đẩy activityLog vào state đồng bộ server
-  // để tránh bị máy chủ từ chối quyền (denied)
-  if (isEmployee()) {
-    return null;
-  }
-
   const timestamp = entry.timestamp || new Date().toISOString();
   const actor = currentActorInfo();
   const activity = {
@@ -4654,6 +4914,20 @@ function taskParticipantPersonId(value) {
   return String(accountById(id)?.personId || id);
 }
 
+function ensureTaskOwnerOption(task) {
+  const select = byId("taskOwner");
+  const ownerId = String(task?.ownerId || "").trim();
+  if (!select || !ownerId || Array.from(select.options).some((option) => option.value === ownerId)) return;
+  const person = personById(ownerId) || personById(taskParticipantPersonId(ownerId));
+  const label = person
+    ? `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`
+    : String(task?.ownerName || "Người thực hiện hiện tại");
+  const option = document.createElement("option");
+  option.value = ownerId;
+  option.textContent = label;
+  select.append(option);
+}
+
 function taskParticipantIds(task) {
   return uniquePersonIds([taskParticipantPersonId(task?.ownerId), ...taskCollaboratorIds(task)]);
 }
@@ -4671,60 +4945,7 @@ function taskCollaboratorNames(task) {
 function selectedTaskCollaboratorIds() {
   return uniquePersonIds(
     Array.from(byId("taskCollaborators")?.querySelectorAll('input[type="checkbox"]:checked') || []).map((input) => input.value),
-  ).filter((id) => !selectedTaskOwnerIds().includes(id));
-}
-
-function selectedTaskOwnerIds() {
-  const container = byId("taskOwners");
-  const inputs = Array.from(container?.querySelectorAll('input[type="checkbox"]') || []);
-  const checked = inputs.filter((input) => input.checked).map((input) => input.value);
-  return uniquePersonIds(inputs.length ? checked : [byId("taskOwner")?.value]);
-}
-
-function updateTaskOwnerSummary() {
-  const ids = selectedTaskOwnerIds();
-  byId("taskOwner").value = ids[0] || "";
-  const names = ids.map((id) => personById(id)?.name).filter(Boolean);
-  byId("taskOwnerSummary").textContent = names.length === 1 ? names[0] : names.length ? `Đã chọn ${names.length} người thực hiện` : "Chọn người thực hiện";
-}
-
-function filterTaskOwnerOptions() {
-  const query = normalizeSearchText(byId("taskOwnerSearch")?.value || "");
-  let visibleCount = 0;
-  byId("taskOwners")?.querySelectorAll(".checkbox-option").forEach((option) => {
-    const visible = !query || normalizeSearchText(option.textContent).includes(query);
-    option.classList.toggle("is-hidden", !visible);
-    if (visible) visibleCount += 1;
-  });
-  byId("taskOwnerSearchEmpty")?.classList.toggle("is-hidden", !query || visibleCount > 0);
-}
-
-function updateTaskOwnerOptions(selectedValues = []) {
-  const container = byId("taskOwners");
-  if (!container) return;
-  const selectedIds = uniquePersonIds(selectedValues.length ? selectedValues : selectedTaskOwnerIds());
-  container.innerHTML = visiblePeopleForTasks().map((person) => `
-    <label class="checkbox-option">
-      <input type="checkbox" value="${escapeHtml(person.id)}" ${selectedIds.includes(person.id) ? "checked" : ""}>
-      <span>${escapeHtml(person.name)} - ${escapeHtml(roleById(person.roleId)?.name || "Chưa rõ vị trí")}</span>
-    </label>
-  `).join("");
-  updateTaskOwnerSummary();
-  filterTaskOwnerOptions();
-}
-
-function setTaskOwnerPickerOpen(open) {
-  const picker = byId("taskOwnerPicker");
-  const panel = byId("taskOwnerPanel");
-  const toggle = byId("taskOwnerToggle");
-  if (!picker || !panel || !toggle) return;
-  const shouldOpen = Boolean(open) && !picker.classList.contains("is-disabled");
-  picker.classList.toggle("is-open", shouldOpen);
-  panel.classList.toggle("is-hidden", !shouldOpen);
-  toggle.setAttribute("aria-expanded", String(shouldOpen));
-  if (!shouldOpen) byId("taskOwnerSearch").value = "";
-  filterTaskOwnerOptions();
-  if (shouldOpen) requestAnimationFrame(() => byId("taskOwnerSearch")?.focus());
+  ).filter((id) => id !== byId("taskOwner").value);
 }
 
 function updateTaskCollaboratorSummary() {
@@ -4738,6 +4959,78 @@ function updateTaskCollaboratorSummary() {
     return;
   }
   summary.textContent = selectedIds.length ? `Đã chọn ${selectedIds.length} người phối hợp` : "Chọn người phối hợp";
+}
+
+function updateTaskOwnerSummary() {
+  const select = byId("taskOwner");
+  const summary = byId("taskOwnerSummary");
+  if (!select || !summary) return;
+  const option = Array.from(select.options).find((item) => item.value === select.value);
+  summary.textContent = option?.value ? option.textContent || "Chọn người thực hiện" : "Chọn người thực hiện";
+}
+
+function filterTaskOwnerOptions() {
+  const container = byId("taskOwnerOptions");
+  const searchInput = byId("taskOwnerSearch");
+  const emptyState = byId("taskOwnerSearchEmpty");
+  if (!container || !searchInput) return;
+  const query = normalizeSearchText(searchInput.value);
+  let visibleCount = 0;
+  container.querySelectorAll(".task-owner-option").forEach((option) => {
+    const visible = !query || normalizeSearchText(option.textContent).includes(query);
+    option.classList.toggle("is-hidden", !visible);
+    if (visible) visibleCount += 1;
+  });
+  emptyState?.classList.toggle("is-hidden", !query || visibleCount > 0);
+}
+
+function resetTaskOwnerSearch() {
+  const input = byId("taskOwnerSearch");
+  if (input) input.value = "";
+  filterTaskOwnerOptions();
+}
+
+function isTaskOwnerPickerOpen() {
+  const panel = byId("taskOwnerPanel");
+  return !!panel && !panel.classList.contains("is-hidden");
+}
+
+function setTaskOwnerPickerOpen(open) {
+  const picker = byId("taskOwnerPicker");
+  const panel = byId("taskOwnerPanel");
+  const toggle = byId("taskOwnerToggle");
+  if (!picker || !panel || !toggle) return;
+  const shouldOpen = Boolean(open) && !picker.classList.contains("is-disabled");
+  picker.classList.toggle("is-open", shouldOpen);
+  panel.classList.toggle("is-hidden", !shouldOpen);
+  toggle.setAttribute("aria-expanded", String(shouldOpen));
+  if (!shouldOpen) {
+    resetTaskOwnerSearch();
+    return;
+  }
+  setTaskCollaboratorPickerOpen(false);
+  requestAnimationFrame(() => byId("taskOwnerSearch")?.focus());
+}
+
+function updateTaskOwnerOptions() {
+  const select = byId("taskOwner");
+  const container = byId("taskOwnerOptions");
+  if (!select || !container) return;
+  const selectedId = String(select.value || "");
+  const options = Array.from(select.options)
+    .filter((option) => option.value)
+    .map((option) => ({ value: option.value, label: option.textContent || "Nhân sự" }));
+  container.classList.toggle("is-empty", !options.length);
+  container.innerHTML = options.length
+    ? options.map((option) => `
+        <label class="checkbox-option task-owner-option">
+          <input type="radio" name="taskOwnerChoice" value="${escapeHtml(option.value)}" ${option.value === selectedId ? "checked" : ""}>
+          <span>${escapeHtml(option.label)}</span>
+        </label>
+      `).join("")
+    : "<span>Không có nhân sự phù hợp.</span>";
+  updateTaskOwnerSummary();
+  filterTaskOwnerOptions();
 }
 
 function filterTaskCollaboratorOptions() {
@@ -4826,7 +5119,6 @@ function taskUpdateChangeLabels(previousTask, nextTask) {
 function getDueStatus(task) {
   const status = normalizeTaskStatus(task.status);
   if (status === TASK_STATUS_CLOSED) return status;
-  // 🌟 Ưu tiên chuyển sang cột Hoàn thành khi trạng thái là "Hoàn thành"
   if (status === TASK_STATUS_COMPLETED) return status;
   if (!task.due) return status;
   const due = taskDeadlineDate(task);
@@ -5005,7 +5297,7 @@ function averageScore(items, key = "finalScore") {
 }
 
 function syncIndividualScoresForDepartment(period, departmentId, departmentScore) {
-  const peopleIds = state.people.filter((person) => person.departmentId === departmentId).map((person) => person.id);
+  const peopleIds = state.people.filter((person) => person.departmentId === departmentId && isKpiEligiblePerson(person)).map((person) => person.id);
   state.evaluations
     .filter((evaluation) => evaluation.period === period && peopleIds.includes(evaluation.personId))
     .forEach((evaluation) => {
@@ -5329,8 +5621,9 @@ function updateTaskCategoryOptions(selectedValue, ownerSelectId = "taskOwner", c
 
 function updateTaskCollaboratorOptions(selectedValues = []) {
   const container = byId("taskCollaborators");
-  const ownerIds = selectedTaskOwnerIds();
-  const selectedIds = uniquePersonIds(selectedValues.length ? selectedValues : selectedTaskCollaboratorIds()).filter((id) => !ownerIds.includes(id));
+  updateTaskOwnerOptions();
+  const ownerId = byId("taskOwner").value;
+  const selectedIds = uniquePersonIds(selectedValues.length ? selectedValues : selectedTaskCollaboratorIds()).filter((id) => id !== ownerId);
   const taskPeople = visiblePeopleForTasks();
   const peopleWithSelected = [...taskPeople];
   selectedIds.forEach((personId) => {
@@ -5340,7 +5633,7 @@ function updateTaskCollaboratorOptions(selectedValues = []) {
     }
   });
   const options = peopleWithSelected
-    .filter((person) => !ownerIds.includes(person.id))
+    .filter((person) => person.id !== ownerId)
     .map((person) => ({
       value: person.id,
       label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
@@ -5363,9 +5656,9 @@ function updateTaskCollaboratorOptions(selectedValues = []) {
 }
 
 function renderPersonOptions() {
-  const currentTaskOwners = selectedTaskOwnerIds();
-  const currentTaskOwner = currentTaskOwners[0] || byId("taskOwner").value;
+  const currentTaskOwner = byId("taskOwner").value;
   const currentTaskCollaborators = selectedTaskCollaboratorIds();
+  const editingTask = state.tasks.find((task) => task.id === byId("taskId").value);
   const taskPeople = visiblePeopleForTasks();
   const taskPeopleWithSelected =
     currentTaskOwner && !taskPeople.some((person) => person.id === currentTaskOwner)
@@ -5379,7 +5672,8 @@ function renderPersonOptions() {
     value: person.id,
     label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
   }));
-  const placeholder = [{ value: "", label: state.people.length ? "Chọn nhân sự" : "Chưa có nhân sự" }];
+  const personPlaceholder = [{ value: "", label: taskSelectOptions.length ? "Chọn nhân sự" : "Chưa có nhân sự" }];
+  const evaluationPlaceholder = [{ value: "", label: evaluationOptions.length ? "Chọn nhân sự" : "Không có nhân sự thuộc diện đánh giá KPI" }];
   const currentEvalPerson = byId("evalPerson").value;
   const selectedEvalPerson = evaluationOptions.some((option) => option.value === currentEvalPerson)
     ? currentEvalPerson
@@ -5399,13 +5693,18 @@ function renderPersonOptions() {
           : "";
   fillSelect(
     byId("taskOwner"),
-    placeholder.concat(taskSelectOptions),
+    personPlaceholder.concat(taskSelectOptions),
     selectedTaskOwner,
   );
-  updateTaskOwnerOptions(currentTaskOwners.length ? currentTaskOwners : [selectedTaskOwner]);
+  if (editingTask) {
+    // Online data for a collaborator can omit the owner's personnel record.
+    // Keep the original owner in the disabled edit form so progress updates remain valid.
+    ensureTaskOwnerOption(editingTask);
+    byId("taskOwner").value = String(editingTask.ownerId || "");
+  }
   updateTaskCollaboratorOptions(currentTaskCollaborators);
   updateTaskCategoryOptions(byId("taskCategory").value);
-  fillSelect(byId("evalPerson"), placeholder.concat(evaluationOptions), selectedEvalPerson);
+  fillSelect(byId("evalPerson"), evaluationPlaceholder.concat(evaluationOptions), selectedEvalPerson);
   byId("evalPerson").disabled = isEmployee();
   return;
 
@@ -5441,10 +5740,10 @@ function renderPersonOptions() {
       ? assignmentOptions[0].value
       : "";
   const selectedAssignmentCollaborator = assignmentCollaboratorOptions.some((option) => option.value === currentAssignmentCollaborator) ? currentAssignmentCollaborator : "";
-  fillSelect(byId("assignmentTaskOwner"), placeholder.concat(assignmentOptions), selectedAssignmentOwner);
+  fillSelect(byId("assignmentTaskOwner"), personPlaceholder.concat(assignmentOptions), selectedAssignmentOwner);
   fillSelect(byId("assignmentTaskCollaborator"), [{ value: "", label: "Không chọn người phối hợp" }].concat(assignmentCollaboratorOptions), selectedAssignmentCollaborator);
   updateTaskCategoryOptions(byId("assignmentTaskCategory").value, "assignmentTaskOwner", "assignmentTaskCategory");
-  fillSelect(byId("evalPerson"), placeholder.concat(evaluationOptions), selectedEvalPerson);
+  fillSelect(byId("evalPerson"), evaluationPlaceholder.concat(evaluationOptions), selectedEvalPerson);
   byId("evalPerson").disabled = isEmployee();
 }
 
@@ -5471,7 +5770,7 @@ function renderPeopleTable() {
   const search = normalizeSearchText(byId("personSearch").value.trim());
   const evaluatedPeople = new Set(evaluationsForPeriod(state.activePeriod).map((evaluation) => evaluation.personId));
   const people = basePeople.filter((person) => {
-    if (peoplePendingEvaluationOnly && evaluatedPeople.has(person.id)) return false;
+    if (peoplePendingEvaluationOnly && (!isKpiEligiblePerson(person) || evaluatedPeople.has(person.id))) return false;
     if (!search) return true;
     const department = departmentById(person.departmentId)?.name || "";
     const role = roleById(person.roleId)?.name || "";
@@ -5661,6 +5960,14 @@ function taskBoardSearchText(task) {
   return `${task.title} ${projectNameForTask(task)} ${taskKind} ${owner} ${collaborators} ${assigner} ${task.category} ${regularMeta} ${task.note || ""} ${task.responseNote || ""} ${reports} ${attachments}`.toLowerCase();
 }
 
+function indexedTaskBoardSearchText(task) {
+  const cached = taskSearchTextCache.get(task);
+  if (cached?.generation === searchIndexGeneration) return cached.text;
+  const text = taskBoardSearchText(task);
+  taskSearchTextCache.set(task, { generation: searchIndexGeneration, text });
+  return text;
+}
+
 function currentTaskTimeFilter() {
   return {
     from: byId("taskDateFrom")?.value || "",
@@ -5680,43 +5987,13 @@ function taskProjectOptions() {
 }
 
 function renderTaskProjectOptions() {
-  const allProjects = taskProjectOptions();
+  const options = [{ value: "", label: "Chưa chọn danh mục dự án" }, ...taskProjectOptions()];
   ["taskProjectId"].forEach((selectId) => {
     const select = byId(selectId);
     if (!select) return;
     const selected = select.value;
-    const options = [{ value: "", label: "Chưa chọn danh mục dự án" }, ...allProjects];
     fillSelect(select, options, selected);
   });
-  renderTaskProjectPicker();
-}
-
-function renderTaskProjectPicker() {
-  const container = byId("taskProjectOptions");
-  if (!container) return;
-  const selected = byId("taskProjectId").value;
-  const query = normalizeSearchText(byId("taskProjectSearch")?.value || "");
-  const projects = taskProjectOptions().filter((project) => !query || normalizeSearchText(project.label).includes(query));
-  container.innerHTML = projects.map((project) => `
-    <button class="checkbox-option${project.value === selected ? " is-selected" : ""}" type="button" role="option" aria-selected="${project.value === selected}" data-select-task-project="${escapeHtml(project.value)}">
-      <span>${escapeHtml(project.label)}</span>
-    </button>
-  `).join("");
-  byId("taskProjectSearchEmpty")?.classList.toggle("is-hidden", projects.length > 0);
-  byId("taskProjectSummary").textContent = taskProjectOptions().find((project) => project.value === selected)?.label || "Chưa chọn danh mục dự án";
-}
-
-function setTaskProjectPickerOpen(open) {
-  const picker = byId("taskProjectPicker");
-  const panel = byId("taskProjectPanel");
-  const toggle = byId("taskProjectToggle");
-  if (!picker || !panel || !toggle) return;
-  picker.classList.toggle("is-open", Boolean(open));
-  panel.classList.toggle("is-hidden", !open);
-  toggle.setAttribute("aria-expanded", String(Boolean(open)));
-  if (!open) byId("taskProjectSearch").value = "";
-  renderTaskProjectPicker();
-  if (open) requestAnimationFrame(() => byId("taskProjectSearch")?.focus());
 }
 
 function resetTaskProjectCatalogForm() {
@@ -5904,6 +6181,524 @@ function renderTaskProjectFilterOptions() {
   select.value = projects.includes(selected) ? selected : "";
 }
 
+function resetTaskBulkImport() {
+  taskBulkImportState = { rows: [], errors: [], fileName: "" };
+  const input = byId("taskBulkImportFile");
+  if (input) input.value = "";
+  byId("taskBulkImportSummary").textContent = "Chưa chọn tệp để kiểm tra.";
+  byId("taskBulkImportErrors").classList.add("is-hidden");
+  byId("taskBulkImportErrors").innerHTML = "";
+  byId("taskBulkImportPreview").innerHTML = '<tr><td colspan="7" class="empty-cell">Chưa có dữ liệu xem trước.</td></tr>';
+  byId("confirmTaskBulkImport").disabled = true;
+}
+
+function openTaskBulkImportDialog() {
+  if (!isAdmin()) return;
+  resetTaskBulkImport();
+  const dialog = byId("taskBulkImportDialog");
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+}
+
+function closeTaskBulkImportDialog() {
+  const dialog = byId("taskBulkImportDialog");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
+  resetTaskBulkImport();
+}
+
+function normalizeTaskBulkImportKey(value) {
+  return normalizeSearchText(value).replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function taskBulkImportColumnMap(headers) {
+  const normalizedHeaders = headers.map((header) => normalizeTaskBulkImportKey(header));
+  return Object.fromEntries(
+    Object.entries(taskBulkImportHeaders).map(([field, aliases]) => [
+      field,
+      normalizedHeaders.findIndex((header) => aliases.some((alias) => header === normalizeTaskBulkImportKey(alias))),
+    ]),
+  );
+}
+
+function taskBulkImportCell(row, columns, field) {
+  const index = Number(columns[field]);
+  return index >= 0 ? String(row[index] ?? "").trim() : "";
+}
+
+function parseTaskBulkImportCsv(text) {
+  const source = String(text || "").replace(/^\uFEFF/, "");
+  const firstLine = source.split(/\r?\n/, 1)[0] || "";
+  const delimiter = [";", ",", "\t"].reduce(
+    (selected, candidate) => (firstLine.split(candidate).length > firstLine.split(selected).length ? candidate : selected),
+    ";",
+  );
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quoted && character === '"' && source[index + 1] === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && character === delimiter) {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+    if (!quoted && (character === "\n" || character === "\r")) {
+      if (character === "\r" && source[index + 1] === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some((value) => value)) rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    cell += character;
+  }
+  row.push(cell.trim());
+  if (row.some((value) => value)) rows.push(row);
+  if (quoted) throw new Error("Tệp CSV có dấu nháy kép chưa được đóng.");
+  return rows;
+}
+
+function readTaskBulkImportZipEntries(buffer) {
+  const data = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  let endOffset = -1;
+  for (let offset = Math.max(0, data.length - 65557); offset <= data.length - 22; offset += 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) endOffset = offset;
+  }
+  if (endOffset < 0) throw new Error("Tệp Excel không có cấu trúc ZIP hợp lệ.");
+  const entryCount = view.getUint16(endOffset + 10, true);
+  let offset = view.getUint32(endOffset + 16, true);
+  const entries = new Map();
+  const decoder = new TextDecoder();
+  for (let index = 0; index < entryCount; index += 1) {
+    if (view.getUint32(offset, true) !== 0x02014b50) throw new Error("Tệp Excel có danh mục ZIP không hợp lệ.");
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    const name = decoder.decode(data.slice(offset + 46, offset + 46 + nameLength));
+    entries.set(name, { method, compressedSize, localOffset });
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return { data, view, entries };
+}
+
+async function readTaskBulkImportZipText(archive, name) {
+  const entry = archive.entries.get(name);
+  if (!entry) return "";
+  const { data, view } = archive;
+  if (view.getUint32(entry.localOffset, true) !== 0x04034b50) throw new Error("Tệp Excel có dữ liệu ZIP không hợp lệ.");
+  const nameLength = view.getUint16(entry.localOffset + 26, true);
+  const extraLength = view.getUint16(entry.localOffset + 28, true);
+  const start = entry.localOffset + 30 + nameLength + extraLength;
+  const compressed = data.slice(start, start + entry.compressedSize);
+  let output;
+  if (entry.method === 0) {
+    output = compressed;
+  } else if (entry.method === 8 && typeof DecompressionStream === "function") {
+    const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    output = new Uint8Array(await new Response(stream).arrayBuffer());
+  } else {
+    throw new Error("Trình duyệt không hỗ trợ đọc định dạng nén của tệp Excel này. Hãy lưu lại dưới dạng .xlsx hoặc .csv.");
+  }
+  return new TextDecoder().decode(output);
+}
+
+function taskBulkImportColumnIndex(cellReference) {
+  const letters = String(cellReference || "").match(/[A-Z]+/i)?.[0] || "A";
+  return [...letters.toUpperCase()].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+}
+
+function taskBulkImportExcelDate(value) {
+  const serial = Number(value);
+  if (!Number.isFinite(serial) || serial < 20000 || serial > 90000) return "";
+  const date = new Date((Math.floor(serial) - 25569) * 86400000);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+}
+
+async function parseTaskBulkImportXlsx(buffer) {
+  const archive = readTaskBulkImportZipEntries(buffer);
+  const sharedStringsXml = await readTaskBulkImportZipText(archive, "xl/sharedStrings.xml");
+  const sharedStrings = sharedStringsXml
+    ? Array.from(new DOMParser().parseFromString(sharedStringsXml, "application/xml").getElementsByTagName("si")).map((item) =>
+        Array.from(item.getElementsByTagName("t")).map((text) => text.textContent || "").join(""),
+      )
+    : [];
+  const sheetName = [...archive.entries.keys()]
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))[0];
+  if (!sheetName) throw new Error("Không tìm thấy trang dữ liệu trong tệp Excel.");
+  const sheetXml = await readTaskBulkImportZipText(archive, sheetName);
+  const documentXml = new DOMParser().parseFromString(sheetXml, "application/xml");
+  if (documentXml.getElementsByTagName("parsererror").length) throw new Error("Không đọc được nội dung XML của tệp Excel.");
+  return Array.from(documentXml.getElementsByTagName("row")).map((row) => {
+    const values = [];
+    Array.from(row.getElementsByTagName("c")).forEach((cell) => {
+      const index = taskBulkImportColumnIndex(cell.getAttribute("r"));
+      const type = cell.getAttribute("t") || "";
+      const valueNode = cell.getElementsByTagName("v")[0];
+      const inlineText = Array.from(cell.getElementsByTagName("t")).map((item) => item.textContent || "").join("");
+      const raw = valueNode?.textContent || inlineText || "";
+      values[index] = type === "s" ? sharedStrings[Number(raw)] || "" : type === "inlineStr" ? inlineText : raw;
+    });
+    return values.map((value) => String(value ?? "").trim());
+  }).filter((row) => row.some((value) => value));
+}
+
+function normalizeTaskBulkImportDate(value) {
+  const text = String(value ?? "").trim();
+  const excelDate = taskBulkImportExcelDate(text);
+  if (excelDate) return excelDate;
+  const iso = text.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/);
+  const vietnam = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  const parts = iso ? [iso[1], iso[2], iso[3]] : vietnam ? [vietnam[3], vietnam[2], vietnam[1]] : null;
+  if (!parts) return "";
+  const result = `${parts[0]}-${padDatePart(parts[1])}-${padDatePart(parts[2])}`;
+  const date = new Date(`${result}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === result ? result : "";
+}
+
+function taskBulkImportPerson(reference) {
+  const raw = String(reference || "").trim();
+  if (!raw) return null;
+  const byId = personById(raw);
+  if (byId) return byId;
+  const normalized = normalizeSearchText(raw);
+  const directMatches = state.people.filter((person) => normalizeSearchText(person.name) === normalized);
+  if (directMatches.length === 1) return directMatches[0];
+  const accountMatches = state.accounts
+    .filter((account) => normalizeSearchText(account.username) === normalized || normalizeSearchText(account.displayName) === normalized)
+    .map((account) => personById(account.personId))
+    .filter(Boolean);
+  return accountMatches.length === 1 ? accountMatches[0] : null;
+}
+
+function taskBulkImportWorkType(value) {
+  const normalized = normalizeSearchText(value);
+  if (!normalized || normalized === "routine" || normalized.includes("thuong xuyen")) return TASK_WORK_TYPE_ROUTINE;
+  if (normalized === "arising" || normalized.includes("phat sinh")) return TASK_WORK_TYPE_ARISING;
+  return "";
+}
+
+function taskBulkImportRecurrence(value) {
+  const normalized = normalizeSearchText(value);
+  if (!normalized || normalized === "none" || normalized.includes("khong dinh ky")) return TASK_RECURRENCE_NONE;
+  if (normalized === "monthly" || normalized.includes("hang thang")) return TASK_RECURRENCE_MONTHLY;
+  if (normalized === "quarterly" || normalized.includes("hang quy")) return TASK_RECURRENCE_QUARTERLY;
+  return "";
+}
+
+function taskBulkImportStatus(value) {
+  const normalized = normalizeSearchText(value);
+  if (!normalized || normalized.includes("chuan bi") || normalized.includes("chua bat dau")) return TASK_STATUS_PREPARING;
+  if (normalized.includes("dang thuc hien")) return "Đang thực hiện";
+  if (normalized.includes("hoan thanh")) return TASK_STATUS_COMPLETED;
+  if (normalized.includes("qua han")) return "Quá hạn";
+  return "";
+}
+
+function taskBulkImportSignature(row) {
+  return [normalizeSearchText(row.title), row.ownerId, projectCatalogNameKey(row.projectName), row.startDate, row.due].join("|");
+}
+
+function validateTaskBulkImportRows(rows) {
+  if (!rows.length) throw new Error("Tệp chưa có dòng dữ liệu.");
+  const [headers, ...dataRows] = rows;
+  const columns = taskBulkImportColumnMap(headers);
+  const missingHeaders = ["title", "project", "owner", "category", "startDate", "due"].filter((field) => columns[field] < 0);
+  if (missingHeaders.length) {
+    const labels = {
+      title: "Tên công việc",
+      project: "Danh mục dự án",
+      owner: "Người thực hiện",
+      category: "Danh mục KPI cá nhân",
+      startDate: "Ngày bắt đầu",
+      due: "Ngày hoàn thành",
+    };
+    throw new Error(`Thiếu cột bắt buộc: ${missingHeaders.map((field) => labels[field]).join(", ")}.`);
+  }
+  if (dataRows.length > TASK_BULK_IMPORT_MAX_ROWS) throw new Error(`Mỗi lần chỉ nhập tối đa ${TASK_BULK_IMPORT_MAX_ROWS} công việc.`);
+
+  const existingSignatures = new Set(
+    state.tasks.map((task) => taskBulkImportSignature({
+      title: task.title,
+      ownerId: task.ownerId,
+      projectName: projectNameForTask(task),
+      startDate: task.startDate || "",
+      due: task.due || "",
+    })),
+  );
+  const importedSignatures = new Set();
+  const validatedRows = [];
+  const errors = [];
+
+  dataRows.forEach((source, index) => {
+    const line = index + 2;
+    const messages = [];
+    const title = taskBulkImportCell(source, columns, "title");
+    const projectName = normalizedProjectCatalogName(taskBulkImportCell(source, columns, "project"));
+    const ownerReference = taskBulkImportCell(source, columns, "owner");
+    const owner = taskBulkImportPerson(ownerReference);
+    const categorySource = taskBulkImportCell(source, columns, "category");
+    const startDate = normalizeTaskBulkImportDate(taskBulkImportCell(source, columns, "startDate"));
+    const due = normalizeTaskBulkImportDate(taskBulkImportCell(source, columns, "due"));
+    if (!title) messages.push("Thiếu tên công việc");
+    if (!projectName) messages.push("Thiếu danh mục dự án");
+    if (!owner) messages.push(`Không tìm thấy hoặc trùng người thực hiện: ${ownerReference || "trống"}`);
+    if (!startDate) messages.push("Ngày bắt đầu không hợp lệ");
+    if (!due) messages.push("Ngày hoàn thành không hợp lệ");
+    if (startDate && due && startDate > due) messages.push("Ngày bắt đầu phải trước hoặc bằng ngày hoàn thành");
+    const category = owner
+      ? taskCategoryOptionsForPerson(owner.id).find((option) => normalizeSearchText(option) === normalizeSearchText(categorySource)) || ""
+      : "";
+    if (!category) messages.push(`Tiêu chí KPI không đúng với người thực hiện: ${categorySource || "trống"}`);
+    const workType = taskBulkImportWorkType(taskBulkImportCell(source, columns, "workType"));
+    if (!workType) messages.push("Loại công việc không hợp lệ");
+    const recurrence = taskBulkImportRecurrence(taskBulkImportCell(source, columns, "recurrence"));
+    if (!recurrence) messages.push("Định kỳ không hợp lệ");
+    const status = taskBulkImportStatus(taskBulkImportCell(source, columns, "status"));
+    if (!status) messages.push("Trạng thái không hợp lệ");
+    const progressText = taskBulkImportCell(source, columns, "progress");
+    const progress = progressText === "" ? (status === TASK_STATUS_COMPLETED ? 100 : 0) : Number(String(progressText).replace(",", "."));
+    if (!Number.isFinite(progress) || progress < 0 || progress > 100) messages.push("Tiến độ phải từ 0 đến 100");
+    if (status === TASK_STATUS_COMPLETED && Number(progress) < 100) messages.push("Công việc Hoàn thành cần tiến độ 100%");
+
+    const collaboratorIds = [];
+    const collaboratorSource = taskBulkImportCell(source, columns, "collaborators");
+    collaboratorSource
+      .split(/[;|,\n]+/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .forEach((reference) => {
+        const collaborator = taskBulkImportPerson(reference);
+        if (!collaborator) {
+          messages.push(`Không tìm thấy hoặc trùng người phối hợp: ${reference}`);
+        } else if (collaborator.id !== owner?.id && !collaboratorIds.includes(collaborator.id)) {
+          collaboratorIds.push(collaborator.id);
+        }
+      });
+
+    const record = {
+      line,
+      title,
+      projectName,
+      ownerId: owner?.id || "",
+      ownerName: owner?.name || ownerReference,
+      collaboratorIds,
+      category,
+      workType,
+      recurrence,
+      startDate,
+      due,
+      status,
+      progress: Number.isFinite(progress) ? progress : 0,
+      note: taskBulkImportCell(source, columns, "note"),
+      errors: messages,
+    };
+    const signature = taskBulkImportSignature(record);
+    if (!messages.length && (existingSignatures.has(signature) || importedSignatures.has(signature))) {
+      record.errors.push("Trùng công việc đã có hoặc trùng một dòng khác trong tệp");
+    }
+    if (!record.errors.length) importedSignatures.add(signature);
+    if (record.errors.length) errors.push({ line, messages: record.errors });
+    validatedRows.push(record);
+  });
+  return { rows: validatedRows, errors };
+}
+
+function renderTaskBulkImportPreview() {
+  const rows = taskBulkImportState.rows;
+  const errors = taskBulkImportState.errors;
+  const validCount = rows.filter((row) => !row.errors.length).length;
+  const existingProjectKeys = new Set((state.projectCatalog || []).map((project) => projectCatalogNameKey(project.name)));
+  const safeNewProjectCount = new Set(
+    rows.filter((row) => !row.errors.length).map((row) => projectCatalogNameKey(row.projectName)).filter((key) => !existingProjectKeys.has(key)),
+  ).size;
+  byId("taskBulkImportSummary").textContent = taskBulkImportState.fileName
+    ? `${taskBulkImportState.fileName}: ${rows.length} dòng dữ liệu · ${validCount} hợp lệ · ${errors.length} lỗi · ${safeNewProjectCount} dự án mới sẽ được thêm.`
+    : "Chưa chọn tệp để kiểm tra.";
+  byId("confirmTaskBulkImport").disabled = !validCount || Boolean(errors.length);
+  byId("taskBulkImportPreview").innerHTML = rows.length
+    ? rows.slice(0, 50).map((row) => `
+        <tr>
+          <td>${row.line}</td>
+          <td>${escapeHtml(row.title || "-")}</td>
+          <td>${escapeHtml(row.projectName || "-")}</td>
+          <td>${escapeHtml(row.ownerName || "-")}</td>
+          <td>${escapeHtml(row.category || "-")}</td>
+          <td>${escapeHtml(row.startDate ? `${formatDate(row.startDate)} - ${formatDate(row.due)}` : "-")}</td>
+          <td>${row.errors.length ? `<span class="badge bad">${escapeHtml(row.errors.join("; "))}</span>` : '<span class="badge good">Hợp lệ</span>'}</td>
+        </tr>
+      `).join("")
+    : '<tr><td colspan="7" class="empty-cell">Chưa có dữ liệu xem trước.</td></tr>';
+  const errorBox = byId("taskBulkImportErrors");
+  errorBox.classList.toggle("is-hidden", !errors.length);
+  errorBox.innerHTML = errors.length
+    ? `<strong>Cần sửa ${errors.length} dòng trước khi nhập:</strong><ul>${errors.slice(0, 12).map((error) => `<li>Dòng ${error.line}: ${escapeHtml(error.messages.join("; "))}</li>`).join("")}${errors.length > 12 ? `<li>... và ${errors.length - 12} dòng khác.</li>` : ""}</ul>`
+    : "";
+}
+
+async function parseTaskBulkImportFile(file) {
+  if (!file) return [];
+  if (Number(file.size) > TASK_BULK_IMPORT_MAX_FILE_BYTES) {
+    throw new Error("Tệp nhập công việc không được vượt quá 10 MB.");
+  }
+  const name = String(file.name || "").toLowerCase();
+  if (name.endsWith(".csv")) return parseTaskBulkImportCsv(await file.text());
+  if (name.endsWith(".xlsx")) return parseTaskBulkImportXlsx(await file.arrayBuffer());
+  throw new Error("Chỉ hỗ trợ tệp .xlsx hoặc .csv.");
+}
+
+async function handleTaskBulkImportFile(file) {
+  if (!isAdmin() || !file) return;
+  resetTaskBulkImport();
+  byId("taskBulkImportSummary").textContent = "Đang đọc và kiểm tra tệp Excel...";
+  try {
+    const rows = await parseTaskBulkImportFile(file);
+    const validated = validateTaskBulkImportRows(rows);
+    taskBulkImportState = { ...validated, fileName: file.name || "Tệp Excel" };
+    renderTaskBulkImportPreview();
+  } catch (error) {
+    taskBulkImportState = { rows: [], errors: [], fileName: "" };
+    byId("taskBulkImportSummary").textContent = error?.message || "Không thể đọc tệp Excel.";
+    byId("taskBulkImportPreview").innerHTML = '<tr><td colspan="7" class="empty-cell">Không có dữ liệu hợp lệ để xem trước.</td></tr>';
+  }
+}
+
+function downloadTaskBulkImportTemplate() {
+  const headers = ["Tên công việc", "Danh mục dự án", "Người thực hiện", "Người phối hợp", "Danh mục KPI cá nhân", "Loại công việc", "Định kỳ", "Ngày bắt đầu", "Ngày hoàn thành", "Trạng thái", "Tiến độ (%)", "Nội dung công việc / Báo cáo tiến độ"];
+  const content = `\uFEFF${headers.join(";")}\n`;
+  const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "mau-nhap-cong-viec.csv";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function importTaskBulkRows() {
+  if (!isAdmin()) return;
+  const rows = taskBulkImportState.rows.filter((row) => !row.errors.length);
+  if (!rows.length || taskBulkImportState.errors.length) return;
+  if (!confirm(`Nhập ${rows.length} công việc mới vào hệ thống? Dữ liệu sẽ được đồng bộ với các tài khoản khác.`)) return;
+  const previous = {
+    tasks: state.tasks,
+    projectCatalog: state.projectCatalog,
+    evaluations: state.evaluations,
+    activityLog: state.activityLog,
+  };
+  const timestamp = new Date().toISOString();
+  const actor = currentActorInfo();
+  const projectsByName = new Map((state.projectCatalog || []).map((project) => [projectCatalogNameKey(project.name), project]));
+  const newProjects = [];
+  rows.forEach((row) => {
+    const key = projectCatalogNameKey(row.projectName);
+    if (projectsByName.has(key)) return;
+    const project = applyRecordAudit({ id: uid("project"), name: row.projectName }, null);
+    projectsByName.set(key, project);
+    newProjects.push(project);
+  });
+  const importedTasks = rows.map((row) => {
+    const project = projectsByName.get(projectCatalogNameKey(row.projectName));
+    const completed = row.status === TASK_STATUS_COMPLETED;
+    return applyRecordAudit({
+      id: uid("task"),
+      kind: TASK_KIND_REGULAR,
+      title: row.title,
+      projectId: project?.id || "",
+      projectName: project?.name || row.projectName,
+      ownerId: row.ownerId,
+      collaboratorIds: row.collaboratorIds,
+      collaboratorId: "",
+      category: row.category,
+      workType: row.workType,
+      recurrence: row.recurrence,
+      startDate: row.startDate,
+      due: row.due,
+      dueTime: "",
+      status: row.status,
+      progress: row.progress,
+      qualityPercent: "",
+      attachments: [],
+      note: row.note,
+      customFields: {},
+      completionReviewStatus: completed ? "pending" : "",
+      completionReviewedAt: "",
+      completionReviewedById: "",
+      completionReviewedByName: "",
+      completionReviewNote: "",
+      completedAt: completed ? timestamp : "",
+      completedById: completed ? actor.id : "",
+      completedByName: completed ? actor.name : "",
+      progressReports: row.note ? [{
+        id: uid("task-report"),
+        progress: row.progress,
+        status: row.status,
+        previousStatus: "",
+        action: "Nhập hàng loạt từ Excel",
+        note: row.note,
+        createdAt: timestamp,
+        createdById: actor.id,
+        createdBy: actor.name,
+      }] : [],
+    }, null);
+  });
+  try {
+    state.projectCatalog = [...(state.projectCatalog || []), ...newProjects];
+    state.tasks = [...(state.tasks || []), ...importedTasks];
+    importedTasks.forEach((task) => {
+      syncPersonalEvaluationTaskScoresForTask(task);
+      const owner = personById(task.ownerId);
+      logActivity({
+        action: "Nhập hàng loạt từ Excel",
+        module: "Công việc",
+        targetType: "task",
+        targetId: task.id,
+        personId: task.ownerId,
+        departmentId: owner?.departmentId || "",
+        period: taskPeriod(task),
+        title: task.title,
+        details: `${task.projectName} · ${owner?.name || "Chưa rõ người thực hiện"} · ${task.category} · ${normalizeTaskStatus(task.status)}`,
+        score: `${formatScore(task.progress)}%`,
+      });
+    });
+    newProjects.forEach((project) => logActivity({
+      action: "Thêm dự án từ Excel",
+      module: "Công việc",
+      targetType: "project-catalog",
+      targetId: project.id,
+      title: project.name,
+      details: "Tự tạo khi nhập hàng loạt công việc.",
+    }));
+    saveState();
+    closeTaskBulkImportDialog();
+    renderAll();
+    alert(`Đã nhập ${importedTasks.length} công việc${newProjects.length ? ` và thêm ${newProjects.length} dự án mới` : ""}.`);
+  } catch (error) {
+    state.tasks = previous.tasks;
+    state.projectCatalog = previous.projectCatalog;
+    state.evaluations = previous.evaluations;
+    state.activityLog = previous.activityLog;
+    alert(error?.message || "Không thể lưu dữ liệu nhập từ Excel.");
+  }
+}
+
 function taskFilterDate(task) {
   return String(task.due || "");
 }
@@ -5940,7 +6735,7 @@ function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTi
     .filter((task) => taskMatchesStatusFilter(task, status))
     .filter((task) => taskMatchesTimeFilter(task, timeFilter))
     .filter((task) => taskMatchesProjectFilter(task, projectFilter))
-    .filter((task) => !keyword || taskBoardSearchText(task).includes(keyword));
+    .filter((task) => !keyword || indexedTaskBoardSearchText(task).includes(keyword));
 }
 
 function visibleRegularTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter()) {
@@ -5955,6 +6750,8 @@ function compareTaskRecords(a, b) {
 }
 
 function renderTaskBoard(options = {}) {
+  byId("openTaskForm")?.classList.toggle("is-hidden", !canCreateRegularTasks());
+  byId("openTaskBulkImport")?.classList.toggle("is-hidden", !isAdmin());
   renderTaskProjectFilterOptions();
   const search = byId("taskSearch").value.trim().toLowerCase();
   const filter = byId("taskStatusFilter").value;
@@ -6397,6 +7194,8 @@ function openTaskDetailDialog(taskId) {
         <span><strong>Danh mục KPI cá nhân</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
         ${!assigned ? `<span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>` : ""}
         ${!assigned ? `<span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}</span>` : ""}
+        <span><strong>Ngày tạo</strong>${escapeHtml(formatDateTime(task.createdAt) || "Chưa ghi nhận")}</span>
+        <span><strong>Người tạo</strong>${escapeHtml(task.createdBy || "Chưa ghi nhận")}</span>
         <span><strong>Ngày bắt đầu</strong>${escapeHtml(formatTaskStartDate(task) || "Chưa cập nhật")}</span>
         <span><strong>Ngày hoàn thành</strong>${escapeHtml(formatTaskDeadline(task) || "Chưa cập nhật")}</span>
         <span><strong>Đánh giá hoàn thành</strong>${taskCompletionReviewValueHtml(task)}</span>
@@ -7225,15 +8024,25 @@ function animateDashboardCharts() {
   dashboardChartAnimationFrame = requestAnimationFrame(step);
 }
 
-function renderGradeDistribution(periodEvaluations) {
+function hasRecordedKpiResult(evaluation) {
+  const value = evaluation?.finalScore;
+  return value !== "" && value !== null && value !== undefined && Number.isFinite(Number(value));
+}
+
+function kpiResultScore(evaluation) {
+  return Number(evaluation?.finalScore || 0);
+}
+
+function renderGradeDistribution(periodEvaluations, eligiblePeople = state.people.filter(isKpiEligiblePerson)) {
   const counts = Object.fromEntries(personalGradeOrder.map((grade) => [grade, 0]));
   periodEvaluations.forEach((evaluation) => {
-    counts[evaluation.grade || gradePersonal(evaluation.finalScore)] = (counts[evaluation.grade || gradePersonal(evaluation.finalScore)] || 0) + 1;
+    const grade = gradePersonal(kpiResultScore(evaluation));
+    counts[grade] = (counts[grade] || 0) + 1;
   });
   const evaluatedPeople = new Set(periodEvaluations.map((evaluation) => evaluation.personId));
-  const notEvaluated = state.people.filter((person) => !evaluatedPeople.has(person.id)).length;
+  const notEvaluated = eligiblePeople.filter((person) => !evaluatedPeople.has(person.id)).length;
   counts["Chưa chấm"] = notEvaluated;
-  const total = state.people.length;
+  const total = eligiblePeople.length;
   const chart = byId("gradeDistributionChart");
   byId("gradeChartSummary").textContent = total
     ? `${periodEvaluations.length}/${total} nhân viên đã có kết quả KPI trong kỳ ${formatMonthPeriod(state.activePeriod)}.`
@@ -7276,23 +8085,24 @@ function renderGradeDistribution(periodEvaluations) {
 }
 
 function renderDepartmentEffectivenessChart() {
-  const items = departments.map((department, index) => {
+  const eligibleDepartments = visibleDepartmentsForDepartmentEvaluations();
+  const items = eligibleDepartments.map((department, index) => {
     const people = state.people.filter((person) => person.departmentId === department.id);
-    const evaluation = latestDepartmentEvaluation(department.id);
-    const score = evaluation?.finalScore || 0;
+    const savedEvaluation = latestDepartmentEvaluation(department.id);
+    const evaluation = hasRecordedKpiResult(savedEvaluation) ? savedEvaluation : undefined;
+    const score = evaluation ? kpiResultScore(evaluation) : 0;
     return {
       department,
       people,
       evaluation,
       score,
-      grade: evaluation ? evaluation.grade : "Chưa chấm",
+      grade: evaluation ? gradeDepartment(score) : "Chưa chấm",
       color: departmentChartColors[index % departmentChartColors.length],
     };
   });
   const scored = items.filter((item) => item.evaluation);
-  const avg = scored.length ? scored.reduce((sum, item) => sum + item.score, 0) / scored.length : 0;
   byId("departmentChartSummary").textContent = scored.length
-    ? `${scored.length}/${departments.length} phòng đã có KPI phòng trong kỳ ${formatMonthPeriod(state.activePeriod)}.`
+    ? `${scored.length}/${eligibleDepartments.length} phòng đã có KPI phòng trong kỳ ${formatMonthPeriod(state.activePeriod)}.`
     : "Chưa có dữ liệu KPI phòng trong kỳ này.";
 
   byId("departmentSummary").innerHTML = items
@@ -7760,9 +8570,11 @@ function renderHistory() {
   if (type === "department") {
     const department = departmentById(targetId);
     const people = state.people.filter((person) => person.departmentId === targetId);
-    const peopleIds = people.map((person) => person.id);
-    const departmentEvals = state.departmentEvaluations.filter((item) => item.departmentId === targetId && isPeriodInRange(item.period, from, to));
-    const personalEvals = state.evaluations.filter((item) => peopleIds.includes(item.personId) && isPeriodInRange(item.period, from, to));
+    const eligiblePeopleIds = people.filter(isKpiEligiblePerson).map((person) => person.id);
+    const departmentEvals = isKpiExemptDepartment(targetId)
+      ? []
+      : state.departmentEvaluations.filter((item) => item.departmentId === targetId && isPeriodInRange(item.period, from, to));
+    const personalEvals = state.evaluations.filter((item) => eligiblePeopleIds.includes(item.personId) && isPeriodInRange(item.period, from, to));
     const tasks = state.tasks.filter((task) => peopleIds.includes(task.ownerId) && isPeriodInRange(taskPeriod(task), from, to));
     const overdue = tasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
     const activityItems = activitiesForHistory(type, targetId, from, to);
@@ -7786,8 +8598,10 @@ function renderHistory() {
   }
 
   const person = personById(targetId);
-  const evaluations = state.evaluations.filter((item) => item.personId === targetId && isPeriodInRange(item.period, from, to));
-  const departmentEvals = person
+  const evaluations = isKpiEligiblePerson(person)
+    ? state.evaluations.filter((item) => item.personId === targetId && isPeriodInRange(item.period, from, to))
+    : [];
+  const departmentEvals = isKpiEligiblePerson(person)
     ? state.departmentEvaluations.filter((item) => item.departmentId === person.departmentId && isPeriodInRange(item.period, from, to))
     : [];
   const tasks = state.tasks.filter((task) => task.ownerId === targetId && isPeriodInRange(taskPeriod(task), from, to));
@@ -7814,27 +8628,29 @@ function renderHistory() {
 
 function renderDashboard(options = {}) {
   byId("dashboardPeriodLabel").textContent = formatMonthPeriod(state.activePeriod || currentMonth());
-  const periodEvaluations = evaluationsForPeriod().filter((evaluation) => personById(evaluation.personId) && personIsVisible(evaluation.personId));
-  const avg = periodEvaluations.length
-    ? periodEvaluations.reduce((sum, item) => sum + item.finalScore, 0) / periodEvaluations.length
-    : 0;
+  const visiblePeople = visiblePeopleForEvaluation();
+  const visiblePersonIds = new Set(visiblePeople.map((person) => person.id));
+  const periodEvaluations = evaluationsForPeriod().filter(
+    (evaluation) => visiblePersonIds.has(evaluation.personId) && hasRecordedKpiResult(evaluation),
+  );
+  const avg = averageScore(periodEvaluations);
   const visibleTasks = state.tasks.filter((task) => personById(task.ownerId) && canViewTaskRecord(task));
   const overdue = visibleTasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
-  const reward = periodEvaluations.filter((item) => item.finalScore >= 90 || item.behaviorScore >= 5).length;
-  byId("metricPeople").textContent = state.people.length;
+  const reward = periodEvaluations.filter((item) => kpiResultScore(item) >= 90 || Number(item.behaviorScore || 0) >= 5).length;
+  byId("metricPeople").textContent = visiblePeople.length;
   byId("metricOverdue").textContent = overdue;
   byId("metricAvg").textContent = formatScore(avg);
   byId("metricReward").textContent = reward;
-  renderGradeDistribution(periodEvaluations);
+  renderGradeDistribution(periodEvaluations, visiblePeople);
 
-  const ranking = [...periodEvaluations].sort((a, b) => b.finalScore - a.finalScore).slice(0, 10);
+  const ranking = [...periodEvaluations].sort((a, b) => kpiResultScore(b) - kpiResultScore(a)).slice(0, 10);
   byId("rankingList").classList.toggle("empty-state", !ranking.length);
   byId("rankingList").innerHTML = ranking.length
     ? ranking
         .map((evaluation, index) => {
           const person = personById(evaluation.personId);
           if (!person) return "";
-          return `<div class="rank-item dashboard-link" data-dashboard-evaluation-detail="${escapeHtml(evaluation.id)}"><span class="rank-no">${index + 1}</span><div><strong>${escapeHtml(person.name)}</strong><br><span class="muted">${escapeHtml(roleById(person.roleId)?.name || "")}</span></div><span class="score">${formatScore(evaluation.finalScore)}</span></div>`;
+          return `<div class="rank-item dashboard-link" data-dashboard-evaluation-detail="${escapeHtml(evaluation.id)}"><span class="rank-no">${index + 1}</span><div><strong>${escapeHtml(person.name)}</strong><br><span class="muted">${escapeHtml(roleById(person.roleId)?.name || "")}</span></div><span class="score">${formatScore(kpiResultScore(evaluation))}</span></div>`;
         })
         .join("")
     : "Chưa có dữ liệu đánh giá.";
@@ -7852,11 +8668,11 @@ function renderDashboard(options = {}) {
       }),
     );
   periodEvaluations
-    .filter((item) => item.finalScore < 70)
-    .forEach((item) => alerts.push({ text: `KPI dưới 70: ${personById(item.personId)?.name || "nhân sự đã xóa"} - ${formatScore(item.finalScore)}`, personId: item.personId }));
+    .filter((item) => kpiResultScore(item) < 70)
+    .forEach((item) => alerts.push({ text: `KPI dưới 70: ${personById(item.personId)?.name || "nhân sự đã xóa"} - ${formatScore(kpiResultScore(item))}`, personId: item.personId }));
   departmentEvaluationsForPeriod()
-    .filter((item) => item.finalScore < 65)
-    .forEach((item) => alerts.push({ text: `KPI phòng dưới mức khá: ${departmentById(item.departmentId)?.name || "phòng đã xóa"} - ${formatScore(item.finalScore)}`, departmentId: item.departmentId }));
+    .filter((item) => hasRecordedKpiResult(item) && kpiResultScore(item) < 65)
+    .forEach((item) => alerts.push({ text: `KPI phòng dưới mức khá: ${departmentById(item.departmentId)?.name || "phòng đã xóa"} - ${formatScore(kpiResultScore(item))}`, departmentId: item.departmentId }));
   byId("alertList").classList.toggle("empty-state", !alerts.length);
   byId("alertList").innerHTML = alerts.length
     ? alerts
@@ -7880,7 +8696,7 @@ function renderDashboard(options = {}) {
 
 function rolesForRules() {
   const seen = new Set();
-  return roles.filter((role) => {
+  return roles.filter((role) => !isKpiExemptDepartment(role.departmentId)).filter((role) => {
     const criteriaKey = (role.criteria || []).map((criterion) => `${criterion[0]}:${criterion[1]}`).join("|");
     const key = `${role.name}|${criteriaKey}`;
     if (seen.has(key)) return false;
@@ -7890,6 +8706,7 @@ function rolesForRules() {
 }
 
 function renderRules() {
+  byId("openKpiCatalogManager")?.classList.toggle("is-hidden", !isAdmin());
   byId("rulesCriteria").innerHTML = rolesForRules()
     .map(
       (role) => `
@@ -7900,6 +8717,689 @@ function renderRules() {
       `,
     )
     .join("");
+}
+
+let kpiCatalogDraft = null;
+
+function kpiCatalogCriteriaTotal(criteria = []) {
+  return (criteria || []).reduce((sum, criterion) => sum + Number(criterion?.[1] || 0), 0);
+}
+
+function kpiCatalogCriteriaMarkup(scope, recordId, criteria = []) {
+  const rows = criteria.length
+    ? criteria.map((criterion, index) => `
+      <div class="kpi-catalog-criterion">
+        <label>Tên tiêu chí
+          <input data-kpi-catalog-criterion-name data-kpi-catalog-scope="${scope}" data-kpi-catalog-record="${escapeHtml(recordId)}" data-kpi-catalog-criterion-index="${index}" value="${escapeHtml(criterion[0])}" maxlength="180">
+        </label>
+        <label>Trọng số / điểm
+          <input data-kpi-catalog-criterion-weight data-kpi-catalog-scope="${scope}" data-kpi-catalog-record="${escapeHtml(recordId)}" data-kpi-catalog-criterion-index="${index}" type="number" min="0" max="120" step="0.01" value="${escapeHtml(criterion[1])}">
+        </label>
+        <button class="ghost kpi-catalog-delete" data-kpi-catalog-action="remove-criterion" data-kpi-catalog-scope="${scope}" data-kpi-catalog-record="${escapeHtml(recordId)}" data-kpi-catalog-criterion-index="${index}" type="button">Xóa</button>
+      </div>
+    `).join("")
+    : '<p class="kpi-catalog-record-empty">Chưa có tiêu chí.</p>';
+  const total = kpiCatalogCriteriaTotal(criteria);
+  return `
+    <div class="kpi-catalog-criteria">
+      <div class="kpi-catalog-criteria-head">
+        <span>Tổng trọng số: <strong class="kpi-catalog-total ${total !== 100 && criteria.length ? "is-warning" : ""}" data-kpi-catalog-total="${scope}:${escapeHtml(recordId)}">${formatScore(total)}</strong></span>
+        <button class="ghost" data-kpi-catalog-action="add-criterion" data-kpi-catalog-scope="${scope}" data-kpi-catalog-record="${escapeHtml(recordId)}" type="button">Thêm tiêu chí</button>
+      </div>
+      ${rows}
+    </div>
+  `;
+}
+
+function catalogDepartmentSetting(department) {
+  if (department?.leadershipOnly) return "leadership";
+  if (department?.kpiExempt) return "kpi-exempt";
+  return "standard";
+}
+
+function kpiCatalogDepartmentMarkup(department) {
+  return `
+    <article class="kpi-catalog-record" data-kpi-catalog-card="department:${escapeHtml(department.id)}">
+      <div class="kpi-catalog-record-main">
+        <label>Tên phòng
+          <input data-kpi-catalog-department-name data-kpi-catalog-department-id="${escapeHtml(department.id)}" value="${escapeHtml(department.name)}" maxlength="180">
+        </label>
+        <label>Thiết lập KPI
+          <select data-kpi-catalog-department-setting data-kpi-catalog-department-id="${escapeHtml(department.id)}">
+            <option value="standard" ${catalogDepartmentSetting(department) === "standard" ? "selected" : ""}>Áp dụng KPI</option>
+            <option value="kpi-exempt" ${catalogDepartmentSetting(department) === "kpi-exempt" ? "selected" : ""}>Miễn đánh giá KPI</option>
+            <option value="leadership" ${catalogDepartmentSetting(department) === "leadership" ? "selected" : ""}>Khối lãnh đạo, miễn KPI</option>
+          </select>
+        </label>
+        <button class="ghost kpi-catalog-delete" data-kpi-catalog-action="remove-department" data-kpi-catalog-record="${escapeHtml(department.id)}" type="button">Xóa phòng</button>
+      </div>
+      ${kpiCatalogCriteriaMarkup("department", department.id, department.criteria)}
+    </article>
+  `;
+}
+
+function kpiCatalogRoleMarkup(role) {
+  const departmentOptions = (kpiCatalogDraft?.departments || [])
+    .map((department) => `<option value="${escapeHtml(department.id)}" ${role.departmentId === department.id ? "selected" : ""}>${escapeHtml(department.name)}</option>`)
+    .join("");
+  const accountRoleOptions = [
+    ["employee", "Nhân viên"],
+    ["section_head", "Trưởng bộ phận/Trưởng nhóm"],
+    ["manager", "Trưởng phòng"],
+    ["deputy_manager", "Phó phòng"],
+    ["director", "Ban giám đốc"],
+  ]
+    .map(([value, label]) => `<option value="${value}" ${role.accountRole === value ? "selected" : ""}>${label}</option>`)
+    .join("");
+  return `
+    <article class="kpi-catalog-record" data-kpi-catalog-card="role:${escapeHtml(role.id)}">
+      <div class="kpi-catalog-record-main">
+        <label>Vị trí
+          <input data-kpi-catalog-role-name data-kpi-catalog-role-id="${escapeHtml(role.id)}" value="${escapeHtml(role.name)}" maxlength="180">
+        </label>
+        <label>Thuộc phòng
+          <select data-kpi-catalog-role-department data-kpi-catalog-role-id="${escapeHtml(role.id)}">${departmentOptions}</select>
+        </label>
+        <label>Quyền tài khoản
+          <select data-kpi-catalog-role-access data-kpi-catalog-role-id="${escapeHtml(role.id)}">${accountRoleOptions}</select>
+        </label>
+        <button class="ghost kpi-catalog-delete" data-kpi-catalog-action="remove-role" data-kpi-catalog-record="${escapeHtml(role.id)}" type="button">Xóa vị trí</button>
+      </div>
+      ${kpiCatalogCriteriaMarkup("role", role.id, role.criteria)}
+    </article>
+  `;
+}
+
+const kpiParameterDefinitions = {
+  shared: [
+    { key: "completionMax", label: "Giới hạn % hoàn thành", min: 1, max: 300, step: 1 },
+    { key: "criterionScale", label: "Hệ số điểm tiêu chí", min: 0, max: 10, step: 0.01 },
+  ],
+  department: [
+    { key: "departmentCriteriaWeight", label: "Hệ số điểm tiêu chí phòng", min: 0, max: 10, step: 0.01 },
+    { key: "departmentAdjustmentWeight", label: "Hệ số cộng/trừ thi đua", min: 0, max: 10, step: 0.01 },
+  ],
+  personal: [
+    { key: "personalWeight", label: "Hệ số KPI cá nhân", min: 0, max: 10, step: 0.01 },
+    { key: "departmentWeight", label: "Hệ số KPI phòng", min: 0, max: 10, step: 0.01 },
+    { key: "behaviorWeight", label: "Hệ số khen thưởng/kỷ luật", min: 0, max: 10, step: 0.01 },
+  ],
+};
+
+function kpiCatalogParameterFieldMarkup(definition) {
+  return `
+    <label class="kpi-catalog-parameter-field">${escapeHtml(definition.label)}
+      <input data-kpi-catalog-parameter="${definition.key}" type="number" min="${definition.min}" max="${definition.max}" step="${definition.step}" value="${escapeHtml(kpiCatalogDraft?.kpiParameters?.[definition.key])}">
+    </label>
+  `;
+}
+
+function kpiCatalogParameterSectionMarkup(title, description, parameterDefinitions = []) {
+  return `
+    <section class="kpi-catalog-section kpi-catalog-parameter-section">
+      <div class="kpi-catalog-section-head">
+        <div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description)}</p></div>
+      </div>
+      <div class="kpi-catalog-parameter-grid">${parameterDefinitions.map(kpiCatalogParameterFieldMarkup).join("")}</div>
+    </section>
+  `;
+}
+
+function renderKpiCatalogManager() {
+  const container = byId("kpiCatalogManagerContent");
+  if (!container || !kpiCatalogDraft) return;
+  const departmentRecords = kpiCatalogDraft.departments.map(kpiCatalogDepartmentMarkup).join("") || '<p class="kpi-catalog-record-empty">Chưa có phòng.</p>';
+  const roleRecords = kpiCatalogDraft.roles.map(kpiCatalogRoleMarkup).join("") || '<p class="kpi-catalog-record-empty">Chưa có vị trí.</p>';
+  const behaviorRows = kpiCatalogDraft.behaviorRules.length
+    ? kpiCatalogDraft.behaviorRules.map((rule, index) => `
+      <div class="kpi-catalog-behavior-row">
+        <label>Danh mục
+          <input data-kpi-catalog-behavior-name data-kpi-catalog-behavior-index="${index}" value="${escapeHtml(rule[0])}" maxlength="180">
+        </label>
+        <label>Điểm mỗi lần (+/-)
+          <input data-kpi-catalog-behavior-points data-kpi-catalog-behavior-index="${index}" type="number" min="-120" max="120" step="0.01" value="${escapeHtml(rule[1])}">
+        </label>
+        <button class="ghost kpi-catalog-delete" data-kpi-catalog-action="remove-behavior" data-kpi-catalog-behavior-index="${index}" type="button">Xóa</button>
+      </div>
+    `).join("")
+    : '<p class="kpi-catalog-record-empty">Chưa có danh mục khen thưởng, kỷ luật hoặc tác phong.</p>';
+  const departmentFormulaSection = kpiCatalogParameterSectionMarkup(
+    "Công thức KPI phòng",
+    "Điều chỉnh trực quan các hệ số đang áp dụng để tính KPI phòng.",
+    [...kpiParameterDefinitions.shared, ...kpiParameterDefinitions.department],
+  );
+  const personalFormulaSection = kpiCatalogParameterSectionMarkup(
+    "Công thức KPI cá nhân",
+    "Điều chỉnh trực quan các hệ số đang áp dụng để tính KPI cá nhân.",
+    [...kpiParameterDefinitions.personal, kpiParameterDefinitions.shared[0]],
+  );
+  container.innerHTML = `
+    ${departmentFormulaSection}
+    ${personalFormulaSection}
+    <section class="kpi-catalog-section">
+      <div class="kpi-catalog-section-head">
+        <div><h3>Phòng và tiêu chí KPI phòng</h3><p>Quản lý phòng, mức áp dụng KPI và chỉ tiêu chấm điểm của từng phòng.</p></div>
+        <button data-kpi-catalog-action="add-department" type="button">Thêm phòng</button>
+      </div>
+      <div class="kpi-catalog-records">${departmentRecords}</div>
+    </section>
+    <section class="kpi-catalog-section">
+      <div class="kpi-catalog-section-head">
+        <div><h3>Vị trí và Danh mục KPI cá nhân</h3><p>Mỗi vị trí có bộ tiêu chí và trọng số riêng.</p></div>
+        <button data-kpi-catalog-action="add-role" type="button">Thêm vị trí</button>
+      </div>
+      <div class="kpi-catalog-records">${roleRecords}</div>
+    </section>
+    <section class="kpi-catalog-section">
+      <div class="kpi-catalog-section-head">
+        <div><h3>Khen thưởng, kỷ luật, tác phong</h3><p>Dùng số dương để cộng điểm và số âm để trừ điểm cho mỗi lần ghi nhận.</p></div>
+        <button data-kpi-catalog-action="add-behavior" type="button">Thêm danh mục</button>
+      </div>
+      <div class="kpi-catalog-records">${behaviorRows}</div>
+    </section>
+  `;
+}
+
+function setKpiCatalogNotice(message = "", isError = false) {
+  const notice = byId("kpiCatalogManagerNotice");
+  if (!notice) return;
+  notice.textContent = message;
+  notice.classList.toggle("is-visible", Boolean(message));
+  notice.classList.toggle("is-error", Boolean(message) && isError);
+}
+
+function kpiCatalogDraftRecord(scope, recordId) {
+  if (scope === "department") return kpiCatalogDraft?.departments.find((item) => item.id === recordId) || null;
+  if (scope === "role") return kpiCatalogDraft?.roles.find((item) => item.id === recordId) || null;
+  return null;
+}
+
+function updateKpiCatalogDraftInput(input) {
+  if (!kpiCatalogDraft || !input) return;
+  const departmentId = input.dataset.kpiCatalogDepartmentId;
+  const roleId = input.dataset.kpiCatalogRoleId;
+  const criterionScope = input.dataset.kpiCatalogScope;
+  const criterionRecordId = input.dataset.kpiCatalogRecord;
+  const criterionIndex = Number(input.dataset.kpiCatalogCriterionIndex);
+  const behaviorIndex = Number(input.dataset.kpiCatalogBehaviorIndex);
+  const parameterKey = input.dataset.kpiCatalogParameter;
+  if (input.matches("[data-kpi-catalog-parameter]") && hasOwnValue(kpiCatalogDraft.kpiParameters, parameterKey)) {
+    const parameter = [...kpiParameterDefinitions.shared, ...kpiParameterDefinitions.department, ...kpiParameterDefinitions.personal]
+      .find((definition) => definition.key === parameterKey);
+    if (parameter) {
+      kpiCatalogDraft.kpiParameters[parameterKey] = numberWithin(input.value, parameter.min, parameter.max, defaultKpiParameters[parameterKey]);
+    }
+  } else if (input.matches("[data-kpi-catalog-department-name]")) {
+    const department = kpiCatalogDraft.departments.find((item) => item.id === departmentId);
+    if (department) department.name = input.value;
+  } else if (input.matches("[data-kpi-catalog-department-setting]")) {
+    const department = kpiCatalogDraft.departments.find((item) => item.id === departmentId);
+    if (department) {
+      department.leadershipOnly = input.value === "leadership";
+      department.kpiExempt = input.value !== "standard";
+    }
+  } else if (input.matches("[data-kpi-catalog-role-name]")) {
+    const role = kpiCatalogDraft.roles.find((item) => item.id === roleId);
+    if (role) role.name = input.value;
+  } else if (input.matches("[data-kpi-catalog-role-department]")) {
+    const role = kpiCatalogDraft.roles.find((item) => item.id === roleId);
+    if (role) role.departmentId = input.value;
+  } else if (input.matches("[data-kpi-catalog-role-access]")) {
+    const role = kpiCatalogDraft.roles.find((item) => item.id === roleId);
+    if (role) role.accountRole = input.value;
+  } else if (input.matches("[data-kpi-catalog-criterion-name], [data-kpi-catalog-criterion-weight]")) {
+    const record = kpiCatalogDraftRecord(criterionScope, criterionRecordId);
+    if (record?.criteria?.[criterionIndex]) {
+      if (input.matches("[data-kpi-catalog-criterion-name]")) record.criteria[criterionIndex][0] = input.value;
+      else record.criteria[criterionIndex][1] = input.value;
+    }
+  } else if (input.matches("[data-kpi-catalog-behavior-name]") && kpiCatalogDraft.behaviorRules[behaviorIndex]) {
+    kpiCatalogDraft.behaviorRules[behaviorIndex][0] = input.value;
+  } else if (input.matches("[data-kpi-catalog-behavior-points]") && kpiCatalogDraft.behaviorRules[behaviorIndex]) {
+    kpiCatalogDraft.behaviorRules[behaviorIndex][1] = input.value;
+  } else {
+    return;
+  }
+  refreshKpiCatalogTotals();
+}
+
+function refreshKpiCatalogTotals() {
+  if (!kpiCatalogDraft) return;
+  document.querySelectorAll("[data-kpi-catalog-total]").forEach((element) => {
+    const [scope, recordId] = String(element.dataset.kpiCatalogTotal || "").split(":");
+    const record = kpiCatalogDraftRecord(scope, recordId);
+    const total = kpiCatalogCriteriaTotal(record?.criteria || []);
+    element.textContent = formatScore(total);
+    element.classList.toggle("is-warning", Boolean(record?.criteria?.length) && total !== 100);
+  });
+}
+
+function kpiCatalogReferenceError(nextDepartments, nextRoles) {
+  const departmentIds = new Set(nextDepartments.map((department) => department.id));
+  const roleByIdMap = new Map(nextRoles.map((role) => [role.id, role]));
+  const missingPersonDepartment = state.people.find((person) => !departmentIds.has(person.departmentId));
+  if (missingPersonDepartment) return `Không thể xóa phòng đang gắn với nhân sự ${missingPersonDepartment.name}. Hãy chuyển nhân sự sang phòng khác trước.`;
+  const missingPersonRole = state.people.find((person) => !roleByIdMap.has(person.roleId));
+  if (missingPersonRole) return `Không thể xóa vị trí đang gắn với nhân sự ${missingPersonRole.name}. Hãy cập nhật vị trí nhân sự trước.`;
+  const missingDepartmentEvaluation = state.departmentEvaluations.find((evaluation) => !departmentIds.has(evaluation.departmentId));
+  if (missingDepartmentEvaluation) return "Không thể xóa phòng đã có dữ liệu KPI phòng. Dữ liệu lịch sử cần được giữ nguyên.";
+  const invalidRole = nextRoles.find((role) => !departmentIds.has(role.departmentId));
+  if (invalidRole) return `Vị trí "${invalidRole.name}" chưa được gán phòng hợp lệ.`;
+  return "";
+}
+
+function kpiCatalogValidationError(draft) {
+  if (!draft?.departments?.length) return "Cần có ít nhất một phòng trong danh mục.";
+  if (!draft?.roles?.length) return "Cần có ít nhất một vị trí trong danh mục.";
+  const duplicate = (items, valueFor) => {
+    const values = new Set();
+    return items.some((item) => {
+      const value = catalogText(valueFor(item)).toLocaleLowerCase("vi");
+      if (!value || values.has(value)) return true;
+      values.add(value);
+      return false;
+    });
+  };
+  if (duplicate(draft.departments, (department) => department.name)) return "Tên phòng không được để trống hoặc trùng lặp.";
+  if (duplicate(draft.roles, (role) => `${role.departmentId}|${role.name}`)) return "Tên vị trí trong cùng một phòng không được để trống hoặc trùng lặp.";
+  if (duplicate(draft.behaviorRules, (rule) => rule?.[0])) return "Danh mục khen thưởng, kỷ luật, tác phong không được để trống hoặc trùng lặp.";
+  for (const record of [...draft.departments, ...draft.roles]) {
+    if (duplicate(record.criteria || [], (criterion) => criterion?.[0])) return `Tiêu chí của "${catalogText(record.name)}" không được để trống hoặc trùng lặp.`;
+  }
+  return "";
+}
+
+function remapKpiIndexedValues(values, previousCriteria = [], nextCriteria = []) {
+  if (!values || typeof values !== "object") return values;
+  const nextIndexesByName = new Map(nextCriteria.map((criterion, index) => [String(criterion?.[0] || ""), index]));
+  const output = {};
+  const matched = new Set();
+  Object.entries(values).forEach(([index, value]) => {
+    const oldIndex = Number(index);
+    const name = String(previousCriteria[oldIndex]?.[0] || "");
+    const nextIndex = nextIndexesByName.get(name);
+    if (Number.isInteger(nextIndex)) {
+      output[nextIndex] = value;
+      matched.add(oldIndex);
+    }
+  });
+  if (previousCriteria.length === nextCriteria.length) {
+    Object.entries(values).forEach(([index, value]) => {
+      const oldIndex = Number(index);
+      if (!matched.has(oldIndex) && Number.isInteger(oldIndex) && nextCriteria[oldIndex]) output[oldIndex] = value;
+    });
+  }
+  return output;
+}
+
+function remapKpiIndexedArray(values, previousCriteria = [], nextCriteria = []) {
+  if (!Array.isArray(values)) return values;
+  const mapped = remapKpiIndexedValues(Object.fromEntries(values.map((value, index) => [index, value])), previousCriteria, nextCriteria);
+  return Object.keys(mapped).sort((left, right) => Number(left) - Number(right)).map((key) => mapped[key]);
+}
+
+function migrateKpiCatalogHistory(previousConfig, nextConfig) {
+  const previousRoles = new Map(previousConfig.roles.map((role) => [role.id, role]));
+  const nextRoles = new Map(nextConfig.roles.map((role) => [role.id, role]));
+  const previousDepartments = new Map(previousConfig.departments.map((department) => [department.id, department]));
+  const nextDepartments = new Map(nextConfig.departments.map((department) => [department.id, department]));
+  state.evaluations = state.evaluations.map((evaluation) => {
+    const roleId = personById(evaluation.personId)?.roleId;
+    const previousRole = previousRoles.get(roleId);
+    const nextRole = nextRoles.get(roleId);
+    const remap = (value) => remapKpiIndexedValues(value, previousRole?.criteria, nextRole?.criteria);
+    return {
+      ...evaluation,
+      criteriaScores: remap(evaluation.criteriaScores),
+      criteriaResults: remapKpiIndexedArray(evaluation.criteriaResults, previousRole?.criteria, nextRole?.criteria),
+      behavior: remapKpiIndexedValues(evaluation.behavior, previousConfig.behaviorRules, nextConfig.behaviorRules),
+      behaviorManual: remapKpiIndexedValues(evaluation.behaviorManual, previousConfig.behaviorRules, nextConfig.behaviorRules),
+      behaviorAutomatic: remapKpiIndexedValues(evaluation.behaviorAutomatic, previousConfig.behaviorRules, nextConfig.behaviorRules),
+    };
+  });
+  state.departmentEvaluations = state.departmentEvaluations.map((evaluation) => {
+    const previousDepartment = previousDepartments.get(evaluation.departmentId);
+    const nextDepartment = nextDepartments.get(evaluation.departmentId);
+    return {
+      ...evaluation,
+      criteriaScores: remapKpiIndexedValues(evaluation.criteriaScores, previousDepartment?.criteria, nextDepartment?.criteria),
+      criteriaResults: remapKpiIndexedArray(evaluation.criteriaResults, previousDepartment?.criteria, nextDepartment?.criteria),
+    };
+  });
+}
+
+function createKpiCatalogDraft() {
+  const customization = normalizeSystemCustomization(state.systemCustomization);
+  return {
+    departments: cloneKpiCatalog(state.departments),
+    roles: cloneKpiCatalog(state.roles),
+    behaviorRules: cloneKpiCatalog(state.behaviorRules),
+    kpiParameters: cloneKpiCatalog(customization.kpiParameters),
+  };
+}
+
+function openKpiCatalogManager() {
+  if (!isAdmin()) return;
+  kpiCatalogDraft = createKpiCatalogDraft();
+  setKpiCatalogNotice();
+  renderKpiCatalogManager();
+  openModal("kpiCatalogManagerDialog");
+}
+
+function resetKpiCatalogManager() {
+  if (!isAdmin()) return;
+  kpiCatalogDraft = createKpiCatalogDraft();
+  setKpiCatalogNotice("Đã khôi phục bản danh mục đang áp dụng.");
+  renderKpiCatalogManager();
+}
+
+function saveKpiCatalogManager() {
+  if (!isAdmin() || !kpiCatalogDraft) return;
+  const validationError = kpiCatalogValidationError(kpiCatalogDraft);
+  if (validationError) {
+    setKpiCatalogNotice(validationError, true);
+    return;
+  }
+  const nextConfig = {
+    departments: normalizeDepartmentsCatalog(kpiCatalogDraft.departments),
+    roles: normalizeRolesCatalog(kpiCatalogDraft.roles),
+    behaviorRules: normalizeBehaviorRulesCatalog(kpiCatalogDraft.behaviorRules),
+  };
+  const referenceError = kpiCatalogReferenceError(nextConfig.departments, nextConfig.roles);
+  if (referenceError) {
+    setKpiCatalogNotice(referenceError, true);
+    return;
+  }
+  const previousConfig = {
+    departments: cloneKpiCatalog(state.departments),
+    roles: cloneKpiCatalog(state.roles),
+    behaviorRules: cloneKpiCatalog(state.behaviorRules),
+  };
+  migrateKpiCatalogHistory(previousConfig, nextConfig);
+  state.departments = nextConfig.departments;
+  state.roles = nextConfig.roles;
+  state.behaviorRules = nextConfig.behaviorRules;
+  state.systemCustomization = normalizeSystemCustomization({
+    ...state.systemCustomization,
+    kpiParameters: kpiCatalogDraft.kpiParameters,
+  });
+  applyRuntimeKpiCatalogs(state);
+  logActivity({
+    action: "Cập nhật",
+    module: "Quy chế",
+    targetType: "kpi-catalog",
+    targetId: "kpi-catalog",
+    title: "Danh mục KPI và Nhân sự",
+    details: `Phòng: ${state.departments.length}; vị trí: ${state.roles.length}; danh mục khen thưởng/kỷ luật: ${state.behaviorRules.length}; đã cập nhật các hệ số công thức KPI.`,
+  });
+  saveState();
+  kpiCatalogDraft = createKpiCatalogDraft();
+  setKpiCatalogNotice("Đã lưu danh mục. Dữ liệu mới sẽ được đồng bộ tới các tài khoản theo phân quyền.");
+  renderAll();
+  renderKpiCatalogManager();
+}
+
+const supportRequestStatusLabels = {
+  "Mới": "Mới",
+  "Đang xử lý": "Đang xử lý",
+  "Đã hỗ trợ": "Đã hỗ trợ",
+  "Đã đóng": "Đã đóng",
+};
+
+function supportRequestMessages(request) {
+  return Array.isArray(request?.messages)
+    ? request.messages.filter((message) => message && typeof message === "object")
+    : [];
+}
+
+function supportRequestStatusClass(status) {
+  if (status === "Đã hỗ trợ") return "good";
+  if (status === "Đã đóng") return "";
+  if (status === "Đang xử lý") return "warn";
+  return "bad";
+}
+
+function supportRequestPriorityClass(priority) {
+  if (priority === "Khẩn cấp") return "bad";
+  if (priority === "Cần hỗ trợ sớm") return "warn";
+  return "";
+}
+
+function visibleSupportRequests() {
+  const account = currentAccount();
+  if (!account) return [];
+  const ownId = String(account.id || "");
+  return [...(state.supportRequests || [])]
+    .filter((request) => isAdmin() || String(request?.createdById || "") === ownId)
+    .sort((left, right) => {
+      const rightTime = new Date(right?.updatedAt || right?.createdAt || 0).getTime() || 0;
+      const leftTime = new Date(left?.updatedAt || left?.createdAt || 0).getTime() || 0;
+      return rightTime - leftTime;
+    });
+}
+
+function supportMessagePayload(text, kind) {
+  const actor = currentActorInfo();
+  return {
+    id: uid("support-message"),
+    text: String(text || "").trim(),
+    kind,
+    createdAt: new Date().toISOString(),
+    createdBy: actor.name,
+    createdById: actor.id,
+    createdByRole: actor.role,
+  };
+}
+
+function renderHelpSupportBadge() {
+  const badge = byId("helpSupportBadge");
+  const mobileBadge = byId("mobileHelpSupportBadge");
+  const pendingCount = isAdmin()
+    ? (state.supportRequests || []).filter((request) => String(request?.status || "Mới") === "Mới").length
+    : 0;
+  [badge, mobileBadge].forEach((element) => {
+    if (!element) return;
+    element.textContent = pendingCount > 99 ? "99+" : String(pendingCount);
+    element.classList.toggle("is-hidden", pendingCount === 0);
+  });
+}
+
+function renderHelpRequestMessages(request) {
+  const messages = supportRequestMessages(request);
+  if (!messages.length) return '<p class="muted">Chưa có nội dung trao đổi.</p>';
+  return messages
+    .map((message) => {
+      const isAdminMessage = String(message.kind || "") === "admin" || String(message.createdByRole || "") === "admin";
+      return `
+        <div class="support-message ${isAdminMessage ? "is-admin" : ""}">
+          <div class="support-message-meta">
+            <strong>${escapeHtml(message.createdBy || "Tài khoản")}</strong>
+            <span>${escapeHtml(formatDateTime(message.createdAt))}</span>
+          </div>
+          <p>${escapeHtml(message.text || message.content || "").replace(/\n/g, "<br>")}</p>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderSupportRequestCard(request) {
+  const status = supportRequestStatusLabels[request.status] || request.status || "Mới";
+  const messages = renderHelpRequestMessages(request);
+  const canReply = isAdmin() || (String(request.createdById || "") === String(currentAccount()?.id || "") && status !== "Đã đóng");
+  const adminControls = isAdmin()
+    ? `
+      <form class="support-admin-form" data-support-admin-form="${escapeHtml(request.id)}">
+        <label>Trạng thái
+          <select name="status">
+            ${Object.keys(supportRequestStatusLabels)
+              .map((option) => `<option value="${escapeHtml(option)}" ${option === status ? "selected" : ""}>${escapeHtml(option)}</option>`)
+              .join("")}
+          </select>
+        </label>
+        <label>Phản hồi của Admin
+          <textarea name="message" rows="3" maxlength="4000" placeholder="Nhập hướng dẫn hoặc kết quả xử lý..."></textarea>
+        </label>
+        <button type="submit">Cập nhật hỗ trợ</button>
+      </form>
+    `
+    : canReply
+      ? `
+        <form class="support-user-form" data-support-user-form="${escapeHtml(request.id)}">
+          <label>Bổ sung thông tin
+            <textarea name="message" rows="3" maxlength="4000" required placeholder="Bổ sung thông tin hoặc phản hồi kết quả hỗ trợ..."></textarea>
+          </label>
+          <button class="ghost" type="submit">Gửi bổ sung</button>
+        </form>
+      `
+      : '<p class="support-closed-note">Yêu cầu đã được đóng. Liên hệ Admin để mở lại khi cần.</p>';
+  return `
+    <article class="support-request-card" data-support-request-id="${escapeHtml(request.id)}">
+      <header class="support-request-header">
+        <div>
+          <div class="support-request-tags">
+            <span class="badge ${supportRequestStatusClass(status)}">${escapeHtml(status)}</span>
+            <span class="badge ${supportRequestPriorityClass(request.priority)}">${escapeHtml(request.priority || "Bình thường")}</span>
+            <span class="support-request-category">${escapeHtml(request.category || "Khác")}</span>
+          </div>
+          <h4>${escapeHtml(request.title || "Yêu cầu hỗ trợ")}</h4>
+        </div>
+        <div class="support-request-owner">
+          <strong>${escapeHtml(request.createdBy || "Tài khoản")}</strong>
+          <span>${escapeHtml(formatDateTime(request.createdAt))}</span>
+        </div>
+      </header>
+      <div class="support-message-list">${messages}</div>
+      ${adminControls}
+    </article>
+  `;
+}
+
+function renderSupportRequestLine(request) {
+  const status = supportRequestStatusLabels[request.status] || request.status || "Mới";
+  const updatedAt = request.updatedAt || request.createdAt;
+  return `
+    <button class="support-request-line" type="button" data-open-support-request="${escapeHtml(request.id)}">
+      <span class="support-request-line-status badge ${supportRequestStatusClass(status)}">${escapeHtml(status)}</span>
+      <span class="support-request-line-main">
+        <strong>${escapeHtml(request.title || "Yêu cầu hỗ trợ")}</strong>
+        <span>${escapeHtml(request.category || "Khác")} · Cập nhật ${escapeHtml(formatDateTime(updatedAt))}</span>
+      </span>
+      <span class="support-request-line-meta">
+        <span class="badge ${supportRequestPriorityClass(request.priority)}">${escapeHtml(request.priority || "Bình thường")}</span>
+        <span class="support-request-line-open" aria-hidden="true">›</span>
+      </span>
+    </button>
+  `;
+}
+
+let openSupportRequestId = "";
+
+function renderSupportRequestDialog(requestId = openSupportRequestId) {
+  const request = visibleSupportRequests().find((item) => item.id === requestId);
+  if (!request) {
+    closeSupportRequestDialog();
+    return;
+  }
+  openSupportRequestId = request.id;
+  byId("supportRequestDetailTitle").textContent = request.title || "Yêu cầu hỗ trợ";
+  byId("supportRequestDetailContent").innerHTML = renderSupportRequestCard(request);
+}
+
+function openSupportRequestDialog(requestId) {
+  const request = visibleSupportRequests().find((item) => item.id === requestId);
+  if (!request) return;
+  openSupportRequestId = request.id;
+  renderSupportRequestDialog(request.id);
+  openModal("supportRequestDialog");
+}
+
+function closeSupportRequestDialog() {
+  openSupportRequestId = "";
+  closeModal("supportRequestDialog");
+}
+
+function renderHelpView() {
+  const requests = visibleSupportRequests();
+  const admin = isAdmin();
+  byId("supportRequestSummary").textContent = admin
+    ? `${requests.filter((request) => String(request.status || "Mới") === "Mới").length} yêu cầu mới`
+    : `${requests.length} yêu cầu`;
+  byId("supportRequestListTitle").textContent = admin ? "Yêu cầu hỗ trợ" : "Yêu cầu của bạn";
+  byId("supportRequestList").innerHTML = requests.length
+    ? requests.map(renderSupportRequestLine).join("")
+    : '<div class="empty-state">Chưa có yêu cầu hỗ trợ. Khi gặp vấn đề, hãy gửi yêu cầu để Admin theo dõi và phản hồi.</div>';
+  renderHelpSupportBadge();
+}
+
+function resetSupportRequestForm() {
+  byId("supportRequestForm")?.reset();
+}
+
+function createSupportRequest() {
+  const title = String(byId("supportRequestTitle")?.value || "").trim();
+  const messageText = String(byId("supportRequestMessage")?.value || "").trim();
+  if (!title || !messageText) {
+    alert("Vui lòng nhập tiêu đề và nội dung cần hỗ trợ.");
+    return;
+  }
+  const record = applyRecordAudit(
+    {
+      id: uid("support-request"),
+      title,
+      category: String(byId("supportRequestCategory")?.value || "Khác"),
+      priority: String(byId("supportRequestPriority")?.value || "Bình thường"),
+      status: "Mới",
+      messages: [supportMessagePayload(messageText, "request")],
+    },
+    null,
+  );
+  state.supportRequests = [record, ...(state.supportRequests || [])];
+  logActivity({
+    action: "Gửi yêu cầu hỗ trợ",
+    module: "Trợ giúp",
+    targetType: "support-request",
+    targetId: record.id,
+    title,
+    details: `Nhóm vấn đề: ${record.category}. Mức độ: ${record.priority}.`,
+  });
+  resetSupportRequestForm();
+  saveState();
+  renderAll();
+  if (openSupportRequestId === requestId && !byId("supportRequestDialog").classList.contains("is-hidden")) {
+    renderSupportRequestDialog(requestId);
+  }
+}
+
+function updateSupportRequest(requestId, messageText, nextStatus = "") {
+  const index = (state.supportRequests || []).findIndex((request) => request.id === requestId);
+  if (index < 0) return;
+  const request = state.supportRequests[index];
+  const isOwner = String(request.createdById || "") === String(currentAccount()?.id || "");
+  if (!isAdmin() && (!isOwner || request.status === "Đã đóng")) {
+    alert("Bạn không còn quyền cập nhật yêu cầu hỗ trợ này.");
+    return;
+  }
+  const text = String(messageText || "").trim();
+  const status = isAdmin() ? (supportRequestStatusLabels[nextStatus] ? nextStatus : request.status || "Mới") : request.status || "Mới";
+  if (!text && status === (request.status || "Mới")) {
+    alert("Vui lòng nhập phản hồi hoặc thay đổi trạng thái yêu cầu.");
+    return;
+  }
+  const messages = [...supportRequestMessages(request)];
+  if (text) messages.push(supportMessagePayload(text, isAdmin() ? "admin" : "reporter"));
+  const updated = applyRecordAudit({ ...request, status, messages }, request);
+  state.supportRequests = state.supportRequests.map((item) => (item.id === requestId ? updated : item));
+  logActivity({
+    action: isAdmin() ? "Cập nhật hỗ trợ" : "Bổ sung yêu cầu hỗ trợ",
+    module: "Trợ giúp",
+    targetType: "support-request",
+    targetId: requestId,
+    title: updated.title || "Yêu cầu hỗ trợ",
+    details: isAdmin() ? `Trạng thái: ${status}.` : "Đã bổ sung thông tin cho yêu cầu hỗ trợ.",
+  });
+  saveState();
+  renderAll();
 }
 
 function todayInputDate() {
@@ -8579,11 +10079,19 @@ function archiveRecordSearchText(record) {
   );
 }
 
+function indexedArchiveRecordSearchText(record) {
+  const cached = archiveSearchTextCache.get(record);
+  if (cached?.generation === searchIndexGeneration) return cached.text;
+  const text = archiveRecordSearchText(record);
+  archiveSearchTextCache.set(record, { generation: searchIndexGeneration, text });
+  return text;
+}
+
 function archiveMatchesFilters(record, search, category, status, departmentId) {
   if (category && record.category !== category) return false;
   if (status && record.status !== status) return false;
   if (departmentId && record.departmentId !== departmentId) return false;
-  return !search || archiveRecordSearchText(record).includes(search);
+  return !search || indexedArchiveRecordSearchText(record).includes(search);
 }
 
 function archiveSortValue(record) {
@@ -9704,6 +11212,9 @@ function renderViewCustomizationTools() {
 }
 
 function renderKpiFormulaCustomizers() {
+  // Formula parameters are managed centrally in Quy chế > Quản lý danh mục KPI.
+  return;
+
   const params = currentKpiParameters();
   const deptForm = byId("departmentEvaluationForm");
   if (document.querySelector(".view.is-active")?.id === "department-evaluations" && deptForm) {
@@ -9840,14 +11351,15 @@ function renderAccountTable() {
   const adminQuickTools = byId("accountAdminQuickTools");
   const accountScrollActions = byId("accountScrollActions");
   const canUseAdminTools = isAdmin();
+  const canViewAccountDirectory = canManageAccounts() || canViewSystemContent();
   adminQuickTools?.classList.toggle("is-hidden", !canUseAdminTools);
   accountScrollActions?.classList.toggle("is-hidden", !canUseAdminTools);
-  if (!canManageAccounts() && !canEditOwnAccount()) {
+  if (!canViewAccountDirectory && !canEditOwnAccount()) {
     tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"5\"");
     return;
   }
   const searchText = canUseAdminTools ? normalizeSearchText(byId("accountSearch")?.value || "") : "";
-  const accounts = (canManageAccounts() ? state.accounts : [currentAccount()].filter(Boolean)).filter((account) => {
+  const accounts = (canViewAccountDirectory ? state.accounts : [currentAccount()].filter(Boolean)).filter((account) => {
     if (!searchText) return true;
     const person = personById(account.personId);
     const department = departmentById(account.departmentId || person?.departmentId);
@@ -9898,7 +11410,8 @@ function populateAccountForm(account) {
   byId("accountId").value = account.id;
   byId("accountDisplayName").value = account.displayName;
   byId("accountUsername").value = account.username;
-  byId("accountPassword").value = account.password;
+  byId("accountPassword").value = "";
+  byId("accountPassword").placeholder = "Để trống để giữ nguyên mật khẩu hiện tại";
   byId("accountRole").value = account.role;
   renderAccountOptions();
   byId("accountPerson").value = account.personId || "";
@@ -9906,6 +11419,7 @@ function populateAccountForm(account) {
   const grants = accountAccessGrants(account);
   byId("accountCanPublishBulletins").checked = grants.bulletinPublish;
   byId("accountCanSaveArchive").checked = grants.archiveWrite;
+  byId("accountCanViewSystemContent").checked = grants.viewSystemContent;
   updateAccountFormAccess();
   renderCustomFieldsForScope("accounts");
   applyFieldCustomizations();
@@ -9919,6 +11433,7 @@ function resetAccountForm() {
   }
   byId("accountForm").reset();
   byId("accountId").value = "";
+  byId("accountPassword").placeholder = "Mật khẩu mới (tối thiểu 10 ký tự)";
   renderAccountOptions();
   updateAccountFormAccess();
 }
@@ -9960,6 +11475,7 @@ function updateAccountFormAccess() {
   byId("accountAccessGrants").classList.toggle("is-hidden", !canManageGrants);
   byId("accountCanPublishBulletins").disabled = !canManageGrants;
   byId("accountCanSaveArchive").disabled = !canManageGrants;
+  byId("accountCanViewSystemContent").disabled = !canManageGrants;
 }
 
 function syncMobileNavigationAccess(activeViewId = document.querySelector(".view.is-active")?.id || "") {
@@ -10002,7 +11518,7 @@ function applyAccessControls() {
     element.classList.toggle("is-hidden", !isDirector());
   });
   document.querySelectorAll(".summary-action").forEach((element) => {
-    element.classList.toggle("is-hidden", !canViewAllData());
+    element.classList.toggle("is-hidden", !canViewSystemContent());
   });
   document.querySelectorAll(".json-data-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isAdmin());
@@ -10020,7 +11536,12 @@ function applyAccessControls() {
   document.querySelectorAll(".archive-manager-only").forEach((element) => {
     element.classList.toggle("is-hidden", !canSaveArchive());
   });
-  byId("personForm").classList.toggle("is-hidden", !canEditPeople());
+  if (!canPublishBulletins()) closeBulletinFormDialog();
+  if (!canSaveArchive()) closeArchiveFormDialog();
+  const canManagePeople = canEditPeople();
+  byId("personForm").classList.toggle("is-hidden", !canManagePeople);
+  byId("openPersonForm").classList.toggle("is-hidden", !canManagePeople);
+  if (!canManagePeople) closePersonFormDialog();
   byId("openDepartmentEvaluationFromPersonal").classList.toggle("is-hidden", !canAccessView("department-evaluations"));
   updateAccountFormAccess();
   document.querySelectorAll(".nav-item").forEach((button) => {
@@ -10089,6 +11610,8 @@ function renderActiveView(viewId = activeViewId(), { animateDashboard = false } 
     renderModuleAccessControls();
   } else if (viewId === "rules") {
     renderRules();
+  } else if (viewId === "help") {
+    renderHelpView();
   }
   renderDirectCustomization({ viewId });
 }
@@ -10121,8 +11644,149 @@ function switchView(viewId) {
 }
 
 function focusEditForm(formId, focusId) {
-  byId(formId).scrollIntoView({ behavior: "smooth", block: "start" });
+  const form = byId(formId);
+  if (formId === "taskForm" && byId("taskFormDialog")?.contains(form)) {
+    showTaskFormDialog({ focusId });
+    return;
+  }
+  if (formId === "personForm" && byId("personFormDialog")?.contains(form)) {
+    showPersonFormDialog({ focusId });
+    return;
+  }
+  if (formId === "bulletinForm" && byId("bulletinFormDialog")?.contains(form)) {
+    showBulletinFormDialog({ focusId });
+    return;
+  }
+  if (formId === "archiveForm" && byId("archiveFormDialog")?.contains(form)) {
+    showArchiveFormDialog({ focusId });
+    return;
+  }
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
   byId(focusId)?.focus({ preventScroll: true });
+}
+
+function syncTaskFormDialogHeading() {
+  byId("taskFormDialogTitle").textContent = byId("taskId").value ? "Cập nhật công việc" : "Thêm công việc";
+}
+
+function showTaskFormDialog({ focusId = "taskTitle" } = {}) {
+  const dialog = byId("taskFormDialog");
+  if (!dialog) return;
+  syncTaskFormDialogHeading();
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+  const focusTarget = () => {
+    const target = byId(focusId) || byId("taskTitle");
+    if (target && !target.disabled) target.focus({ preventScroll: true });
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusTarget);
+  else window.setTimeout(focusTarget, 0);
+}
+
+function closeTaskFormDialog() {
+  const dialog = byId("taskFormDialog");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
+}
+
+function openNewTaskFormDialog() {
+  if (!canCreateRegularTasks()) return;
+  resetTaskForm();
+  showTaskFormDialog();
+}
+
+function syncPersonFormDialogHeading() {
+  byId("personFormDialogTitle").textContent = byId("personId").value ? "Cập nhật nhân sự" : "Thêm nhân sự";
+}
+
+function showPersonFormDialog({ focusId = "personName" } = {}) {
+  const dialog = byId("personFormDialog");
+  if (!dialog) return;
+  syncPersonFormDialogHeading();
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+  const focusTarget = () => {
+    const target = byId(focusId) || byId("personName");
+    if (target && !target.disabled) target.focus({ preventScroll: true });
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusTarget);
+  else window.setTimeout(focusTarget, 0);
+}
+
+function closePersonFormDialog() {
+  const dialog = byId("personFormDialog");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
+}
+
+function openNewPersonFormDialog() {
+  if (!canEditPeople()) return;
+  resetPersonForm();
+  showPersonFormDialog();
+}
+
+function syncBulletinFormDialogHeading() {
+  byId("bulletinFormDialogTitle").textContent = byId("bulletinId").value ? "Cập nhật tin bài" : "Thêm tin bài";
+}
+
+function showBulletinFormDialog({ focusId = "bulletinTitle" } = {}) {
+  const dialog = byId("bulletinFormDialog");
+  if (!dialog) return;
+  syncBulletinFormDialogHeading();
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+  const focusTarget = () => {
+    const target = byId(focusId) || byId("bulletinTitle");
+    if (target && !target.disabled) target.focus({ preventScroll: true });
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusTarget);
+  else window.setTimeout(focusTarget, 0);
+}
+
+function closeBulletinFormDialog() {
+  const dialog = byId("bulletinFormDialog");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
+}
+
+function openNewBulletinFormDialog() {
+  if (!canPublishBulletins()) return;
+  resetBulletinForm();
+  showBulletinFormDialog();
+}
+
+function syncArchiveFormDialogHeading() {
+  byId("archiveFormDialogTitle").textContent = byId("archiveId").value ? "Cập nhật lưu trữ" : "Thêm lưu trữ";
+}
+
+function showArchiveFormDialog({ focusId = "archiveTitle" } = {}) {
+  const dialog = byId("archiveFormDialog");
+  if (!dialog) return;
+  syncArchiveFormDialogHeading();
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+  const focusTarget = () => {
+    const target = byId(focusId) || byId("archiveTitle");
+    if (target && !target.disabled) target.focus({ preventScroll: true });
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusTarget);
+  else window.setTimeout(focusTarget, 0);
+}
+
+function closeArchiveFormDialog() {
+  const dialog = byId("archiveFormDialog");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
+}
+
+function openNewArchiveFormDialog() {
+  if (!canSaveArchive()) return;
+  resetArchiveForm();
+  showArchiveFormDialog();
 }
 
 function populatePersonForm(person) {
@@ -10149,13 +11813,14 @@ function populatePersonForm(person) {
 
 function populateTaskForm(task) {
   if (!task) return;
+  setTaskOwnerPickerOpen(false);
+  setTaskCollaboratorPickerOpen(false);
   byId("taskId").value = task.id;
   byId("taskTitle").value = task.title;
   renderTaskProjectOptions();
   byId("taskProjectId").value = projectIdForTask(task);
-  renderTaskProjectPicker();
+  ensureTaskOwnerOption(task);
   byId("taskOwner").value = task.ownerId;
-  updateTaskOwnerOptions([task.ownerId]);
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
   updateTaskCategoryOptions(task.category);
   byId("taskWorkType").value = normalizeTaskWorkType(task);
@@ -10309,6 +11974,15 @@ function updateTaskFormLock(task = null) {
     .forEach((input) => {
       input.disabled = !canEditDetails;
     });
+  const ownerPickerLocked = !canEditDetails || (isEmployee() && kind === TASK_KIND_REGULAR);
+  const ownerPicker = byId("taskOwnerPicker");
+  if (ownerPicker) {
+    ownerPicker.classList.toggle("is-disabled", ownerPickerLocked);
+    ownerPicker.setAttribute("aria-disabled", String(ownerPickerLocked));
+    byId("taskOwnerToggle").disabled = ownerPickerLocked;
+    byId("taskOwnerSearch").disabled = ownerPickerLocked;
+    if (ownerPickerLocked) setTaskOwnerPickerOpen(false);
+  }
   byId("taskNote").disabled = reportLockedByApproval || (!canEditDetails && !canUpdateReport);
   byId("taskCollaborators")
     .querySelectorAll('input[type="checkbox"]')
@@ -10322,19 +11996,8 @@ function updateTaskFormLock(task = null) {
     collaboratorPicker.setAttribute("aria-disabled", String(!canUpdateCollaborators));
     if (!canUpdateCollaborators) setTaskCollaboratorPickerOpen(false);
   }
-  ["taskProjectPicker", "taskOwnerPicker"].forEach((pickerId) => {
-    const picker = byId(pickerId);
-    if (!picker) return;
-    picker.classList.toggle("is-disabled", !canEditDetails);
-    picker.setAttribute("aria-disabled", String(!canEditDetails));
-  });
-  if (!canEditDetails) {
-    setTaskProjectPickerOpen(false);
-    setTaskOwnerPickerOpen(false);
-  }
   if (isEmployee() && kind === TASK_KIND_REGULAR) {
     byId("taskOwner").disabled = true;
-    byId("taskOwnerPicker")?.classList.add("is-disabled");
   }
   byId("taskStatus").disabled = !canUpdateReport;
   byId("taskForm")
@@ -10473,9 +12136,7 @@ function copyRegularTaskToForm(task) {
   resetTaskForm();
   byId("taskTitle").value = copiedTaskTitle(task.title);
   byId("taskProjectId").value = projectIdForTask(task);
-  renderTaskProjectPicker();
   byId("taskOwner").value = task.ownerId || "";
-  updateTaskOwnerOptions([task.ownerId]);
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
   updateTaskCategoryOptions(task.category);
   byId("taskWorkType").value = normalizeTaskWorkType(task);
@@ -10902,6 +12563,7 @@ function printSelectedSections(sectionIds) {
 }
 
 function renderAll(options = {}) {
+  searchIndexGeneration += 1;
   applySystemCustomization();
   const viewId = applyAccessControls();
   if (!currentAccount()) return;
@@ -10910,6 +12572,7 @@ function renderAll(options = {}) {
   byId("evalPeriod").value = state.activePeriod;
   byId("deptEvalPeriod").value = state.activePeriod;
   renderActiveView(viewId, { animateDashboard: options.animateDashboard === true });
+  renderHelpSupportBadge();
   renderBirthdayCelebration();
 }
 
@@ -10922,13 +12585,10 @@ function resetPersonForm() {
 function resetTaskForm() {
   byId("taskForm").reset();
   byId("taskId").value = "";
-  byId("taskProjectSearch").value = "";
   renderTaskProjectOptions();
   byId("taskProjectId").value = "";
-  setTaskProjectPickerOpen(false);
-  byId("taskOwners").innerHTML = "";
-  setTaskOwnerPickerOpen(false);
   byId("taskCollaborators").innerHTML = "";
+  setTaskOwnerPickerOpen(false);
   setTaskCollaboratorPickerOpen(false);
   renderPersonOptions();
   byId("taskWorkType").value = TASK_WORK_TYPE_ROUTINE;
@@ -10997,7 +12657,8 @@ function seedDemoData() {
       state.accounts.push({
         id: uid("account"),
         username,
-        password: "123456",
+        password: createTemporaryPassword(),
+        passwordChangeRequired: false,
         displayName,
         role,
         personId: person.id,
@@ -11074,14 +12735,83 @@ function seedDemoData() {
   renderAll();
 }
 
+function readLoginGuard() {
+  try {
+    const value = JSON.parse(localStorage.getItem(LOGIN_GUARD_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLoginGuard(guard) {
+  try {
+    localStorage.setItem(LOGIN_GUARD_KEY, JSON.stringify(guard));
+  } catch {
+    // Server-side protection remains active when this browser blocks storage.
+  }
+}
+
+function loginGuardEntryKey(username) {
+  return String(username || "").trim().toLowerCase().slice(0, 96) || "anonymous";
+}
+
+function loginGuardRemainingSeconds(username) {
+  const entry = readLoginGuard()[loginGuardEntryKey(username)];
+  const lockedUntil = Number(entry?.lockedUntil || 0);
+  return lockedUntil > Date.now() ? Math.ceil((lockedUntil - Date.now()) / 1000) : 0;
+}
+
+function recordLocalLoginFailure(username) {
+  const now = Date.now();
+  const guard = readLoginGuard();
+  const key = loginGuardEntryKey(username);
+  const previous = guard[key];
+  const entry = !previous || Number(previous.windowStartedAt || 0) < now - LOGIN_GUARD_WINDOW_MS
+    ? { count: 0, windowStartedAt: now, lockedUntil: 0 }
+    : previous;
+  entry.count = Number(entry.count || 0) + 1;
+  if (entry.count >= LOGIN_GUARD_MAX_FAILURES) entry.lockedUntil = now + LOGIN_GUARD_LOCK_MS;
+  guard[key] = entry;
+  Object.keys(guard).forEach((entryKey) => {
+    const value = guard[entryKey];
+    if (Number(value?.lockedUntil || 0) <= now && Number(value?.windowStartedAt || 0) < now - LOGIN_GUARD_WINDOW_MS) delete guard[entryKey];
+  });
+  writeLoginGuard(guard);
+}
+
+function clearLocalLoginFailures(username) {
+  const guard = readLoginGuard();
+  delete guard[loginGuardEntryKey(username)];
+  writeLoginGuard(guard);
+}
+
+function isCredentialError(message) {
+  return /invalid username or password|sai tài khoản hoặc mật khẩu/i.test(String(message || ""));
+}
+
+function renderApplicationIdentity() {
+  document.querySelectorAll("[data-app-version]").forEach((element) => {
+    element.textContent = `Phiên bản ${APP_VERSION}`;
+  });
+}
+
+renderApplicationIdentity();
+
 // 🌟 Tự động kéo dữ liệu mây MỚI NHẤT ngay khi Đăng nhập thành công
 byId("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const username = byId("loginUsername").value.trim();
   const password = byId("loginPassword").value;
   byId("loginError").textContent = "";
+  const localRetryAfter = loginGuardRemainingSeconds(username);
+  if (localRetryAfter > 0) {
+    byId("loginError").textContent = `Đăng nhập tạm khóa trên thiết bị này. Vui lòng thử lại sau ${localRetryAfter} giây.`;
+    return;
+  }
   const sharedLogin = await loginSharedSession(username, password);
   if (sharedLogin.error) {
+    if (isCredentialError(sharedLogin.error)) recordLocalLoginFailure(username);
     byId("loginError").textContent = sharedLogin.error;
     return;
   }
@@ -11093,6 +12823,7 @@ byId("loginForm").addEventListener("submit", async (event) => {
     ? state.accounts.find((item) => String(item.id || "") === String(sharedLogin.offlineAccountId || ""))
     : state.accounts.find((item) => String(item.username || "").toLowerCase() === normalizedUsername && (remoteSupabaseLogin || item.password === password));
   if (!account) {
+    recordLocalLoginFailure(username);
     byId("loginError").textContent = "Sai tài khoản hoặc mật khẩu.";
     return;
   }
@@ -11101,6 +12832,7 @@ byId("loginForm").addEventListener("submit", async (event) => {
     return;
   }
   if (sharedLogin.mode !== "offline") await rememberOfflineLogin(account, password);
+  clearLocalLoginFailures(username);
   localStorage.setItem(SESSION_KEY, account.id);
   birthdayCelebrationDisplayKey = "";
   byId("loginForm").reset();
@@ -11169,13 +12901,58 @@ document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
 });
 
+byId("supportRequestForm")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  createSupportRequest();
+});
+
+byId("resetSupportRequest")?.addEventListener("click", resetSupportRequestForm);
+
+byId("help")?.addEventListener("click", (event) => {
+  const supportRequest = event.target.closest("[data-open-support-request]");
+  if (supportRequest) {
+    openSupportRequestDialog(supportRequest.dataset.openSupportRequest);
+    return;
+  }
+  const viewButton = event.target.closest("[data-help-open-view]");
+  if (viewButton) {
+    switchView(viewButton.dataset.helpOpenView);
+  }
+});
+
+byId("help")?.addEventListener("submit", (event) => {
+  const form = event.target.closest("form[data-support-admin-form], form[data-support-user-form]");
+  if (!form) return;
+  event.preventDefault();
+  const requestId = form.dataset.supportAdminForm || form.dataset.supportUserForm;
+  const message = form.elements.message?.value || "";
+  const status = form.dataset.supportAdminForm ? form.elements.status?.value || "" : "";
+  updateSupportRequest(requestId, message, status);
+});
+
+byId("closeSupportRequestDetail")?.addEventListener("click", closeSupportRequestDialog);
+
+byId("supportRequestDialog")?.addEventListener("click", (event) => {
+  if (event.target === byId("supportRequestDialog")) closeSupportRequestDialog();
+});
+
+byId("supportRequestDialog")?.addEventListener("submit", (event) => {
+  const form = event.target.closest("form[data-support-admin-form], form[data-support-user-form]");
+  if (!form) return;
+  event.preventDefault();
+  const requestId = form.dataset.supportAdminForm || form.dataset.supportUserForm;
+  const message = form.elements.message?.value || "";
+  const status = form.dataset.supportAdminForm ? form.elements.status?.value || "" : "";
+  updateSupportRequest(requestId, message, status);
+});
+
 byId("toggleCustomizeMode").addEventListener("click", () => {
   setCustomizeMode(!customizeMode);
 });
 
 document.addEventListener("click", (event) => {
   if (!customizationEnabled()) return;
-  if (event.target.closest("#taskCollaboratorPicker")) return;
+  if (event.target.closest("#taskOwnerPicker, #taskCollaboratorPicker")) return;
   if (event.target.closest("[data-kpi-param]")) return;
   if (event.target.closest(".customization-mini-tools")) {
     event.preventDefault();
@@ -11609,10 +13386,19 @@ byId("bulletinForm").addEventListener("submit", async (event) => {
   }
   removedMedia.forEach((file) => deleteStoredFile(file));
   resetBulletinForm();
+  closeBulletinFormDialog();
   renderAll();
 });
 
-byId("resetBulletinForm").addEventListener("click", resetBulletinForm);
+byId("openBulletinForm").addEventListener("click", openNewBulletinFormDialog);
+byId("closeBulletinForm").addEventListener("click", closeBulletinFormDialog);
+byId("bulletinFormDialog").addEventListener("click", (event) => {
+  if (event.target === byId("bulletinFormDialog")) closeBulletinFormDialog();
+});
+byId("resetBulletinForm").addEventListener("click", () => {
+  resetBulletinForm();
+  syncBulletinFormDialogHeading();
+});
 byId("bulletinCategory").addEventListener("change", updateBulletinVoteSettingsVisibility);
 byId("bulletinSearch").addEventListener("input", debounce(renderBulletinBoard, 200));
 byId("bulletinCategoryFilter").addEventListener("change", renderBulletinBoard);
@@ -11811,10 +13597,19 @@ byId("archiveForm").addEventListener("submit", async (event) => {
   }
   removedFiles.forEach((file) => deleteStoredFile(file));
   resetArchiveForm();
+  closeArchiveFormDialog();
   renderAll();
 });
 
-byId("resetArchiveForm").addEventListener("click", resetArchiveForm);
+byId("openArchiveForm").addEventListener("click", openNewArchiveFormDialog);
+byId("closeArchiveForm").addEventListener("click", closeArchiveFormDialog);
+byId("archiveFormDialog").addEventListener("click", (event) => {
+  if (event.target === byId("archiveFormDialog")) closeArchiveFormDialog();
+});
+byId("resetArchiveForm").addEventListener("click", () => {
+  resetArchiveForm();
+  syncArchiveFormDialogHeading();
+});
 byId("archiveSearch").addEventListener("input", debounce(renderArchive, 200));
 byId("archiveCategoryFilter").addEventListener("change", renderArchive);
 byId("archiveStatusFilter").addEventListener("change", renderArchive);
@@ -11958,9 +13753,81 @@ byId("personForm").addEventListener("submit", (event) => {
   resetPersonForm();
   renderAll();
   document.dispatchEvent(new CustomEvent("person-record-saved", { detail: { personId: id } }));
+  if (byId("personFormDialog")?.contains(byId("personForm"))) closePersonFormDialog();
 });
 
-byId("resetPersonForm").addEventListener("click", resetPersonForm);
+byId("openPersonForm").addEventListener("click", openNewPersonFormDialog);
+byId("closePersonForm").addEventListener("click", closePersonFormDialog);
+byId("personFormDialog").addEventListener("click", (event) => {
+  if (event.target === byId("personFormDialog")) closePersonFormDialog();
+});
+byId("resetPersonForm").addEventListener("click", () => {
+  resetPersonForm();
+  syncPersonFormDialogHeading();
+});
+
+byId("openKpiCatalogManager")?.addEventListener("click", openKpiCatalogManager);
+byId("closeKpiCatalogManager")?.addEventListener("click", () => closeModal("kpiCatalogManagerDialog"));
+byId("kpiCatalogManagerDialog")?.addEventListener("click", (event) => {
+  if (event.target === byId("kpiCatalogManagerDialog")) closeModal("kpiCatalogManagerDialog");
+});
+byId("resetKpiCatalogManager")?.addEventListener("click", resetKpiCatalogManager);
+byId("saveKpiCatalogManager")?.addEventListener("click", saveKpiCatalogManager);
+byId("kpiCatalogManagerContent")?.addEventListener("input", (event) => updateKpiCatalogDraftInput(event.target));
+byId("kpiCatalogManagerContent")?.addEventListener("change", (event) => updateKpiCatalogDraftInput(event.target));
+byId("kpiCatalogManagerContent")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-kpi-catalog-action]");
+  if (!button || !kpiCatalogDraft) return;
+  const action = button.dataset.kpiCatalogAction;
+  const scope = button.dataset.kpiCatalogScope;
+  const recordId = button.dataset.kpiCatalogRecord;
+  const index = Number(button.dataset.kpiCatalogCriterionIndex);
+  const behaviorIndex = Number(button.dataset.kpiCatalogBehaviorIndex);
+  let targetRecord = null;
+  if (action === "add-department") {
+    kpiCatalogDraft.departments.push({ id: uid("department"), name: "Phòng mới", criteria: [], leadershipOnly: false, kpiExempt: false });
+  } else if (action === "remove-department") {
+    const nextDepartments = kpiCatalogDraft.departments.filter((department) => department.id !== recordId);
+    const referenceError = kpiCatalogReferenceError(nextDepartments, kpiCatalogDraft.roles);
+    if (referenceError) {
+      setKpiCatalogNotice(referenceError, true);
+      return;
+    }
+    kpiCatalogDraft.departments = nextDepartments;
+  } else if (action === "add-role") {
+    const departmentId = kpiCatalogDraft.departments[0]?.id;
+    if (!departmentId) {
+      setKpiCatalogNotice("Hãy tạo phòng trước khi thêm vị trí.", true);
+      return;
+    }
+    kpiCatalogDraft.roles.push({ id: uid("role"), departmentId, name: "Vị trí mới", accountRole: "employee", criteria: [] });
+  } else if (action === "remove-role") {
+    const nextRoles = kpiCatalogDraft.roles.filter((role) => role.id !== recordId);
+    const referenceError = kpiCatalogReferenceError(kpiCatalogDraft.departments, nextRoles);
+    if (referenceError) {
+      setKpiCatalogNotice(referenceError, true);
+      return;
+    }
+    kpiCatalogDraft.roles = nextRoles;
+  } else if (action === "add-criterion") {
+    targetRecord = kpiCatalogDraftRecord(scope, recordId);
+    if (!targetRecord) return;
+    targetRecord.criteria.push(["Tiêu chí mới", 0]);
+  } else if (action === "remove-criterion") {
+    targetRecord = kpiCatalogDraftRecord(scope, recordId);
+    if (!targetRecord || !Number.isInteger(index)) return;
+    targetRecord.criteria.splice(index, 1);
+  } else if (action === "add-behavior") {
+    kpiCatalogDraft.behaviorRules.push(["Danh mục mới", 0]);
+  } else if (action === "remove-behavior") {
+    if (!Number.isInteger(behaviorIndex)) return;
+    kpiCatalogDraft.behaviorRules.splice(behaviorIndex, 1);
+  } else {
+    return;
+  }
+  setKpiCatalogNotice();
+  renderKpiCatalogManager();
+});
 
 byId("accountPerson").addEventListener("change", () => {
   const person = personById(byId("accountPerson").value);
@@ -11980,6 +13847,11 @@ byId("accountForm").addEventListener("submit", (event) => {
     return;
   }
   const existing = accountById(id);
+  const requestedPassword = byId("accountPassword").value;
+  if ((!existing || requestedPassword) && !isStrongAccountPassword(requestedPassword)) {
+    alert("Mật khẩu phải có ít nhất 10 ký tự và sử dụng tối thiểu 3 nhóm: chữ hoa, chữ thường, số, ký tự đặc biệt.");
+    return;
+  }
   const username = ownOnly ? existing?.username || current?.username || "" : byId("accountUsername").value.trim();
   const duplicate = state.accounts.find((account) => account.username === username && account.id !== id);
   if (duplicate) {
@@ -12002,7 +13874,10 @@ byId("accountForm").addEventListener("submit", (event) => {
   const record = {
     id,
     username,
-    password: byId("accountPassword").value,
+    // Online snapshots never expose passwords. An empty field must therefore
+    // be sent as empty so the server preserves the stored password.
+    password: requestedPassword || existing?.password || "",
+    passwordChangeRequired: false,
     displayName: ownOnly ? existing?.displayName || current?.displayName || "" : byId("accountDisplayName").value.trim(),
     role,
     personId,
@@ -12011,6 +13886,7 @@ byId("accountForm").addEventListener("submit", (event) => {
       ? {
           bulletinPublish: byId("accountCanPublishBulletins").checked,
           archiveWrite: byId("accountCanSaveArchive").checked,
+          viewSystemContent: byId("accountCanViewSystemContent").checked,
         }
       : existing?.accessGrants || {},
     customFields: collectCustomFieldValues("accounts", existing?.customFields),
@@ -12207,6 +14083,13 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     attachments: [...draftAttachments, ...uploadedAttachments],
     customFields: collectCustomFieldValues("tasks", existingTask?.customFields),
   };
+  const progressOnlyUpdate = !!existingTask && !canEditTaskDetails(existingTask) && canUpdateTaskProgress(existingTask);
+  if (progressOnlyUpdate) {
+    // A collaborator receives a filtered personnel list from the server. Preserve
+    // immutable task details instead of relying on disabled form controls.
+    preparedRecord.ownerId = existingTask.ownerId;
+    preparedRecord.projectId = projectIdForTask(existingTask);
+  }
   const selectedProject = projectById(preparedRecord.projectId);
   if (preparedRecord.projectId && !selectedProject) {
     alert("Danh mục dự án đã chọn không còn tồn tại. Vui lòng chọn lại.");
@@ -12546,67 +14429,47 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
 
 byId("taskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const existingTaskId = byId("taskId").value;
-  const ownerIds = selectedTaskOwnerIds();
-  if (!byId("taskProjectId").value) {
-    alert("Vui lòng chọn danh mục dự án.");
-    setTaskProjectPickerOpen(true);
-    return;
-  }
-  if (!ownerIds.length) {
-    alert("Vui lòng chọn ít nhất một người thực hiện.");
+  const taskId = byId("taskId").value || uid("task");
+  const existingTask = state.tasks.find((task) => task.id === taskId);
+  const preserveExistingOwner = !!existingTask && !canEditTaskDetails(existingTask);
+  const ownerId = preserveExistingOwner ? String(existingTask.ownerId || "") : byId("taskOwner").value;
+  if (!ownerId) {
+    alert("Chọn Người thực hiện trước khi lưu công việc.");
     setTaskOwnerPickerOpen(true);
     return;
   }
-  const ownersToSave = existingTaskId ? ownerIds.slice(0, 1) : ownerIds;
-  let saved = false;
-  let savedTaskId = existingTaskId || "";
-  for (let index = 0; index < ownersToSave.length; index += 1) {
-    const taskId = existingTaskId || uid("task");
-    savedTaskId = taskId;
-    saved = await saveTaskRecord(
-      {
-        id: taskId,
-        kind: TASK_KIND_REGULAR,
-        title: byId("taskTitle").value.trim(),
-        projectId: byId("taskProjectId").value,
-        ownerId: ownersToSave[index],
-        collaboratorIds: selectedTaskCollaboratorIds(),
-        category: byId("taskCategory").value,
-        workType: byId("taskWorkType").value,
-        recurrence: byId("taskRecurrence").value,
-        startDate: byId("taskStartDate").value,
-        due: byId("taskDue").value,
-        dueTime: byId("taskDueTime").value,
-        status: normalizeTaskStatus(byId("taskStatus").value),
-        progress: clamp(byId("taskProgress").value, 0, 100),
-        qualityPercent: normalizeTaskQualityInput(byId("taskQualityPercent").value),
-        note: byId("taskNote").value.trim(),
-      },
-      byId("taskAttachments"),
-      taskAttachmentDraft,
-      "",
-      "",
-      byId("taskNote").value.trim(),
-      index === ownersToSave.length - 1 ? resetTaskForm : () => {},
-    );
-    if (!saved) break;
-  }
-  if (saved && taskDetailInlineEditor?.taskId === savedTaskId) {
+  const saved = await saveTaskRecord(
+    {
+      id: taskId,
+      kind: TASK_KIND_REGULAR,
+      title: byId("taskTitle").value.trim(),
+      projectId: byId("taskProjectId").value,
+      ownerId,
+      collaboratorIds: selectedTaskCollaboratorIds(),
+      category: byId("taskCategory").value,
+      workType: byId("taskWorkType").value,
+      recurrence: byId("taskRecurrence").value,
+      startDate: byId("taskStartDate").value,
+      due: byId("taskDue").value,
+      dueTime: byId("taskDueTime").value,
+      status: normalizeTaskStatus(byId("taskStatus").value),
+      progress: clamp(byId("taskProgress").value, 0, 100),
+      qualityPercent: normalizeTaskQualityInput(byId("taskQualityPercent").value),
+      note: byId("taskNote").value.trim(),
+    },
+    byId("taskAttachments"),
+    taskAttachmentDraft,
+    "",
+    "",
+    byId("taskNote").value.trim(),
+    resetTaskForm,
+  );
+  if (saved && taskDetailInlineEditor?.taskId === taskId) {
     restoreTaskDetailInlineEditor();
-    openTaskDetailDialog(savedTaskId);
+    openTaskDetailDialog(taskId);
+  } else if (saved) {
+    closeTaskFormDialog();
   }
-});
-
-byId("taskProjectSearch").addEventListener("input", renderTaskProjectOptions);
-byId("taskProjectToggle").addEventListener("click", () => {
-  setTaskProjectPickerOpen(byId("taskProjectPanel").classList.contains("is-hidden"));
-});
-byId("taskProjectOptions").addEventListener("click", (event) => {
-  const projectId = event.target.closest("[data-select-task-project]")?.dataset.selectTaskProject;
-  if (!projectId) return;
-  byId("taskProjectId").value = projectId;
-  setTaskProjectPickerOpen(false);
 });
 
 byId("assignmentTaskForm")?.addEventListener("submit", async (event) => {
@@ -12645,7 +14508,26 @@ byId("assignmentTaskForm")?.addEventListener("submit", async (event) => {
   }
 });
 
-byId("resetTaskForm").addEventListener("click", resetTaskForm);
+byId("openTaskForm").addEventListener("click", openNewTaskFormDialog);
+byId("openTaskBulkImport").addEventListener("click", openTaskBulkImportDialog);
+byId("closeTaskForm").addEventListener("click", closeTaskFormDialog);
+byId("taskFormDialog").addEventListener("click", (event) => {
+  if (event.target === byId("taskFormDialog")) closeTaskFormDialog();
+});
+byId("closeTaskBulkImport").addEventListener("click", closeTaskBulkImportDialog);
+byId("taskBulkImportDialog").addEventListener("click", (event) => {
+  if (event.target === byId("taskBulkImportDialog")) closeTaskBulkImportDialog();
+});
+byId("taskBulkImportFile").addEventListener("change", (event) => {
+  handleTaskBulkImportFile(event.target.files?.[0]);
+});
+byId("downloadTaskImportTemplate").addEventListener("click", downloadTaskBulkImportTemplate);
+byId("confirmTaskBulkImport").addEventListener("click", importTaskBulkRows);
+byId("resetTaskBulkImport").addEventListener("click", resetTaskBulkImport);
+byId("resetTaskForm").addEventListener("click", () => {
+  resetTaskForm();
+  syncTaskFormDialogHeading();
+});
 byId("resetAssignmentTaskForm")?.addEventListener("click", resetAssignmentTaskForm);
 byId("endAssignmentTask")?.addEventListener("click", endAssignmentTaskFromForm);
 byId("openTaskProjectCatalog").addEventListener("click", openTaskProjectCatalogDialog);
@@ -12672,20 +14554,26 @@ byId("taskProjectCatalogList").addEventListener("click", (event) => {
 });
 byId("taskOwner").addEventListener("change", () => {
   byId("taskCategory").value = "";
+  updateTaskOwnerOptions();
   updateTaskCollaboratorOptions();
   updateTaskCategoryOptions();
   updateTaskFormLock();
 });
-byId("taskOwners").addEventListener("change", () => {
-  updateTaskOwnerSummary();
-  byId("taskCategory").value = "";
-  updateTaskCollaboratorOptions();
-  updateTaskCategoryOptions();
-  updateTaskFormLock();
+byId("taskOwnerOptions").addEventListener("change", (event) => {
+  const input = event.target.closest('input[type="radio"]');
+  if (!input?.value || byId("taskOwner").disabled) return;
+  byId("taskOwner").value = input.value;
+  byId("taskOwner").dispatchEvent(new Event("change", { bubbles: true }));
+  setTaskOwnerPickerOpen(false);
 });
-byId("taskOwnerSearch").addEventListener("input", debounce(filterTaskOwnerOptions, 150));
+byId("taskOwnerSearch").addEventListener("input", debounce(filterTaskOwnerOptions, 100));
+byId("taskOwnerSearch").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  setTaskOwnerPickerOpen(false);
+  byId("taskOwnerToggle")?.focus();
+});
 byId("taskOwnerToggle").addEventListener("click", () => {
-  setTaskOwnerPickerOpen(byId("taskOwnerPanel").classList.contains("is-hidden"));
+  setTaskOwnerPickerOpen(!isTaskOwnerPickerOpen());
 });
 byId("taskCollaborators").addEventListener("change", updateTaskCollaboratorSummary);
 byId("taskCollaboratorSearch").addEventListener("input", debounce(filterTaskCollaboratorOptions, 150));
@@ -12698,10 +14586,14 @@ byId("taskCollaboratorToggle").addEventListener("click", () => {
   setTaskCollaboratorPickerOpen(!isTaskCollaboratorPickerOpen());
 });
 document.addEventListener("pointerdown", (event) => {
-  const picker = byId("taskCollaboratorPicker");
-  if (isTaskCollaboratorPickerOpen() && !picker?.contains(event.target)) setTaskCollaboratorPickerOpen(false);
-  if (!byId("taskProjectPanel")?.classList.contains("is-hidden") && !byId("taskProjectPicker")?.contains(event.target)) setTaskProjectPickerOpen(false);
-  if (!byId("taskOwnerPanel")?.classList.contains("is-hidden") && !byId("taskOwnerPicker")?.contains(event.target)) setTaskOwnerPickerOpen(false);
+  const collaboratorPicker = byId("taskCollaboratorPicker");
+  const ownerPicker = byId("taskOwnerPicker");
+  if (isTaskCollaboratorPickerOpen() && !collaboratorPicker?.contains(event.target)) {
+    setTaskCollaboratorPickerOpen(false);
+  }
+  if (isTaskOwnerPickerOpen() && !ownerPicker?.contains(event.target)) {
+    setTaskOwnerPickerOpen(false);
+  }
 });
 byId("taskStatus").addEventListener("change", () => {
   updateTaskFormLock();
@@ -13325,6 +15217,10 @@ function splitStateForExport(exported) {
         departmentEvaluations: exported.departmentEvaluations || [],
         moduleSettings: exported.moduleSettings || {},
         systemCustomization: exported.systemCustomization || {},
+        departments: exported.departments || [],
+        roles: exported.roles || [],
+        behaviorRules: exported.behaviorRules || [],
+        supportRequests: exported.supportRequests || [],
         activityLog: exported.activityLog || [],
         canBoGpmbKpiCatalogVersion: exported.canBoGpmbKpiCatalogVersion || "",
         deletedIds: exported.deletedIds || [],
@@ -13475,6 +15371,10 @@ function mergeOperations(target, data, timestamp, allowMissing = false) {
   if (data.activePeriod) target.activePeriod = data.activePeriod;
   if (data.moduleSettings) target.moduleSettings = normalizeModuleSettings(data.moduleSettings);
   if (data.systemCustomization) target.systemCustomization = normalizeSystemCustomization(data.systemCustomization);
+  if (Array.isArray(data.departments)) target.departments = normalizeDepartmentsCatalog(data.departments);
+  if (Array.isArray(data.roles)) target.roles = normalizeRolesCatalog(data.roles);
+  if (Array.isArray(data.behaviorRules)) target.behaviorRules = normalizeBehaviorRulesCatalog(data.behaviorRules);
+  if (Array.isArray(data.supportRequests)) target.supportRequests = mergeImportedRecords(target.supportRequests, data.supportRequests, timestamp);
   if (Array.isArray(data.activityLog)) target.activityLog = data.activityLog;
   if (data.canBoGpmbKpiCatalogVersion) target.canBoGpmbKpiCatalogVersion = data.canBoGpmbKpiCatalogVersion;
   if (Array.isArray(data.deletedIds)) target.deletedIds = data.deletedIds;
@@ -13526,6 +15426,7 @@ async function importSeparatedJsonData(files) {
   const timestamp = new Date().toISOString();
   bundles.forEach((bundle) => mergeImportBundle(nextState, bundle, timestamp));
   Object.assign(state, normalizeStatePayload(nextState));
+  applyRuntimeKpiCatalogs(state);
   migrateDepartmentTermLabels({ persist: false });
   syncPersonnelAccounts();
   // Keep one-way verifiers for every imported credential. This makes an
