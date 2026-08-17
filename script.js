@@ -8570,6 +8570,7 @@ function renderHistory() {
   if (type === "department") {
     const department = departmentById(targetId);
     const people = state.people.filter((person) => person.departmentId === targetId);
+    const peopleIds = people.map((person) => person.id);
     const eligiblePeopleIds = people.filter(isKpiEligiblePerson).map((person) => person.id);
     const departmentEvals = isKpiExemptDepartment(targetId)
       ? []
