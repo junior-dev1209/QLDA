@@ -5986,6 +5986,73 @@ function taskProjectOptions() {
     .map((project) => ({ value: project.id, label: project.name }));
 }
 
+function updateTaskProjectSummary() {
+  const select = byId("taskProjectId");
+  const summary = byId("taskProjectSummary");
+  if (!select || !summary) return;
+  const option = Array.from(select.options).find((item) => item.value === select.value);
+  summary.textContent = option?.value ? option.textContent || "Chưa chọn danh mục dự án" : "Chưa chọn danh mục dự án";
+}
+
+function renderTaskProjectPickerOptions() {
+  const container = byId("taskProjectOptions");
+  const select = byId("taskProjectId");
+  if (!container || !select) return;
+  const selectedId = String(select.value || "");
+  const projects = taskProjectOptions();
+  container.innerHTML = projects
+    .map((project) => `
+      <button class="task-project-option ${project.value === selectedId ? "is-selected" : ""}" type="button" role="option" aria-selected="${project.value === selectedId}" data-task-project-value="${escapeHtml(project.value)}">${escapeHtml(project.label)}</button>
+    `)
+    .join("");
+  updateTaskProjectSummary();
+  filterTaskProjectPickerOptions();
+}
+
+function filterTaskProjectPickerOptions() {
+  const container = byId("taskProjectOptions");
+  const input = byId("taskProjectSearch");
+  const empty = byId("taskProjectSearchEmpty");
+  if (!container || !input) return;
+  const query = normalizeSearchText(input.value || "");
+  let visible = 0;
+  container.querySelectorAll(".task-project-option").forEach((button) => {
+    const show = !query || normalizeSearchText(button.textContent || "").includes(query);
+    button.classList.toggle("is-hidden", !show);
+    if (show) visible += 1;
+  });
+  empty?.classList.toggle("is-hidden", visible > 0);
+}
+
+function resetTaskProjectSearch() {
+  const input = byId("taskProjectSearch");
+  if (input) input.value = "";
+  filterTaskProjectPickerOptions();
+}
+
+function isTaskProjectPickerOpen() {
+  const panel = byId("taskProjectPanel");
+  return !!panel && !panel.classList.contains("is-hidden");
+}
+
+function setTaskProjectPickerOpen(open) {
+  const picker = byId("taskProjectPicker");
+  const panel = byId("taskProjectPanel");
+  const toggle = byId("taskProjectToggle");
+  if (!picker || !panel || !toggle) return;
+  const shouldOpen = Boolean(open) && !picker.classList.contains("is-disabled");
+  picker.classList.toggle("is-open", shouldOpen);
+  panel.classList.toggle("is-hidden", !shouldOpen);
+  toggle.setAttribute("aria-expanded", String(shouldOpen));
+  if (!shouldOpen) {
+    resetTaskProjectSearch();
+    return;
+  }
+  setTaskOwnerPickerOpen(false);
+  setTaskCollaboratorPickerOpen(false);
+  requestAnimationFrame(() => byId("taskProjectSearch")?.focus());
+}
+
 function renderTaskProjectOptions() {
   const options = [{ value: "", label: "Chưa chọn danh mục dự án" }, ...taskProjectOptions()];
   ["taskProjectId"].forEach((selectId) => {
@@ -5994,6 +6061,7 @@ function renderTaskProjectOptions() {
     const selected = select.value;
     fillSelect(select, options, selected);
   });
+  renderTaskProjectPickerOptions();
 }
 
 function resetTaskProjectCatalogForm() {
@@ -11820,6 +11888,7 @@ function populateTaskForm(task) {
   byId("taskTitle").value = task.title;
   renderTaskProjectOptions();
   byId("taskProjectId").value = projectIdForTask(task);
+  renderTaskProjectPickerOptions();
   ensureTaskOwnerOption(task);
   byId("taskOwner").value = task.ownerId;
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
@@ -11975,6 +12044,14 @@ function updateTaskFormLock(task = null) {
     .forEach((input) => {
       input.disabled = !canEditDetails;
     });
+  const projectPicker = byId("taskProjectPicker");
+  if (projectPicker) {
+    projectPicker.classList.toggle("is-disabled", !canEditDetails);
+    projectPicker.setAttribute("aria-disabled", String(!canEditDetails));
+    byId("taskProjectToggle").disabled = !canEditDetails;
+    byId("taskProjectSearch").disabled = !canEditDetails;
+    if (!canEditDetails) setTaskProjectPickerOpen(false);
+  }
   const ownerPickerLocked = !canEditDetails || (isEmployee() && kind === TASK_KIND_REGULAR);
   const ownerPicker = byId("taskOwnerPicker");
   if (ownerPicker) {
@@ -12588,6 +12665,8 @@ function resetTaskForm() {
   byId("taskId").value = "";
   renderTaskProjectOptions();
   byId("taskProjectId").value = "";
+  renderTaskProjectPickerOptions();
+  setTaskProjectPickerOpen(false);
   byId("taskCollaborators").innerHTML = "";
   setTaskOwnerPickerOpen(false);
   setTaskCollaboratorPickerOpen(false);
@@ -14553,6 +14632,25 @@ byId("taskProjectCatalogList").addEventListener("click", (event) => {
   const deleteProjectId = event.target.closest("[data-delete-task-project]")?.dataset.deleteTaskProject;
   if (deleteProjectId) deleteTaskProjectCatalog(deleteProjectId);
 });
+byId("taskProjectToggle")?.addEventListener("click", () => {
+  setTaskProjectPickerOpen(!isTaskProjectPickerOpen());
+});
+byId("taskProjectSearch")?.addEventListener("input", debounce(filterTaskProjectPickerOptions, 80));
+byId("taskProjectSearch")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  setTaskProjectPickerOpen(false);
+  byId("taskProjectToggle")?.focus();
+});
+byId("taskProjectOptions")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-task-project-value]");
+  if (!button || byId("taskProjectId")?.disabled) return;
+  byId("taskProjectId").value = button.dataset.taskProjectValue || "";
+  byId("taskProjectId").dispatchEvent(new Event("change", { bubbles: true }));
+  renderTaskProjectPickerOptions();
+  setTaskProjectPickerOpen(false);
+  byId("taskProjectToggle")?.focus();
+});
+byId("taskProjectId")?.addEventListener("change", renderTaskProjectPickerOptions);
 byId("taskOwner").addEventListener("change", () => {
   byId("taskCategory").value = "";
   updateTaskOwnerOptions();
@@ -14589,11 +14687,15 @@ byId("taskCollaboratorToggle").addEventListener("click", () => {
 document.addEventListener("pointerdown", (event) => {
   const collaboratorPicker = byId("taskCollaboratorPicker");
   const ownerPicker = byId("taskOwnerPicker");
+  const projectPicker = byId("taskProjectPicker");
   if (isTaskCollaboratorPickerOpen() && !collaboratorPicker?.contains(event.target)) {
     setTaskCollaboratorPickerOpen(false);
   }
   if (isTaskOwnerPickerOpen() && !ownerPicker?.contains(event.target)) {
     setTaskOwnerPickerOpen(false);
+  }
+  if (isTaskProjectPickerOpen() && !projectPicker?.contains(event.target)) {
+    setTaskProjectPickerOpen(false);
   }
 });
 byId("taskStatus").addEventListener("change", () => {

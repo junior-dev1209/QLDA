@@ -560,11 +560,22 @@
           <label class="task-title-field">Tên công việc
             <input id="taskTitle" required placeholder="Hoàn thiện hồ sơ dự án...">
           </label>
-          <label class="task-project-field">Danh mục dự án
-            <select id="taskProjectId" required>
-              <option value="">Chưa chọn danh mục dự án</option>
-            </select>
-          </label>
+          <div class="task-project-field">
+            <span class="task-project-label">Danh mục dự án</span>
+            <div id="taskProjectPicker" class="task-project-picker">
+              <button id="taskProjectToggle" class="task-project-picker-toggle" type="button" aria-expanded="false" aria-controls="taskProjectPanel">
+                <span id="taskProjectSummary">Chưa chọn danh mục dự án</span>
+              </button>
+              <div id="taskProjectPanel" class="task-project-picker-panel is-hidden">
+                <input id="taskProjectSearch" type="search" autocomplete="off" placeholder="Tìm nhanh tên dự án..." aria-label="Tìm danh mục dự án">
+                <div id="taskProjectOptions" class="task-project-option-list" role="listbox" aria-label="Danh mục dự án"></div>
+                <p id="taskProjectSearchEmpty" class="task-project-search-empty is-hidden">Không tìm thấy dự án phù hợp.</p>
+              </div>
+              <select id="taskProjectId" class="task-project-native-select" required aria-hidden="true" tabindex="-1">
+                <option value="">Chưa chọn danh mục dự án</option>
+              </select>
+            </div>
+          </div>
           <label class="task-category-field">Danh mục KPI cá nhân
             <select id="taskCategory" required>
               <option>Chọn người được giao để lấy danh mục KPI</option>
