@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$Login,
   [switch]$CheckOnly,
   [switch]$SkipDatabaseMigrations
@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRef = "hqquobfaccxnydeyvioe"
-$expectedDeploymentVersion = "2026.08.14.2"
+$expectedDeploymentVersion = "2026.08.21.2"
 $cli = Join-Path $PSScriptRoot "tools\supabase-cli\supabase.exe"
 
 if (-not (Test-Path -LiteralPath $cli)) {

@@ -19,7 +19,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.08.21.1";
+const deploymentVersion = "2026.08.21.2";
 
 const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "deletedIds"] as const;
@@ -1127,6 +1127,59 @@ function canUpdateTaskProgress(state: JsonRecord, account: JsonRecord, task: Jso
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, task, accountDepartmentId(state, account)));
 }
 
+function serverSanitizedTaskProgressCandidate(
+  state: JsonRecord,
+  account: JsonRecord,
+  previous: JsonRecord,
+  candidate: JsonRecord,
+): JsonRecord | null {
+  if (!canUpdateTaskProgress(state, account, previous) || taskProgressIsLocked(previous)) return null;
+
+  const previousReports = Array.isArray(previous.progressReports) ? previous.progressReports : [];
+  const candidateReports = Array.isArray(candidate.progressReports) ? candidate.progressReports : [];
+  if (!appendOnly(previousReports, candidateReports)) return null;
+
+  const sanitized = clone(previous);
+  [
+    "status",
+    "progress",
+    "attachments",
+    "progressReports",
+    "responseStatus",
+    "responseNote",
+    "responseAt",
+    "responseById",
+    "responseByName",
+    "updatedAt",
+    "updatedBy",
+    "updatedById",
+  ].forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(candidate, field)) sanitized[field] = clone(candidate[field]);
+  });
+
+  const canManageDepartmentProgress = isDirector(account)
+    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
+  if (canManageDepartmentProgress) {
+    if (Object.prototype.hasOwnProperty.call(candidate, "collaboratorIds")) sanitized.collaboratorIds = clone(candidate.collaboratorIds);
+    if (Object.prototype.hasOwnProperty.call(candidate, "collaboratorId")) sanitized.collaboratorId = clone(candidate.collaboratorId);
+  }
+
+  const wasCompleted = completedTaskStatus(previous.status);
+  const nowCompleted = completedTaskStatus(sanitized.status);
+  if (nowCompleted && !wasCompleted) {
+    const timestamp = new Date().toISOString();
+    sanitized.completedAt = timestamp;
+    sanitized.completedById = accountPersonId(state, account) || String(account.id || "");
+    sanitized.completedByName = String(account.displayName || account.username || "");
+  } else if (nowCompleted) {
+    sanitized.completedAt = previous.completedAt || candidate.completedAt || "";
+    sanitized.completedById = previous.completedById || candidate.completedById || "";
+    sanitized.completedByName = previous.completedByName || candidate.completedByName || "";
+  }
+
+  return normalizeTaskProgressLifecycle(sanitized);
+}
+
 function shouldNormalizeTaskProgressUpdate(
   state: JsonRecord,
   account: JsonRecord,
@@ -1397,14 +1450,19 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       let candidate = value;
       const taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
-      if (
-        collection === "tasks"
-        && previous
-        && taskBaseValue
-        && shouldNormalizeTaskProgressUpdate(next, actor, previous, taskBaseValue, candidate)
-      ) {
-        // Progress reporters may only change progress data. Clear stale review data before authorization.
-        candidate = normalizeTaskProgressLifecycle(candidate);
+      if (collection === "tasks" && previous) {
+        // Người có quyền báo cáo tiến độ chỉ được phép thay đổi nhóm trường tiến độ.
+        // Lấy record đang có trên server làm nền để các field quản lý cũ ở client
+        // không làm toàn bộ thao tác bị từ chối.
+        const sanitizedProgress = serverSanitizedTaskProgressCandidate(next, actor, previous, candidate);
+        if (sanitizedProgress) {
+          candidate = sanitizedProgress;
+        } else if (
+          taskBaseValue
+          && shouldNormalizeTaskProgressUpdate(next, actor, previous, taskBaseValue, candidate)
+        ) {
+          candidate = normalizeTaskProgressLifecycle(candidate);
+        }
       }
       if (previous && !sameJson(operation.baseValue, serverValue)) {
         const rebased = collection === "tasks" && isRecord(operation.baseValue)
