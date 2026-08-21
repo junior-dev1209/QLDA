@@ -6,7 +6,7 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.0.14">
+  <meta name="application-version" content="3.0.34">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
@@ -42,10 +42,11 @@
         </label>
         <p id="loginError" class="form-error" role="alert"></p>
         <button type="submit">Đăng nhập</button>
+        <button id="openOfflineTestSetup" class="ghost login-offline-setup is-hidden" type="button">Khởi tạo kiểm thử offline</button>
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.0.14</strong>
+          <strong data-app-version>Phiên bản 3.0.34</strong>
         </p>
       </form>
     </div>
@@ -447,6 +448,9 @@
           <label>Vị trí
             <select id="personRole" required></select>
           </label>
+          <label id="personSectionHeadField">Trưởng bộ phận/Trưởng nhóm quản lý trực tiếp
+            <select id="personSectionHead"></select>
+          </label>
           <label>Loại hợp đồng
             <select id="personContract">
               <option>Biên chế</option>
@@ -560,22 +564,11 @@
           <label class="task-title-field">Tên công việc
             <input id="taskTitle" required placeholder="Hoàn thiện hồ sơ dự án...">
           </label>
-          <div class="task-project-field">
-            <span class="task-project-label">Danh mục dự án</span>
-            <div id="taskProjectPicker" class="task-project-picker">
-              <button id="taskProjectToggle" class="task-project-picker-toggle" type="button" aria-expanded="false" aria-controls="taskProjectPanel">
-                <span id="taskProjectSummary">Chưa chọn danh mục dự án</span>
-              </button>
-              <div id="taskProjectPanel" class="task-project-picker-panel is-hidden">
-                <input id="taskProjectSearch" type="search" autocomplete="off" placeholder="Tìm nhanh tên dự án..." aria-label="Tìm danh mục dự án">
-                <div id="taskProjectOptions" class="task-project-option-list" role="listbox" aria-label="Danh mục dự án"></div>
-                <p id="taskProjectSearchEmpty" class="task-project-search-empty is-hidden">Không tìm thấy dự án phù hợp.</p>
-              </div>
-              <select id="taskProjectId" class="task-project-native-select" required aria-hidden="true" tabindex="-1">
-                <option value="">Chưa chọn danh mục dự án</option>
-              </select>
-            </div>
-          </div>
+          <label class="task-project-field">Danh mục dự án
+            <select id="taskProjectId" required>
+              <option value="">Chưa chọn danh mục dự án</option>
+            </select>
+          </label>
           <label class="task-category-field">Danh mục KPI cá nhân
             <select id="taskCategory" required>
               <option>Chọn người được giao để lấy danh mục KPI</option>
@@ -617,6 +610,8 @@
           <label class="regular-only task-recurrence-field">Định kỳ
             <select id="taskRecurrence">
               <option value="none">Không định kỳ</option>
+              <option value="daily">Hàng ngày</option>
+              <option value="weekly">Hàng tuần</option>
               <option value="monthly">Hàng tháng</option>
               <option value="quarterly">Hàng quý</option>
             </select>
@@ -749,18 +744,14 @@
             <label>Phòng
               <select id="deptEvalDepartment" required></select>
             </label>
-            <label>Người báo cáo
-              <select id="deptEvalReporter"></select>
-            </label>
-            <label>Người xác nhận
-              <select id="deptEvalReviewer"></select>
+            <label>Người điều chỉnh điểm
+              <input id="deptEvalReviewer" readonly aria-readonly="true" value="Hệ thống tự ghi nhận theo tài khoản đăng nhập">
             </label>
           </div>
 
           <section class="score-panel">
             <div>
               <h3>Tiêu chí KPI phòng</h3>
-              <p id="departmentCriteriaHint">Chọn phòng để nhập số kế hoạch và số thực hiện theo từng chỉ tiêu.</p>
             </div>
             <div id="departmentCriteriaInputs" class="criteria-grid"></div>
           </section>
@@ -805,7 +796,7 @@
             <textarea id="deptEvalComment" rows="3" placeholder="Nhận xét về tiến độ, chất lượng, phối hợp, rủi ro..."></textarea>
           </label>
           <div class="form-actions">
-            <button type="submit">Lưu KPI phòng</button>
+            <button type="submit">Lưu điều chỉnh KPI phòng</button>
             <button id="resetDeptEvalForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
@@ -818,8 +809,7 @@
                 <th>Phòng</th>
                 <th>KPI phòng</th>
                 <th>Xếp loại</th>
-                <th>Người báo cáo</th>
-                <th>Người xác nhận</th>
+                <th>Người điều chỉnh</th>
                 <th></th>
               </tr>
             </thead>
@@ -847,8 +837,8 @@
               <input id="evalDepartmentScore" type="number" min="0" max="120" readonly>
               <span id="evalDepartmentLinkHint" class="field-note">Chọn nhân sự để liên kết KPI phòng.</span>
             </label>
-            <label>Người xác nhận
-              <input id="evalReviewer" placeholder="Trưởng phòng/Hội đồng">
+            <label>Người điều chỉnh điểm
+              <input id="evalReviewer" readonly aria-readonly="true" value="Hệ thống tự ghi nhận theo tài khoản đăng nhập">
             </label>
             <div class="inline-form-action">
               <button id="openDepartmentEvaluationFromPersonal" class="ghost" type="button">Mở KPI phòng</button>
@@ -858,7 +848,6 @@
           <section class="score-panel">
             <div>
               <h3>KPI theo vị trí</h3>
-              <p id="roleHint">Chọn nhân sự để hiển thị bộ tiêu chí.</p>
             </div>
             <div id="criteriaInputs" class="criteria-grid"></div>
           </section>
@@ -1056,6 +1045,16 @@
             </div>
           </div>
           <div id="accountPresenceList" class="account-presence-list"></div>
+          <section class="account-usage-history account-task-creation-stats" aria-labelledby="accountTaskCreationTitle">
+            <div class="account-usage-history-head">
+              <div>
+                <p class="eyebrow">Công việc</p>
+                <h4 id="accountTaskCreationTitle">Công việc đã tạo và liên quan theo tài khoản</h4>
+              </div>
+              <strong id="accountTaskCreationTotal" class="account-task-creation-total">-</strong>
+            </div>
+            <div id="accountTaskCreationList" class="account-task-creation-list"></div>
+          </section>
           <div class="account-usage-monitor-grid">
             <section class="account-usage-card" aria-labelledby="accountInactiveDayTitle">
               <div class="account-usage-card-head">
@@ -1099,7 +1098,7 @@
             <section class="account-usage-visit-section" aria-labelledby="accountUsageDailyVisitTitle">
               <div class="account-usage-visit-section-head">
                 <h5 id="accountUsageDailyVisitTitle">30 ngày gần nhất</h5>
-                <span>1 lượt được ghi nhận cho mỗi lần đăng nhập hợp lệ</span>
+                <span>Tổng hợp đăng nhập hợp lệ và phiên sử dụng đầu tiên trong ngày</span>
               </div>
               <div id="accountUsageDailyVisitHistory" class="account-usage-history-list account-usage-daily-visit-list"></div>
             </section>
@@ -1334,7 +1333,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.0.14</strong>
+    <strong data-app-version>Phiên bản 3.0.34</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -1353,6 +1352,35 @@
       </div>
       <button id="dismissBirthdayCelebration" type="button">Tiếp tục làm việc</button>
     </div>
+  </section>
+
+  <section id="offlineTestSetupDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <form id="offlineTestSetupForm" class="modal-card offline-test-setup-modal" aria-labelledby="offlineTestSetupTitle">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Kiểm thử cục bộ</p>
+          <h2 id="offlineTestSetupTitle">Khởi tạo tài khoản Admin</h2>
+        </div>
+        <button id="closeOfflineTestSetup" class="ghost icon-button" type="button" aria-label="Đóng">×</button>
+      </div>
+      <p class="offline-test-setup-note">Dữ liệu này chỉ lưu trên trình duyệt đang mở tệp ứng dụng. Không được đồng bộ hoặc ghi đè dữ liệu hệ thống online.</p>
+      <div class="form-grid offline-test-setup-fields">
+        <label>Tên đăng nhập Admin
+          <input id="offlineTestUsername" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="96" required placeholder="Ví dụ: admin-test">
+        </label>
+        <label>Mật khẩu kiểm thử
+          <input id="offlineTestPassword" type="password" autocomplete="new-password" maxlength="128" required placeholder="Tối thiểu 10 ký tự, gồm 3 nhóm ký tự">
+        </label>
+        <label>Xác nhận mật khẩu
+          <input id="offlineTestPasswordConfirm" type="password" autocomplete="new-password" maxlength="128" required placeholder="Nhập lại mật khẩu">
+        </label>
+      </div>
+      <p id="offlineTestSetupError" class="form-error" role="alert"></p>
+      <div class="form-actions">
+        <button id="cancelOfflineTestSetup" class="ghost" type="button">Hủy</button>
+        <button type="submit">Khởi tạo và đăng nhập</button>
+      </div>
+    </form>
   </section>
 
   <section id="printDialog" class="modal-backdrop is-hidden" aria-hidden="true">

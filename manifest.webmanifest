@@ -2,7 +2,7 @@
   "name": "Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh",
   "short_name": "KPI Phúc Thịnh",
   "description": "Ứng dụng quản lý nhân sự, công việc, KPI phòng và KPI cá nhân.",
-  "version": "3.0.14",
+  "version": "3.0.34",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
