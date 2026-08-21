@@ -19,7 +19,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.08.14.2";
+const deploymentVersion = "2026.08.21.1";
 
 const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "deletedIds"] as const;
@@ -949,6 +949,17 @@ function isBlankTaskField(value: unknown): boolean {
   return String(value ?? "").trim() === "";
 }
 
+function taskCompletionIsLateFromTimestamp(task: JsonRecord): boolean {
+  if (!completedTaskStatus(task.status) || !String(task.due || "").trim() || !String(task.completedAt || "").trim()) return false;
+  const dueDate = String(task.due || "").trim();
+  const rawDueTime = String(task.dueTime || "").trim();
+  const dueTime = /^\\d{2}:\\d{2}$/.test(rawDueTime) ? `${rawDueTime}:00` : "23:59:59";
+  const deadline = new Date(`${dueDate}T${dueTime}+07:00`);
+  const completedAt = new Date(String(task.completedAt || ""));
+  if (Number.isNaN(deadline.getTime()) || Number.isNaN(completedAt.getTime())) return false;
+  return completedAt.getTime() > deadline.getTime();
+}
+
 function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
   const completionFields = [
     "completionReviewedAt",
@@ -961,9 +972,14 @@ function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
     "qualityAssessedByName",
   ];
   const cleared = completionFields.every((field) => isBlankTaskField(next[field]));
-  if (!cleared || Boolean(next.lateCompletion)) return false;
-  if (completedTaskStatus(next.status)) return String(next.completionReviewStatus || "") === "pending";
-  return isBlankTaskField(next.completionReviewStatus);
+  if (!cleared) return false;
+  if (completedTaskStatus(next.status)) {
+    if (String(next.completionReviewStatus || "") !== "pending") return false;
+    // Công việc quá hạn vẫn được người thực hiện/Trưởng bộ phận báo Hoàn thành.
+    // lateCompletion là dữ liệu hệ thống tính theo thời hạn, không phải lý do khóa quyền cập nhật.
+    return Boolean(next.lateCompletion) === taskCompletionIsLateFromTimestamp(next);
+  }
+  return isBlankTaskField(next.completionReviewStatus) && !Boolean(next.lateCompletion);
 }
 
 function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
@@ -1002,11 +1018,13 @@ function normalizeTaskProgressLifecycle(next: JsonRecord): JsonRecord {
   clearFields.forEach((field) => {
     normalized[field] = "";
   });
-  normalized.lateCompletion = false;
   if (completedTaskStatus(normalized.status)) {
     normalized.completionReviewStatus = "pending";
+    // Tự xác định hoàn thành muộn ở server. Không chặn cập nhật chỉ vì nhiệm vụ đã quá hạn.
+    normalized.lateCompletion = taskCompletionIsLateFromTimestamp(normalized);
   } else {
     normalized.completionReviewStatus = "";
+    normalized.lateCompletion = false;
     normalized.completedAt = "";
     normalized.completedById = "";
     normalized.completedByName = "";
@@ -1123,10 +1141,17 @@ function shouldNormalizeTaskProgressUpdate(
 
 function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
   if (isAdmin(account)) return true;
-  if (!taskProgressIsLocked(previous) && taskParticipantForAccount(state, previous, account) && taskProgressOnlyChange(previous, next)) return true;
+  const progressUnlocked = !taskProgressIsLocked(previous);
+  const participantProgress = taskParticipantForAccount(state, previous, account);
   const canManageDepartmentProgress = isDirector(account)
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
-  if (!taskProgressIsLocked(previous) && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
+
+  // Quá hạn là trạng thái tính theo thời gian, không làm mất quyền báo cáo/hoàn thành.
+  // Nhân viên chỉ được cập nhật phần tiến độ của công việc mình tham gia;
+  // Trưởng bộ phận chỉ được cập nhật trong phạm vi phòng/bộ phận được nhìn thấy.
+  if (progressUnlocked && participantProgress && taskProgressOnlyChange(previous, next)) return true;
+  if (progressUnlocked && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
+
   if (canReviewTaskCompletion(state, account, previous) && taskCompletionReviewChange(previous, next)) return true;
   if (canAssessTaskQuality(state, account, previous) && taskQualityOnlyChange(previous, next)) return true;
   if (assignedTask(previous) && taskAssigner(previous, account) && (isDirector(account) || hasDepartmentManagement(account))) {
