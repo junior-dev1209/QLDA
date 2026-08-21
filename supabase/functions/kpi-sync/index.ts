@@ -19,7 +19,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.08.21.2";
+const deploymentVersion = "2026.08.21.3";
 
 const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "deletedIds"] as const;
@@ -953,7 +953,7 @@ function taskCompletionIsLateFromTimestamp(task: JsonRecord): boolean {
   if (!completedTaskStatus(task.status) || !String(task.due || "").trim() || !String(task.completedAt || "").trim()) return false;
   const dueDate = String(task.due || "").trim();
   const rawDueTime = String(task.dueTime || "").trim();
-  const dueTime = /^\\d{2}:\\d{2}$/.test(rawDueTime) ? `${rawDueTime}:00` : "23:59:59";
+  const dueTime = /^\d{2}:\d{2}$/.test(rawDueTime) ? `${rawDueTime}:00` : "23:59:59";
   const deadline = new Date(`${dueDate}T${dueTime}+07:00`);
   const completedAt = new Date(String(task.completedAt || ""));
   if (Number.isNaN(deadline.getTime()) || Number.isNaN(completedAt.getTime())) return false;
@@ -1127,24 +1127,47 @@ function canUpdateTaskProgress(state: JsonRecord, account: JsonRecord, task: Jso
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, task, accountDepartmentId(state, account)));
 }
 
-function serverSanitizedTaskProgressCandidate(
+
+function mergeTaskProgressReportsFromMutation(live: JsonRecord, base: JsonRecord, incoming: JsonRecord): JsonRecord[] {
+  const liveReports = Array.isArray(live.progressReports) ? clone(live.progressReports) : [];
+  const baseReports = Array.isArray(base.progressReports) ? base.progressReports : [];
+  const incomingReports = Array.isArray(incoming.progressReports) ? incoming.progressReports.filter(isRecord) : [];
+  const baseIds = new Set(baseReports.map((report) => recordId(report)).filter(Boolean));
+  const liveIds = new Set(liveReports.map((report) => recordId(report)).filter(Boolean));
+
+  incomingReports.forEach((report) => {
+    const id = recordId(report);
+    // Existing history is immutable. Only merge reports that were newly appended by this client.
+    if ((id && baseIds.has(id)) || (id && liveIds.has(id))) return;
+    liveReports.push(clone(report));
+    if (id) liveIds.add(id);
+  });
+  return liveReports;
+}
+
+function sanitizeTaskProgressMutation(
   state: JsonRecord,
   account: JsonRecord,
-  previous: JsonRecord,
-  candidate: JsonRecord,
+  live: JsonRecord,
+  base: JsonRecord,
+  incoming: JsonRecord,
 ): JsonRecord | null {
-  if (!canUpdateTaskProgress(state, account, previous) || taskProgressIsLocked(previous)) return null;
+  if (!canUpdateTaskProgress(state, account, live) || taskProgressIsLocked(live)) return null;
 
-  const previousReports = Array.isArray(previous.progressReports) ? previous.progressReports : [];
-  const candidateReports = Array.isArray(candidate.progressReports) ? candidate.progressReports : [];
-  if (!appendOnly(previousReports, candidateReports)) return null;
+  // Completion-review and quality-assessment mutations have their own authorization paths.
+  if (taskCompletionReviewChange(base, incoming) || taskQualityOnlyChange(base, incoming)) return null;
 
-  const sanitized = clone(previous);
+  const sanitized = clone(live);
+  const previousCompleted = completedTaskStatus(live.status);
+  const incomingCompleted = completedTaskStatus(incoming.status);
+
+  // Only progress/report fields are accepted from non-admin progress reporters.
+  if (Object.prototype.hasOwnProperty.call(incoming, "status")) sanitized.status = incoming.status;
+  if (Object.prototype.hasOwnProperty.call(incoming, "progress")) sanitized.progress = incoming.progress;
+  if (Object.prototype.hasOwnProperty.call(incoming, "attachments")) sanitized.attachments = clone(incoming.attachments);
+  sanitized.progressReports = mergeTaskProgressReportsFromMutation(live, base, incoming);
+
   [
-    "status",
-    "progress",
-    "attachments",
-    "progressReports",
     "responseStatus",
     "responseNote",
     "responseAt",
@@ -1154,27 +1177,27 @@ function serverSanitizedTaskProgressCandidate(
     "updatedBy",
     "updatedById",
   ].forEach((field) => {
-    if (Object.prototype.hasOwnProperty.call(candidate, field)) sanitized[field] = clone(candidate[field]);
+    if (Object.prototype.hasOwnProperty.call(incoming, field)) sanitized[field] = clone(incoming[field]);
   });
 
+  // Department-scoped managers/section heads may update collaborator assignment where the UI grants it.
   const canManageDepartmentProgress = isDirector(account)
-    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
+    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, live, accountDepartmentId(state, account)));
   if (canManageDepartmentProgress) {
-    if (Object.prototype.hasOwnProperty.call(candidate, "collaboratorIds")) sanitized.collaboratorIds = clone(candidate.collaboratorIds);
-    if (Object.prototype.hasOwnProperty.call(candidate, "collaboratorId")) sanitized.collaboratorId = clone(candidate.collaboratorId);
+    if (Object.prototype.hasOwnProperty.call(incoming, "collaboratorIds")) sanitized.collaboratorIds = clone(incoming.collaboratorIds);
+    if (Object.prototype.hasOwnProperty.call(incoming, "collaboratorId")) sanitized.collaboratorId = clone(incoming.collaboratorId);
   }
 
-  const wasCompleted = completedTaskStatus(previous.status);
-  const nowCompleted = completedTaskStatus(sanitized.status);
-  if (nowCompleted && !wasCompleted) {
+  // Completion metadata is server-owned. This prevents a stale/extra client field from causing permission rejection.
+  if (incomingCompleted && !previousCompleted) {
     const timestamp = new Date().toISOString();
     sanitized.completedAt = timestamp;
     sanitized.completedById = accountPersonId(state, account) || String(account.id || "");
     sanitized.completedByName = String(account.displayName || account.username || "");
-  } else if (nowCompleted) {
-    sanitized.completedAt = previous.completedAt || candidate.completedAt || "";
-    sanitized.completedById = previous.completedById || candidate.completedById || "";
-    sanitized.completedByName = previous.completedByName || candidate.completedByName || "";
+  } else if (incomingCompleted && previousCompleted) {
+    sanitized.completedAt = live.completedAt || "";
+    sanitized.completedById = live.completedById || "";
+    sanitized.completedByName = live.completedByName || "";
   }
 
   return normalizeTaskProgressLifecycle(sanitized);
@@ -1450,26 +1473,33 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       let candidate = value;
       const taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
-      if (collection === "tasks" && previous) {
-        // Người có quyền báo cáo tiến độ chỉ được phép thay đổi nhóm trường tiến độ.
-        // Lấy record đang có trên server làm nền để các field quản lý cũ ở client
-        // không làm toàn bộ thao tác bị từ chối.
-        const sanitizedProgress = serverSanitizedTaskProgressCandidate(next, actor, previous, candidate);
-        if (sanitizedProgress) {
-          candidate = sanitizedProgress;
-        } else if (
-          taskBaseValue
-          && shouldNormalizeTaskProgressUpdate(next, actor, previous, taskBaseValue, candidate)
-        ) {
-          candidate = normalizeTaskProgressLifecycle(candidate);
-        }
+
+      // IMPORTANT: for authorized progress reporters, ignore unrelated/stale fields carried by the client.
+      // Build the mutation from the live server task and apply only the permitted progress subset.
+      const sanitizedTaskProgress = collection === "tasks" && previous && taskBaseValue
+        ? sanitizeTaskProgressMutation(next, actor, previous, taskBaseValue, candidate)
+        : null;
+
+      if (sanitizedTaskProgress) {
+        candidate = sanitizedTaskProgress;
+      } else if (
+        collection === "tasks"
+        && previous
+        && taskBaseValue
+        && shouldNormalizeTaskProgressUpdate(next, actor, previous, taskBaseValue, candidate)
+      ) {
+        candidate = normalizeTaskProgressLifecycle(candidate);
       }
+
       if (previous && !sameJson(operation.baseValue, serverValue)) {
-        const rebased = collection === "tasks" && isRecord(operation.baseValue)
-          ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
-          : collection === "supportRequests" && supportRequestBaseValue
-            ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
-          : null;
+        // A sanitized task-progress mutation is already rebased on the live server record.
+        const rebased = sanitizedTaskProgress
+          ? candidate
+          : collection === "tasks" && isRecord(operation.baseValue)
+            ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
+            : collection === "supportRequests" && supportRequestBaseValue
+              ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
+              : null;
         if (!rebased) {
           denied.push({ scope: collection, id, reason: "Record changed by another user." });
           return;

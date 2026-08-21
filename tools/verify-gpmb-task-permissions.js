@@ -112,18 +112,14 @@ assert.equal(canUpdateTask(state, byId("account-other"), task), false, "Other de
   "function taskParticipantForAccount(state: JsonRecord, task: JsonRecord, account: JsonRecord): boolean",
   "accounts: [resolvedPersonnelAccount(state, account)],",
   "taskParticipantDepartmentId(state, personId) === departmentId",
+  "function sanitizeTaskProgressMutation(",
+  "function mergeTaskProgressReportsFromMutation(",
+  "const sanitizedTaskProgress = collection === \"tasks\" && previous && taskBaseValue",
 ].forEach((marker) => assert.ok(source.includes(marker), `Missing server permission safeguard: ${marker}`));
 [
   "function taskParticipantPersonId(value)",
   "taskParticipantPersonId(task.ownerId) === person.id",
   "return uniquePersonIds([taskParticipantPersonId(task?.ownerId), ...taskCollaboratorIds(task)]);",
 ].forEach((marker) => assert.ok(clientSource.includes(marker), `Missing client permission safeguard: ${marker}`));
-
-[
-  'const deploymentVersion = "2026.08.21.2";',
-  "function serverSanitizedTaskProgressCandidate(",
-  "const sanitized = clone(previous);",
-  "return normalizeTaskProgressLifecycle(sanitized);",
-].forEach((marker) => assert.ok(source.includes(marker), `Missing overdue-completion server fix: ${marker}`));
 
 console.log("gpmb_task_permissions=passed");
