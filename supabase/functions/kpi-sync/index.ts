@@ -21,7 +21,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.08.22.1";
+const deploymentVersion = "2026.08.22.2";
 
 const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "deletedIds"] as const;
@@ -1092,6 +1092,17 @@ function isBlankTaskField(value: unknown): boolean {
   return String(value ?? "").trim() === "";
 }
 
+function taskCompletionIsLateFromTimestamp(task: JsonRecord): boolean {
+  if (!completedTaskStatus(task.status) || !String(task.due || "").trim() || !String(task.completedAt || "").trim()) return false;
+  const dueDate = String(task.due || "").trim();
+  const rawDueTime = String(task.dueTime || "").trim();
+  const dueTime = /^\d{2}:\d{2}$/.test(rawDueTime) ? `${rawDueTime}:00` : "23:59:59";
+  const deadline = new Date(`${dueDate}T${dueTime}+07:00`);
+  const completedAt = new Date(String(task.completedAt || ""));
+  if (Number.isNaN(deadline.getTime()) || Number.isNaN(completedAt.getTime())) return false;
+  return completedAt.getTime() > deadline.getTime();
+}
+
 function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
   const completionFields = [
     "completionReviewedAt",
@@ -1104,9 +1115,13 @@ function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
     "qualityAssessedByName",
   ];
   const cleared = completionFields.every((field) => isBlankTaskField(next[field]));
-  if (!cleared || Boolean(next.lateCompletion)) return false;
-  if (completedTaskStatus(next.status)) return String(next.completionReviewStatus || "") === "pending";
-  return isBlankTaskField(next.completionReviewStatus);
+  if (!cleared) return false;
+  if (completedTaskStatus(next.status)) {
+    if (String(next.completionReviewStatus || "") !== "pending") return false;
+    // Quá hạn không khóa quyền báo Hoàn thành. Server tự xác định lateCompletion.
+    return Boolean(next.lateCompletion) === taskCompletionIsLateFromTimestamp(next);
+  }
+  return isBlankTaskField(next.completionReviewStatus) && !Boolean(next.lateCompletion);
 }
 
 function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
@@ -1145,11 +1160,12 @@ function normalizeTaskProgressLifecycle(next: JsonRecord): JsonRecord {
   clearFields.forEach((field) => {
     normalized[field] = "";
   });
-  normalized.lateCompletion = false;
   if (completedTaskStatus(normalized.status)) {
     normalized.completionReviewStatus = "pending";
+    normalized.lateCompletion = taskCompletionIsLateFromTimestamp(normalized);
   } else {
     normalized.completionReviewStatus = "";
+    normalized.lateCompletion = false;
     normalized.completedAt = "";
     normalized.completedById = "";
     normalized.completedByName = "";
@@ -1252,6 +1268,79 @@ function canUpdateTaskProgress(state: JsonRecord, account: JsonRecord, task: Jso
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, task, accountDepartmentId(state, account)));
 }
 
+function mergeTaskProgressReportsFromMutation(live: JsonRecord, base: JsonRecord, incoming: JsonRecord): JsonRecord[] {
+  const liveReports = Array.isArray(live.progressReports) ? clone(live.progressReports) : [];
+  const baseReports = Array.isArray(base.progressReports) ? base.progressReports : [];
+  const incomingReports = Array.isArray(incoming.progressReports) ? incoming.progressReports.filter(isRecord) : [];
+  const baseIds = new Set(baseReports.map((report) => recordId(report)).filter(Boolean));
+  const liveIds = new Set(liveReports.map((report) => recordId(report)).filter(Boolean));
+
+  incomingReports.forEach((report) => {
+    const id = recordId(report);
+    if ((id && baseIds.has(id)) || (id && liveIds.has(id))) return;
+    liveReports.push(clone(report));
+    if (id) liveIds.add(id);
+  });
+  return liveReports;
+}
+
+function sanitizeTaskProgressMutation(
+  state: JsonRecord,
+  account: JsonRecord,
+  live: JsonRecord,
+  base: JsonRecord,
+  incoming: JsonRecord,
+): JsonRecord | null {
+  if (!canUpdateTaskProgress(state, account, live) || taskProgressIsLocked(live)) return null;
+
+  // Duyệt hoàn thành và đánh giá chất lượng có luồng phân quyền riêng.
+  if (taskCompletionReviewChange(base, incoming) || taskQualityOnlyChange(base, incoming)) return null;
+
+  const sanitized = clone(live);
+  const previousCompleted = completedTaskStatus(live.status);
+  const incomingCompleted = completedTaskStatus(incoming.status);
+
+  // Chỉ nhận đúng nhóm trường tiến độ; mọi field quản lý khác giữ theo bản server.
+  if (Object.prototype.hasOwnProperty.call(incoming, "status")) sanitized.status = incoming.status;
+  if (Object.prototype.hasOwnProperty.call(incoming, "progress")) sanitized.progress = incoming.progress;
+  if (Object.prototype.hasOwnProperty.call(incoming, "attachments")) sanitized.attachments = clone(incoming.attachments);
+  sanitized.progressReports = mergeTaskProgressReportsFromMutation(live, base, incoming);
+
+  [
+    "responseStatus",
+    "responseNote",
+    "responseAt",
+    "responseById",
+    "responseByName",
+    "updatedAt",
+    "updatedBy",
+    "updatedById",
+  ].forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(incoming, field)) sanitized[field] = clone(incoming[field]);
+  });
+
+  const canManageDepartmentProgress = isDirector(account)
+    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, live, accountDepartmentId(state, account)));
+  if (canManageDepartmentProgress) {
+    if (Object.prototype.hasOwnProperty.call(incoming, "collaboratorIds")) sanitized.collaboratorIds = clone(incoming.collaboratorIds);
+    if (Object.prototype.hasOwnProperty.call(incoming, "collaboratorId")) sanitized.collaboratorId = clone(incoming.collaboratorId);
+  }
+
+  // Metadata hoàn thành do server sở hữu để tránh field client cũ/lệch gây Permission denied.
+  if (incomingCompleted && !previousCompleted) {
+    const timestamp = new Date().toISOString();
+    sanitized.completedAt = timestamp;
+    sanitized.completedById = accountPersonId(state, account) || String(account.id || "");
+    sanitized.completedByName = String(account.displayName || account.username || "");
+  } else if (incomingCompleted && previousCompleted) {
+    sanitized.completedAt = live.completedAt || "";
+    sanitized.completedById = live.completedById || "";
+    sanitized.completedByName = live.completedByName || "";
+  }
+
+  return normalizeTaskProgressLifecycle(sanitized);
+}
+
 function shouldNormalizeTaskProgressUpdate(
   state: JsonRecord,
   account: JsonRecord,
@@ -1266,10 +1355,15 @@ function shouldNormalizeTaskProgressUpdate(
 
 function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
   if (isAdmin(account)) return true;
-  if (!taskProgressIsLocked(previous) && taskParticipantForAccount(state, previous, account) && taskProgressOnlyChange(previous, next)) return true;
+  const progressUnlocked = !taskProgressIsLocked(previous);
+  const participantProgress = taskParticipantForAccount(state, previous, account);
   const canManageDepartmentProgress = isDirector(account)
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
-  if (!taskProgressIsLocked(previous) && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
+
+  // Quá hạn chỉ là trạng thái thời gian, không làm mất quyền cập nhật tiến độ.
+  if (progressUnlocked && participantProgress && taskProgressOnlyChange(previous, next)) return true;
+  if (progressUnlocked && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
+
   if (canReviewTaskCompletion(state, account, previous) && taskCompletionReviewChange(previous, next)) return true;
   if (canAssessTaskQuality(state, account, previous) && taskQualityOnlyChange(previous, next)) return true;
   if (assignedTask(previous) && taskAssigner(previous, account) && (isDirector(account) || hasDepartmentManagement(account))) {
@@ -1531,21 +1625,32 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       let candidate = value;
       const taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
-      if (
+
+      // Với tài khoản chỉ có quyền báo cáo/cập nhật tiến độ, luôn lấy record server hiện tại làm nền.
+      // Chỉ nhóm field tiến độ được nhận; field quản lý cũ/lệch từ client không làm thao tác bị từ chối.
+      const sanitizedTaskProgress = collection === "tasks" && previous && taskBaseValue
+        ? sanitizeTaskProgressMutation(next, actor, previous, taskBaseValue, candidate)
+        : null;
+
+      if (sanitizedTaskProgress) {
+        candidate = sanitizedTaskProgress;
+      } else if (
         collection === "tasks"
         && previous
         && taskBaseValue
         && shouldNormalizeTaskProgressUpdate(next, actor, previous, taskBaseValue, candidate)
       ) {
-        // Progress reporters may only change progress data. Clear stale review data before authorization.
         candidate = normalizeTaskProgressLifecycle(candidate);
       }
+
       if (previous && !sameJson(operation.baseValue, serverValue)) {
-        const rebased = collection === "tasks" && isRecord(operation.baseValue)
-          ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
-          : collection === "supportRequests" && supportRequestBaseValue
-            ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
-          : null;
+        const rebased = sanitizedTaskProgress
+          ? candidate
+          : collection === "tasks" && isRecord(operation.baseValue)
+            ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
+            : collection === "supportRequests" && supportRequestBaseValue
+              ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
+              : null;
         if (!rebased) {
           denied.push({ scope: collection, id, reason: "Record changed by another user." });
           return;
