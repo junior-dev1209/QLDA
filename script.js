@@ -3813,7 +3813,12 @@ async function flushSharedStateSync() {
     if (Array.isArray(payload?.denied) && payload.denied.length) {
       const message = sharedDeniedChangeMessage(payload.denied, snapshot);
       persistSharedConflictBackup(snapshot, { download: false, reason: message });
-      console.warn("Shared state changes were rejected:", payload.denied);
+      console.warn(
+        "Shared state changes were rejected:",
+        payload.denied,
+        "details=",
+        (payload.denied || []).map((item) => `${item.scope}:${item.id}:${item.reason}`).join(" | "),
+      );
       showSystemToast("Thay đổi chưa được lưu", message, { tone: "warning", duration: 9000 });
     }
     persistState();
