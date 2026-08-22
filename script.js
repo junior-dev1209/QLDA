@@ -3029,6 +3029,28 @@ async function adoptSharedState(payload, { render = true } = {}) {
 async function retainUnsyncedLocalChanges(remotePayload, { render = true } = {}) {
   const remote = normalizeStatePayload(remotePayload);
   const local = cloneStatePayload(state);
+
+  // Fail-safe: một checkpoint dirty cũ/rỗng không được phép biến dữ liệu server
+  // thành hàng loạt lệnh xóa. Giữ bản local để điều tra rồi lấy server làm chuẩn.
+  const destructiveRisks = localStateLooksDestructivelyStale(remote, local);
+  if (destructiveRisks) {
+    persistSharedConflictBackup(local, {
+      download: false,
+      reason: `Đã chặn state cục bộ bất thường: ${destructiveRisks.map((risk) => `${risk.collection} ${risk.beforeCount}->${risk.afterCount}`).join(", ")}.`,
+    });
+    console.error("Blocked destructive stale local state during checkpoint restore:", destructiveRisks);
+    sharedSync.baseState = null;
+    sharedSync.serverBaseState = null;
+    await clearSharedStateDirty();
+    await adoptSharedState(remotePayload, { render });
+    showSystemToast(
+      "Đã chặn đồng bộ dữ liệu bất thường",
+      "Dữ liệu cục bộ có dấu hiệu cũ/rỗng nên hệ thống đã giữ dữ liệu mới nhất từ máy chủ.",
+      { tone: "warning", duration: 10000 },
+    );
+    return;
+  }
+
   const base = sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : cloneStatePayload(remote);
   const merged = mergeRemoteStateWithUnsyncedChanges(base, local, remote);
   Object.assign(state, merged);
@@ -3553,6 +3575,40 @@ function showSystemToast(title, message, { tone = "warning", duration = 7000 } =
   window.setTimeout(dismiss, Math.max(3500, Number(duration) || 7000));
 }
 
+const SHARED_SYNC_PROTECTED_COLLECTIONS = ["people", "tasks", "accounts"];
+const SHARED_SYNC_MASS_DELETE_RATIO = 0.25;
+const SHARED_SYNC_MASS_DELETE_MINIMUM = 10;
+
+function sharedCollectionDeleteRisk(basePayload, nextPayload, collection) {
+  const base = normalizeStatePayload(basePayload);
+  const next = normalizeStatePayload(nextPayload);
+  const before = sharedRecordMap(base[collection]);
+  const after = sharedRecordMap(next[collection]);
+  const deletedIds = [...before.keys()].filter((id) => !after.has(id));
+  const beforeCount = before.size;
+  const afterCount = after.size;
+  const deleteCount = deletedIds.length;
+  const threshold = Math.max(
+    SHARED_SYNC_MASS_DELETE_MINIMUM,
+    Math.ceil(beforeCount * SHARED_SYNC_MASS_DELETE_RATIO),
+  );
+  const fullWipe = beforeCount > 0 && afterCount === 0;
+  const massDelete = beforeCount >= 20 && deleteCount >= threshold;
+  return { collection, beforeCount, afterCount, deleteCount, fullWipe, massDelete, threshold };
+}
+
+function destructiveLocalStateRisks(basePayload, nextPayload) {
+  return SHARED_SYNC_PROTECTED_COLLECTIONS
+    .map((collection) => sharedCollectionDeleteRisk(basePayload, nextPayload, collection))
+    .filter((risk) => risk.fullWipe || risk.massDelete);
+}
+
+function localStateLooksDestructivelyStale(remotePayload, localPayload) {
+  const risks = destructiveLocalStateRisks(remotePayload, localPayload);
+  if (!risks.length) return null;
+  return risks;
+}
+
 function buildSharedStatePatch(basePayload, nextPayload, serverBasePayload = basePayload) {
   const base = normalizeStatePayload(basePayload);
   const next = normalizeStatePayload(nextPayload);
@@ -3649,6 +3705,31 @@ async function flushSharedStateSync() {
       : cloneStatePayload(baseSnapshot);
     const patch = buildSharedStatePatch(baseSnapshot, snapshot, serverBaseSnapshot);
     const requestedChangeVersion = sharedSync.localChangeVersion;
+
+    // Last client-side barrier before PUT /mutate.
+    const destructiveRisks = destructiveLocalStateRisks(baseSnapshot, snapshot);
+    if (destructiveRisks.length) {
+      persistSharedConflictBackup(snapshot, {
+        download: false,
+        reason: `Đã chặn yêu cầu xóa hàng loạt: ${destructiveRisks.map((risk) => `${risk.collection} ${risk.beforeCount}->${risk.afterCount}`).join(", ")}.`,
+      });
+      console.error("Blocked destructive shared-state mutation:", destructiveRisks);
+      sharedSync.pending = false;
+      const latest = await sharedJsonRequest("state");
+      if (latest.response.ok && latest.payload?.state) {
+        sharedSync.revision = Number(latest.payload.revision) || sharedSync.revision;
+        await adoptSharedState(latest.payload.state);
+      } else {
+        await clearSharedStateDirty();
+      }
+      showSystemToast(
+        "Đã chặn thao tác có nguy cơ mất dữ liệu",
+        "Một thay đổi cục bộ có thể xóa hàng loạt Nhân sự/Công việc/Tài khoản. Hệ thống đã hủy đồng bộ và tải lại dữ liệu máy chủ.",
+        { tone: "warning", duration: 11000 },
+      );
+      return { ok: false, blocked: true, reason: "mass-delete-guard", risks: destructiveRisks };
+    }
+
     if (!sharedPatchOperationCount(patch)) {
       persistState();
       await clearSharedStateDirty();
@@ -9237,6 +9318,7 @@ function renderHistory() {
   if (type === "department") {
     const department = departmentById(targetId);
     const people = state.people.filter((person) => person.departmentId === targetId);
+    const peopleIds = people.map((person) => person.id);
     const eligiblePeopleIds = people.filter(isKpiEligiblePerson).map((person) => person.id);
     const departmentEvals = isKpiExemptDepartment(targetId)
       ? []
