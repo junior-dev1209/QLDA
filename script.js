@@ -1,7 +1,10 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.0.35";
+const APP_VERSION = "3.0.14";
 const LOGIN_GUARD_KEY = "phuc-thinh-login-guard-v1";
+const LOGIN_GUARD_MAX_FAILURES = 5;
+const LOGIN_GUARD_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_GUARD_LOCK_MS = 15 * 60 * 1000;
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -18,8 +21,6 @@ const SHARED_SYNC_REQUIRED_KEY = "phuc-thinh-shared-sync-required-v1";
 const SHARED_SYNC_SESSION_TOKEN_KEY = "phuc-thinh-shared-sync-session-v1";
 const SHARED_SYNC_DIRTY_KEY = "phuc-thinh-shared-sync-dirty-v1";
 const OFFLINE_LOGIN_PROOFS_KEY = "phuc-thinh-offline-login-proofs-v1";
-const OFFLINE_ACCOUNT_DIRECTORY_KEY = "phuc-thinh-offline-account-directory-v1";
-const OFFLINE_ADMIN_STATE_SNAPSHOT_ID = "offline-admin-state";
 const STATE_SAVED_AT_KEY = "phuc-thinh-state-saved-at-v1";
 // Poll less often while a tab is idle. Focus/online events still refresh at
 // once, and the server returns only a revision check when nothing changed.
@@ -29,9 +30,7 @@ const SHARED_SYNC_RETRY_INITIAL_MS = 2500;
 const SHARED_SYNC_RETRY_MAX_MS = 60000;
 const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
 const ACCOUNT_USAGE_REQUEST_TIMEOUT_MS = 45000;
-const ACCOUNT_USAGE_AUTO_REFRESH_MS = 60000;
 const OFFLINE_LOGIN_PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const OFFLINE_ADMIN_STATE_MAX_AGE_MS = OFFLINE_LOGIN_PROOF_MAX_AGE_MS;
 const OFFLINE_LOGIN_PBKDF2_ITERATIONS = 120000;
 const OFFLINE_LOGIN_PROOF_MAX_ENTRIES = 500;
 const MAX_DELETED_ID_HISTORY = 2000;
@@ -45,8 +44,6 @@ const SHARED_SYNC_SCALAR_FIELDS = [
   "behaviorRules",
   "importedPeopleVersion",
   "canBoGpmbKpiCatalogVersion",
-  "sectionHeadKpiCatalogVersion",
-  "personalKpiClassificationVersion",
   "deletedIds",
 ];
 function debounce(fn, delay = 200) {
@@ -59,18 +56,6 @@ function debounce(fn, delay = 200) {
 
 const IMPORTED_PEOPLE_VERSION = "excel-2026-05-07-v1";
 const CAN_BO_GPMB_KPI_CATALOG_VERSION = "2026-08-12-v2";
-const SECTION_HEAD_KPI_CATALOG_VERSION = "2026-08-21-v2";
-const PERSONAL_KPI_CLASSIFICATION_VERSION = "2026-08-21-v5";
-const SECTION_HEAD_PERSONAL_CRITERION = "Hoàn thành kế hoạch công việc";
-const SECTION_HEAD_TEAM_CRITERION = "Kiểm soát và đảm bảo tiến độ công việc nhóm";
-const sectionHeadKpiCriteria = [
-  [SECTION_HEAD_PERSONAL_CRITERION, 50],
-  [SECTION_HEAD_TEAM_CRITERION, 50],
-];
-
-function standardSectionHeadKpiCriteria() {
-  return sectionHeadKpiCriteria.map(([name, weight]) => [name, weight]);
-}
 // ... Toàn bộ logic hệ thống phía dưới giữ nguyên vẹn ...
 const legacyCanBoGpmbTaskCategories = {
   "Kiểm đếm đất đai": "Điều tra, kiểm đếm đất đai / Trích đo, quy chủ",
@@ -560,15 +545,16 @@ defaultDepartments.filter((department) => !department.leadershipOnly).forEach((d
       id: `truong-bo-phan-${department.id}`,
       departmentId: department.id,
       name: "Trưởng bộ phận/Trưởng nhóm",
-      criteria: standardSectionHeadKpiCriteria(),
+      criteria: [
+        ["Hoàn thành kế hoạch bộ phận", 25],
+        ["Phân công và kiểm soát tiến độ nhóm", 20],
+        ["Chất lượng hồ sơ, công việc phụ trách", 15],
+        ["Báo cáo, cập nhật dữ liệu đúng hạn", 15],
+        ["Phối hợp nội bộ", 15],
+        ["Tinh thần trách nhiệm", 10],
+      ],
     },
   );
-});
-
-defaultRoles.forEach((role) => {
-  if (String(role?.id || "").startsWith("truong-bo-phan-")) {
-    role.criteria = standardSectionHeadKpiCriteria();
-  }
 });
 
 const defaultBehaviorRules = [
@@ -584,12 +570,6 @@ const defaultBehaviorRules = [
   ["Được khen bằng văn bản/đạt thi khen thưởng phong trào thi đua", 2],
   ["Sáng kiến cải tiến trong công việc (mức 2 điểm)", 2],
 ];
-
-const departmentCompletionCriterion = ["Hoàn thành kế hoạch", 100];
-
-function standardDepartmentCriteria(isKpiExempt = false) {
-  return isKpiExempt ? [] : [[...departmentCompletionCriterion]];
-}
 
 function cloneKpiCatalog(value) {
   return JSON.parse(JSON.stringify(value));
@@ -633,8 +613,7 @@ function normalizeDepartmentsCatalog(value) {
       return {
         id,
         name,
-        // KPI phòng dùng một tiêu chí chung, được tổng hợp tự động từ công việc.
-        criteria: standardDepartmentCriteria(department?.kpiExempt === true),
+        criteria: normalizeKpiCriteria(department?.criteria),
         leadershipOnly: department?.leadershipOnly === true,
         kpiExempt: department?.kpiExempt === true,
       };
@@ -677,18 +656,6 @@ function normalizeRolesCatalog(value) {
     .filter(Boolean);
 }
 
-function isSectionHeadCatalogRole(role) {
-  return defaultAccountRoleForCatalogRole(role) === "section_head";
-}
-
-function applySectionHeadKpiCatalog(rolesCatalog) {
-  return (rolesCatalog || []).map((role) => (
-    isSectionHeadCatalogRole(role)
-      ? { ...role, criteria: standardSectionHeadKpiCriteria() }
-      : role
-  ));
-}
-
 function normalizeBehaviorRulesCatalog(value) {
   const source = Array.isArray(value) && value.length ? value : defaultBehaviorRules;
   const names = new Set();
@@ -710,13 +677,7 @@ let behaviorRules = normalizeBehaviorRulesCatalog(defaultBehaviorRules);
 
 function applyRuntimeKpiCatalogs(payload) {
   departments = normalizeDepartmentsCatalog(payload?.departments);
-  const normalizedRoles = normalizeRolesCatalog(payload?.roles);
-  // Before an Admin saves the migration, every device still uses the new
-  // two-criterion calculation without silently writing catalog changes from
-  // a lower-permission account.
-  roles = payload?.sectionHeadKpiCatalogVersion === SECTION_HEAD_KPI_CATALOG_VERSION
-    ? normalizedRoles
-    : applySectionHeadKpiCatalog(normalizedRoles);
+  roles = normalizeRolesCatalog(payload?.roles);
   behaviorRules = normalizeBehaviorRulesCatalog(payload?.behaviorRules);
 }
 
@@ -1332,7 +1293,6 @@ const accountPresence = {
   usageInFlight: false,
   usagePayload: null,
   usageError: "",
-  usageLastLoadedAt: 0,
   usageDepartmentId: "",
   usageRetryTimer: 0,
   usageRetryAttempts: 0,
@@ -1357,14 +1317,10 @@ const taskWorkTypeLabels = {
   [TASK_WORK_TYPE_ARISING]: "Công việc phát sinh",
 };
 const TASK_RECURRENCE_NONE = "none";
-const TASK_RECURRENCE_DAILY = "daily";
-const TASK_RECURRENCE_WEEKLY = "weekly";
 const TASK_RECURRENCE_MONTHLY = "monthly";
 const TASK_RECURRENCE_QUARTERLY = "quarterly";
 const taskRecurrenceLabels = {
   [TASK_RECURRENCE_NONE]: "Không định kỳ",
-  [TASK_RECURRENCE_DAILY]: "Hàng ngày",
-  [TASK_RECURRENCE_WEEKLY]: "Hàng tuần",
   [TASK_RECURRENCE_MONTHLY]: "Hàng tháng",
   [TASK_RECURRENCE_QUARTERLY]: "Hàng quý",
 };
@@ -2014,8 +1970,6 @@ function defaultStatePayload() {
     activityLog: [],
     importedPeopleVersion: "",
     canBoGpmbKpiCatalogVersion: "",
-    sectionHeadKpiCatalogVersion: "",
-    personalKpiClassificationVersion: "",
     deletedIds: [], // 🌟 KHÓA CHỐNG HỒI SINH: Lưu danh sách ID đã bị xóa
   };
 }
@@ -2131,8 +2085,6 @@ function normalizeStatePayload(parsed) {
       : [],
     importedPeopleVersion: parsed.importedPeopleVersion || "",
     canBoGpmbKpiCatalogVersion: parsed.canBoGpmbKpiCatalogVersion || "",
-    sectionHeadKpiCatalogVersion: parsed.sectionHeadKpiCatalogVersion || "",
-    personalKpiClassificationVersion: parsed.personalKpiClassificationVersion || "",
     deletedIds: Array.isArray(parsed.deletedIds)
       ? [...new Set(parsed.deletedIds.map((id) => String(id || "").trim()).filter(Boolean))].slice(-MAX_DELETED_ID_HISTORY)
       : [],
@@ -2318,95 +2270,6 @@ function writeOfflineLoginProofs(proofs) {
   }
 }
 
-function offlineAccountDirectoryRecord(account) {
-  if (!account?.id || !account?.username) return null;
-  return {
-    id: String(account.id),
-    username: String(account.username),
-    displayName: String(account.displayName || account.username),
-    role: String(account.role || "employee"),
-    personId: String(account.personId || ""),
-    disabled: Boolean(account.disabled),
-    accessGrants: account.accessGrants && typeof account.accessGrants === "object" ? { ...account.accessGrants } : {},
-    updatedAt: String(account.updatedAt || ""),
-  };
-}
-
-function readOfflineAccountDirectory() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(OFFLINE_ACCOUNT_DIRECTORY_KEY) || "{}");
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  } catch {
-    return {};
-  }
-}
-
-function cacheOfflineAccountDirectory(accounts) {
-  const directory = readOfflineAccountDirectory();
-  let changed = false;
-  (Array.isArray(accounts) ? accounts : []).forEach((account) => {
-    const record = offlineAccountDirectoryRecord(account);
-    if (!record) return;
-    directory[normalizedLoginUsername(record.username)] = record;
-    changed = true;
-  });
-  if (!changed) return;
-  try {
-    const entries = Object.entries(directory)
-      .sort(([, left], [, right]) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")))
-      .slice(0, OFFLINE_LOGIN_PROOF_MAX_ENTRIES);
-    localStorage.setItem(OFFLINE_ACCOUNT_DIRECTORY_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch {
-    // The current browser state can still serve accounts already cached in state.accounts.
-  }
-}
-
-function offlineAccountByUsername(username) {
-  const normalizedUsername = normalizedLoginUsername(username);
-  if (!normalizedUsername) return null;
-  const localAccount = (state.accounts || []).find((item) => normalizedLoginUsername(item?.username) === normalizedUsername);
-  return localAccount || readOfflineAccountDirectory()[normalizedUsername] || null;
-}
-
-async function cacheOfflineAdminState(account, payload = state) {
-  if (account?.role !== "admin" || !account?.id) return;
-  try {
-    const snapshot = normalizeStatePayload(payload);
-    const sanitizedAccounts = (snapshot.accounts || []).map(offlineAccountDirectoryRecord).filter(Boolean);
-    await writeBinaryMetadata(OFFLINE_ADMIN_STATE_SNAPSHOT_ID, {
-      accountId: String(account.id),
-      savedAt: new Date().toISOString(),
-      state: { ...snapshot, accounts: sanitizedAccounts },
-    });
-  } catch (error) {
-    console.warn("Offline Admin state cache failed:", error);
-  }
-}
-
-async function restoreOfflineAdminState(account) {
-  if (account?.role !== "admin" || !account?.id) return false;
-  try {
-    const record = await readBinaryMetadata(OFFLINE_ADMIN_STATE_SNAPSHOT_ID);
-    const payload = record?.value;
-    const savedAt = new Date(payload?.savedAt || record?.updatedAt || "").getTime();
-    if (
-      !payload?.state ||
-      String(payload.accountId || "") !== String(account.id) ||
-      Number.isNaN(savedAt) ||
-      savedAt + OFFLINE_ADMIN_STATE_MAX_AGE_MS < Date.now()
-    ) {
-      return false;
-    }
-    Object.assign(state, normalizeStatePayload(payload.state));
-    applyRuntimeKpiCatalogs(state);
-    persistState();
-    cacheOfflineAccountDirectory(state.accounts);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function bytesToBase64(bytes) {
   let output = "";
   Array.from(bytes || []).forEach((value) => {
@@ -2548,7 +2411,7 @@ function scheduleLocalOfflineLoginProofCache(accounts) {
 async function verifyOfflineLogin(username, password) {
   const normalizedUsername = normalizedLoginUsername(username);
   if (!normalizedUsername || !password) return null;
-  const localAccount = offlineAccountByUsername(normalizedUsername);
+  const localAccount = (state.accounts || []).find((item) => normalizedLoginUsername(item?.username) === normalizedUsername);
   if (!localAccount || localAccount.disabled) return null;
   const proof = readOfflineLoginProofs()[normalizedUsername];
   const proofIsValid = proof && String(proof.accountId || "") === String(localAccount.id || "") && !Number.isNaN(new Date(proof.expiresAt || "").getTime()) && new Date(proof.expiresAt).getTime() >= Date.now();
@@ -2705,124 +2568,9 @@ function accountUsageGroupsForDepartment(groups, departmentId) {
 function accountUsageDepartmentTotal(departmentId) {
   return state.accounts.filter((account) => {
     if (account.disabled) return false;
-    const accountDepartmentId = accountDepartmentIdForStatistics(account);
+    const accountDepartmentId = account.departmentId || personById(account.personId)?.departmentId || "unassigned";
     return accountDepartmentId === departmentId;
   }).length;
-}
-
-function accountDepartmentIdForStatistics(account) {
-  return String(account?.departmentId || personById(account?.personId)?.departmentId || "unassigned");
-}
-
-function taskCreatorAccountLookup() {
-  const byId = new Map();
-  const byPersonId = new Map();
-  const byLegacyName = new Map();
-  const addLegacyName = (value, account) => {
-    const key = normalizeSearchText(value || "");
-    if (!key) return;
-    const matches = byLegacyName.get(key) || [];
-    if (!matches.some((item) => item.id === account.id)) matches.push(account);
-    byLegacyName.set(key, matches);
-  };
-  state.accounts.forEach((account) => {
-    if (!account?.id) return;
-    byId.set(String(account.id), account);
-    if (account.personId) {
-      const personId = String(account.personId);
-      const matches = byPersonId.get(personId) || [];
-      matches.push(account);
-      byPersonId.set(personId, matches);
-    }
-    addLegacyName(account.displayName, account);
-    addLegacyName(account.username, account);
-  });
-  return { byId, byPersonId, byLegacyName };
-}
-
-function taskCreatorAccount(task, lookup = taskCreatorAccountLookup()) {
-  const creatorId = String(task?.createdById || "").trim();
-  if (creatorId && lookup.byId.has(creatorId)) return lookup.byId.get(creatorId);
-  const personMatches = creatorId ? lookup.byPersonId.get(creatorId) || [] : [];
-  if (personMatches.length === 1) return personMatches[0];
-  const creatorName = normalizeSearchText(task?.createdBy || task?.createdByName || creatorId);
-  const matches = creatorName ? lookup.byLegacyName.get(creatorName) || [] : [];
-  return matches.length === 1 ? matches[0] : null;
-}
-
-function accountTaskCreationStatistics(departmentId = "") {
-  const accounts = state.accounts
-    .filter((account) => !departmentId || accountDepartmentIdForStatistics(account) === departmentId)
-    .map((account) => ({ account, createdCount: 0, relatedCount: 0 }));
-  const rowsByAccountId = new Map(accounts.map((row) => [String(row.account.id), row]));
-  const lookup = taskCreatorAccountLookup();
-  let unidentifiedCount = 0;
-  (state.tasks || []).forEach((task) => {
-    const creator = taskCreatorAccount(task, lookup);
-    const participantIds = new Set(taskParticipantIds(task));
-    if (!creator && !departmentId) unidentifiedCount += 1;
-    accounts.forEach((row) => {
-      const createdByAccount = creator?.id === row.account.id;
-      const participatesInTask = Boolean(row.account.personId) && participantIds.has(String(row.account.personId));
-      if (createdByAccount) row.createdCount += 1;
-      if (createdByAccount || participatesInTask) row.relatedCount += 1;
-    });
-  });
-  const totalCreated = accounts.reduce((total, row) => total + row.createdCount, 0);
-  const totalRelated = accounts.reduce((total, row) => total + row.relatedCount, 0);
-  return {
-    totalCreated,
-    totalRelated,
-    unidentifiedCount,
-    rows: accounts.sort((a, b) => b.relatedCount - a.relatedCount || b.createdCount - a.createdCount || String(a.account.displayName || a.account.username).localeCompare(String(b.account.displayName || b.account.username), "vi")),
-  };
-}
-
-function renderAccountTaskCreationStatistics() {
-  const total = byId("accountTaskCreationTotal");
-  const list = byId("accountTaskCreationList");
-  if (!total || !list) return;
-  const departmentId = accountUsageSelectedDepartmentId();
-  const statistics = accountTaskCreationStatistics(departmentId);
-  total.textContent = `${statistics.totalRelated} liên quan`;
-  total.title = `${statistics.totalCreated} công việc được tạo · ${statistics.totalRelated} lượt công việc liên quan`;
-  const rows = statistics.rows.map(({ account, createdCount, relatedCount }) => {
-    const department = accountUsageDepartmentName(accountDepartmentIdForStatistics(account));
-    const role = accountRoleLabels[account.role] || account.role || "Tài khoản";
-    const status = account.disabled ? " · Đã khóa" : "";
-    return `
-      <article class="account-task-creation-row">
-        <div>
-          <strong>${escapeHtml(account.displayName || account.username || "Tài khoản")}</strong>
-          <span>${escapeHtml(`${role} · ${department}${status}`)}</span>
-        </div>
-        <div class="account-task-creation-metric">
-          <strong>${relatedCount}</strong>
-          <span>Công việc liên quan</span>
-          <span>Đã tạo: ${createdCount}</span>
-        </div>
-      </article>
-    `;
-  });
-  if (!rows.length) {
-    list.innerHTML = `<p class="muted">${escapeHtml(departmentId ? "Không có tài khoản thuộc phòng đã chọn." : "Chưa có tài khoản để thống kê.")}</p>`;
-    return;
-  }
-  if (statistics.unidentifiedCount) {
-    rows.push(`
-      <article class="account-task-creation-row is-unidentified">
-        <div>
-          <strong>Chưa xác định tài khoản</strong>
-          <span>Dữ liệu công việc cũ không có thông tin người tạo hợp lệ</span>
-        </div>
-        <div class="account-task-creation-metric">
-          <strong>${statistics.unidentifiedCount}</strong>
-          <span>công việc</span>
-        </div>
-      </article>
-    `);
-  }
-  list.innerHTML = rows.join("");
 }
 
 function accountUsageCounts(period, departmentId) {
@@ -3037,9 +2785,6 @@ function renderAccountPresence() {
   panel.classList.toggle("is-hidden", !canMonitor);
   if (!canMonitor) return;
 
-  renderAccountUsageDepartmentFilter();
-  renderAccountTaskCreationStatistics();
-
   const status = byId("accountPresenceStatus");
   const onlineCount = byId("accountPresenceOnlineCount");
   const todayCount = byId("accountPresenceTodayCount");
@@ -3108,7 +2853,6 @@ async function requestAccountPresence() {
       accountPresence.payload = payload;
       accountPresence.error = "";
       renderAccountPresence();
-      if (activeViewId() === "accounts") requestAccountUsageHistory();
     }
   } catch {
     if (isAdmin()) {
@@ -3132,8 +2876,7 @@ function scheduleAccountUsageRetry() {
 
 async function requestAccountUsageHistory({ force = false } = {}) {
   if (!isAdmin() || !accountPresenceAvailable() || document.visibilityState === "hidden" || accountPresence.usageInFlight) return;
-  const usageIsFresh = accountPresence.usagePayload && Date.now() - accountPresence.usageLastLoadedAt < ACCOUNT_USAGE_AUTO_REFRESH_MS;
-  if (!force && usageIsFresh) return;
+  if (!force && accountPresence.usagePayload) return;
   if (force) {
     if (accountPresence.usageRetryTimer) window.clearTimeout(accountPresence.usageRetryTimer);
     accountPresence.usageRetryTimer = 0;
@@ -3152,7 +2895,6 @@ async function requestAccountUsageHistory({ force = false } = {}) {
     if (isAdmin()) {
       accountPresence.usagePayload = payload;
       accountPresence.usageError = "";
-      accountPresence.usageLastLoadedAt = Date.now();
       accountPresence.usageRetryAttempts = 0;
       renderAccountUsageDetails();
     }
@@ -3193,7 +2935,6 @@ function stopAccountPresenceMonitoring() {
   accountPresence.usageInFlight = false;
   accountPresence.usagePayload = null;
   accountPresence.usageError = "";
-  accountPresence.usageLastLoadedAt = 0;
   accountPresence.usageDepartmentId = "";
   accountPresence.usageRetryTimer = 0;
   accountPresence.usageRetryAttempts = 0;
@@ -3237,12 +2978,7 @@ function deploymentVersionAtLeast(actual, required) {
 
 function sharedSyncSupportsTaskProgressLifecycle() {
   if (!usingSupabaseSync()) return true;
-  return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.21.1");
-}
-
-function sharedSyncSupportsSectionHeadKpiCatalog() {
-  if (!usingSupabaseSync()) return true;
-  return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.21.2");
+  return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.04.3");
 }
 
 async function adoptSharedState(payload, { render = true } = {}) {
@@ -3286,73 +3022,19 @@ async function retainUnsyncedLocalChanges(remotePayload, { render = true } = {})
   queueSharedStateSync();
 }
 
-async function bootstrapOfflineFileLogin(username, password) {
-  const config = supabaseSyncConfig();
-  if (!config || navigator.onLine === false) return { error: "" };
-  try {
-    const result = await sharedJsonRequest("login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, includeOfflineCredentials: true }),
-      timeoutMs: 12000,
-    });
-    if (!result.response.ok || !result.payload?.state) {
-      return { error: result.payload?.error || "Không thể xác thực tài khoản từ máy chủ." };
-    }
-    const remoteState = normalizeStatePayload(result.payload.state);
-    const account = (remoteState.accounts || []).find(
-      (item) => normalizedLoginUsername(item?.username) === normalizedLoginUsername(username),
-    );
-    if (!account || account.disabled) return { error: "Tài khoản không hợp lệ hoặc đã bị vô hiệu hóa." };
-    Object.assign(state, remoteState);
-    applyRuntimeKpiCatalogs(state);
-    persistState();
-    cacheOfflineAccountDirectory(remoteState.accounts);
-    cacheServerOfflineLoginProofs(result.payload.offlineCredentials);
-    await cacheOfflineAdminState(account, remoteState);
-    return { account };
-  } catch {
-    return {
-      error: "Không thể xác thực ngoại tuyến trên thiết bị này. Hãy mở hệ thống khi có mạng một lần để lưu dữ liệu và mã xác thực cho thiết bị này.",
-    };
-  }
-}
-
 async function loginSharedSession(username, password) {
   await ensureDurableStateRestored();
   await restoreSharedSyncCheckpoint();
   if (isOfflineFileRuntime()) {
     const offlineAccount = await verifyOfflineLogin(username, password);
     if (offlineAccount) {
-      const accountPresent = (state.accounts || []).some((account) => String(account?.id || "") === String(offlineAccount.id));
-      if (!accountPresent && offlineAccount.role === "admin" && !(await restoreOfflineAdminState(offlineAccount))) {
-        return {
-          mode: "offline",
-          error: "Thiết bị này chưa có bản dữ liệu Admin đã xác thực để làm việc ngoại tuyến. Hãy đăng nhập Admin khi có mạng một lần.",
-        };
-      }
       sharedSync.session = true;
       sharedSync.accountId = String(offlineAccount.id);
       sharedSync.available = null;
       sharedSync.initialized = null;
       return { mode: "offline", offlineAccountId: String(offlineAccount.id) };
     }
-    const bootstrap = await bootstrapOfflineFileLogin(username, password);
-    if (bootstrap.account) {
-      sharedSync.session = true;
-      sharedSync.accountId = String(bootstrap.account.id);
-      sharedSync.available = null;
-      sharedSync.initialized = null;
-      return {
-        mode: "offline",
-        offlineAccountId: String(bootstrap.account.id),
-        warning: "Đã xác thực và lưu bản làm việc ngoại tuyến trên thiết bị này. Khi mất mạng, tài khoản vẫn có thể đăng nhập trong thời hạn cho phép.",
-      };
-    }
-    return {
-      mode: "offline",
-      error: bootstrap.error || "Không thể đăng nhập ngoại tuyến trên thiết bị này. Hãy đăng nhập khi có mạng một lần để khởi tạo quyền offline.",
-    };
+    return { mode: "local" };
   }
   if (!(await probeSharedSync())) {
     const offlineAccount = await verifyOfflineLogin(username, password);
@@ -3388,7 +3070,6 @@ async function loginSharedSession(username, password) {
   }
   cacheServerOfflineLoginProofs(result.payload.offlineCredentials);
   const remoteAccounts = Array.isArray(result.payload.state?.accounts) ? result.payload.state.accounts : [];
-  cacheOfflineAccountDirectory(remoteAccounts);
   const remoteAccount = remoteAccounts.find((account) => String(account?.username || "").toLowerCase() === String(username || "").toLowerCase());
   const remoteAccountId = String(remoteAccount?.id || "");
   if (sharedSync.dirty && sharedSync.dirtyAccountId && remoteAccountId && sharedSync.dirtyAccountId !== remoteAccountId) {
@@ -3439,7 +3120,6 @@ async function loginSharedSession(username, password) {
   } else {
     await adoptSharedState(result.payload.state, { render: false });
   }
-  if (remoteAccount?.role === "admin") void cacheOfflineAdminState(remoteAccount, result.payload.state);
   scheduleSharedStateRefresh({ immediate: true });
   return { mode: "remote" };
 }
@@ -3652,119 +3332,6 @@ function sharedRecordMap(records) {
   return map;
 }
 
-function kpiCatalogEntryKey(field, entry) {
-  if (field === "behaviorRules") {
-    const name = Array.isArray(entry) ? entry[0] : entry?.name;
-    return catalogText(name).toLocaleLowerCase("vi");
-  }
-  return sharedRecordId(entry);
-}
-
-function kpiCatalogEntryMap(field, entries) {
-  const map = new Map();
-  if (!Array.isArray(entries)) return null;
-  for (const entry of entries) {
-    const key = kpiCatalogEntryKey(field, entry);
-    if (!key || map.has(key)) return null;
-    map.set(key, entry);
-  }
-  return map;
-}
-
-function mergeKpiCatalogArrayChange(field, baseValue, localValue, remoteValue) {
-  if (!["departments", "roles", "behaviorRules"].includes(field)) return null;
-  const base = kpiCatalogEntryMap(field, baseValue);
-  const local = kpiCatalogEntryMap(field, localValue);
-  const remote = kpiCatalogEntryMap(field, remoteValue);
-  if (!base || !local || !remote) return null;
-
-  const output = new Map(remote);
-  const changedKeys = new Set([...base.keys(), ...local.keys()]);
-  for (const key of changedKeys) {
-    const before = base.get(key);
-    const requested = local.get(key);
-    const onServer = remote.get(key);
-    if (sharedValuesEqual(before, requested)) continue;
-
-    if (!before) {
-      if (!onServer) output.set(key, requested);
-      else if (!sharedValuesEqual(onServer, requested)) return null;
-      continue;
-    }
-    if (!requested) {
-      if (!onServer) continue;
-      if (!sharedValuesEqual(onServer, before)) return null;
-      output.delete(key);
-      continue;
-    }
-    if (!onServer) return null;
-    if (sharedValuesEqual(onServer, before) || sharedValuesEqual(onServer, requested)) {
-      output.set(key, requested);
-      continue;
-    }
-    return null;
-  }
-
-  const orderedKeys = [
-    ...remote.keys(),
-    ...local.keys(),
-  ].filter((key, index, values) => output.has(key) && values.indexOf(key) === index);
-  return orderedKeys.map((key) => output.get(key));
-}
-
-function mergeKpiParameterObject(baseValue, localValue, remoteValue) {
-  if (!baseValue || typeof baseValue !== "object" || Array.isArray(baseValue)
-    || !localValue || typeof localValue !== "object" || Array.isArray(localValue)
-    || !remoteValue || typeof remoteValue !== "object" || Array.isArray(remoteValue)) return null;
-  const output = { ...remoteValue };
-  const keys = new Set([...Object.keys(baseValue), ...Object.keys(localValue)]);
-  for (const key of keys) {
-    const before = baseValue[key];
-    const requested = localValue[key];
-    const onServer = remoteValue[key];
-    if (sharedValuesEqual(before, requested)) continue;
-    if (!sharedValuesEqual(onServer, before) && !sharedValuesEqual(onServer, requested)) return null;
-    if (Object.prototype.hasOwnProperty.call(localValue, key)) output[key] = requested;
-    else delete output[key];
-  }
-  return output;
-}
-
-function mergeKpiSystemCustomizationChange(baseValue, localValue, remoteValue) {
-  if (!baseValue || typeof baseValue !== "object" || Array.isArray(baseValue)
-    || !localValue || typeof localValue !== "object" || Array.isArray(localValue)
-    || !remoteValue || typeof remoteValue !== "object" || Array.isArray(remoteValue)) return null;
-  const output = { ...remoteValue };
-  const keys = new Set([...Object.keys(baseValue), ...Object.keys(localValue)]);
-  for (const key of keys) {
-    const before = baseValue[key];
-    const requested = localValue[key];
-    const onServer = remoteValue[key];
-    if (sharedValuesEqual(before, requested)) continue;
-    if (key === "kpiParameters") {
-      const mergedParameters = mergeKpiParameterObject(before, requested, onServer);
-      if (!mergedParameters) return null;
-      output[key] = mergedParameters;
-      continue;
-    }
-    if (!sharedValuesEqual(onServer, before) && !sharedValuesEqual(onServer, requested)) return null;
-    if (Object.prototype.hasOwnProperty.call(localValue, key)) output[key] = requested;
-    else delete output[key];
-  }
-  return output;
-}
-
-function mergeSharedScalarFieldChange(key, baseValue, localValue, remoteValue) {
-  if (sharedValuesEqual(remoteValue, baseValue) || sharedValuesEqual(remoteValue, localValue)) return localValue;
-  if (["departments", "roles", "behaviorRules"].includes(key)) {
-    return mergeKpiCatalogArrayChange(key, baseValue, localValue, remoteValue);
-  }
-  if (key === "systemCustomization") {
-    return mergeKpiSystemCustomizationChange(baseValue, localValue, remoteValue);
-  }
-  return null;
-}
-
 function sharedPatchOperationCount(patch) {
   const collectionCount = Object.values(patch?.collections || {}).reduce(
     (total, change) => total + (change?.upserts?.length || 0) + (change?.deletes?.length || 0),
@@ -3928,9 +3495,7 @@ function mergeRemoteStateWithUnsyncedChanges(sentPayload, currentPayload, remote
   });
 
   SHARED_SYNC_SCALAR_FIELDS.forEach((key) => {
-    if (sharedValuesEqual(sent[key], current[key])) return;
-    const rebased = mergeSharedScalarFieldChange(key, sent[key], current[key], merged[key]);
-    merged[key] = rebased === null ? current[key] : rebased;
+    if (!sharedValuesEqual(sent[key], current[key])) merged[key] = current[key];
   });
   merged.activePeriod = current.activePeriod || merged.activePeriod;
   return normalizeStatePayload(merged);
@@ -4162,12 +3727,6 @@ async function restoreSharedSession() {
       await retainUnsyncedLocalChanges(payload.state);
     } else {
       await adoptSharedState(payload.state);
-    }
-    const sectionHeadCatalogMigrated = migrateSectionHeadKpiCatalog();
-    const personalKpiMigrated = migratePersonalKpiClassification();
-    if (sectionHeadCatalogMigrated || personalKpiMigrated) {
-      saveState();
-      await flushSharedStateSync();
     }
     startAccountPresenceMonitoring();
     scheduleSharedStateRefresh({ immediate: true });
@@ -4450,34 +4009,6 @@ function migrateCanBoGpmbKpiCatalog() {
   return changed;
 }
 
-function migrateSectionHeadKpiCatalog() {
-  const normalizedRoles = normalizeRolesCatalog(state.roles);
-  const nextRoles = applySectionHeadKpiCatalog(normalizedRoles);
-  const catalogChanged = JSON.stringify(normalizedRoles) !== JSON.stringify(nextRoles);
-  const needsVersionUpdate = state.sectionHeadKpiCatalogVersion !== SECTION_HEAD_KPI_CATALOG_VERSION;
-  if (!catalogChanged && !needsVersionUpdate) return false;
-  // Only Admin persists the shared catalog change. Other accounts still use
-  // the current two-criterion calculation until the migration is saved.
-  if (!isAdmin()) return false;
-  const canPersistVersion = !usingSupabaseSync()
-    || isOfflineFileRuntime()
-    || sharedSyncSupportsSectionHeadKpiCatalog();
-  if (catalogChanged) {
-    state.roles = nextRoles;
-    applyRuntimeKpiCatalogs(state);
-  }
-  if (catalogChanged || (needsVersionUpdate && canPersistVersion)) {
-    recalculateSavedPersonalEvaluationScores();
-  }
-  // Older deployed Functions can already accept the roles field, so persist
-  // the catalog immediately. The version marker itself waits for v2026.08.21.2.
-  if (canPersistVersion) {
-    state.sectionHeadKpiCatalogVersion = SECTION_HEAD_KPI_CATALOG_VERSION;
-    return true;
-  }
-  return catalogChanged;
-}
-
 function clearMandatoryPasswordChangeFlags() {
   if (!Array.isArray(state.accounts)) return false;
   let changed = false;
@@ -4498,10 +4029,8 @@ if (isOfflineFileRuntime()) {
   scheduleLocalOfflineLoginProofCache(state.accounts);
 }
 migrateCanBoGpmbKpiCatalog();
-const sectionHeadKpiCatalogUpdated = migrateSectionHeadKpiCatalog();
 const passwordPolicyUpdated = clearMandatoryPasswordChangeFlags();
-const sectionHeadManagementUpdated = normalizeSectionHeadManagementLinks();
-if (syncPersonnelAccounts() || sectionHeadKpiCatalogUpdated || passwordPolicyUpdated || sectionHeadManagementUpdated) saveState();
+if (syncPersonnelAccounts() || passwordPolicyUpdated) saveState();
 
 function departmentById(id) {
   return departments.find((item) => item.id === id);
@@ -4517,41 +4046,6 @@ function isKpiExemptDepartment(departmentId) {
 
 function isKpiEligiblePerson(person) {
   return Boolean(person) && !isKpiExemptDepartment(person.departmentId);
-}
-
-function isSectionHeadPerson(person) {
-  return Boolean(person) && accountRoleForPerson(person) === "section_head";
-}
-
-function sectionHeadForPerson(person) {
-  const sectionHeadId = String(person?.sectionHeadId || "").trim();
-  const sectionHead = personById(sectionHeadId);
-  return sectionHead && isSectionHeadPerson(sectionHead) && sectionHead.departmentId === person?.departmentId && sectionHead.id !== person?.id
-    ? sectionHead
-    : null;
-}
-
-function managedTeamMembers(sectionHeadId) {
-  const leader = personById(sectionHeadId);
-  if (!leader || !isSectionHeadPerson(leader)) return [];
-  return state.people.filter((person) => sectionHeadForPerson(person)?.id === leader.id);
-}
-
-function normalizeSectionHeadIdForPerson(person, sectionHeadId) {
-  const leader = personById(String(sectionHeadId || "").trim());
-  if (!person || isSectionHeadPerson(person) || !leader || leader.id === person.id) return "";
-  return isSectionHeadPerson(leader) && leader.departmentId === person.departmentId ? leader.id : "";
-}
-
-function normalizeSectionHeadManagementLinks() {
-  let changed = false;
-  state.people = state.people.map((person) => {
-    const normalizedSectionHeadId = normalizeSectionHeadIdForPerson(person, person.sectionHeadId);
-    if (normalizedSectionHeadId === String(person.sectionHeadId || "")) return person;
-    changed = true;
-    return { ...person, sectionHeadId: normalizedSectionHeadId };
-  });
-  return changed;
 }
 
 function kpiEligibleDepartments() {
@@ -5176,27 +4670,6 @@ function currentActorInfo() {
   };
 }
 
-function currentAdjustmentActor() {
-  const account = currentAccount();
-  if (!account?.id) return { id: "", label: "" };
-  const name = String(account.displayName || account.username || "Tài khoản hệ thống").trim();
-  const username = String(account.username || "").trim();
-  return {
-    id: String(account.id),
-    label: username ? `${name} (${username})` : name,
-  };
-}
-
-function renderAdjustmentActorInput(inputId, existing = null) {
-  const input = byId(inputId);
-  if (!input) return;
-  const actor = currentAdjustmentActor();
-  input.value = String(existing?.reviewer || "").trim() || "Hệ thống tự ghi nhận theo tài khoản đăng nhập";
-  input.title = actor.label
-    ? `Tài khoản được phép điều chỉnh hiện tại: ${actor.label}. Hệ thống sẽ ghi nhận khi lưu.`
-    : "Hệ thống tự ghi nhận tài khoản được phân quyền khi lưu.";
-}
-
 function periodFromTimestamp(timestamp) {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
@@ -5236,7 +4709,6 @@ function logActivity(entry) {
 function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) {
   const targetIndex = periodIndex(targetPeriod);
   if (targetIndex < 0) return false;
-  const targetEnd = `${targetPeriod}-${padDatePart(daysInMonth(Number(targetPeriod.slice(0, 4)), Number(targetPeriod.slice(5, 7)) - 1))}`;
   const existingKeys = new Set(
     (state.tasks || []).map((task) => `${task.recurrenceSeriesId || task.recurrenceSourceId || task.id}|${task.due || ""}`),
   );
@@ -5246,22 +4718,24 @@ function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) 
     .filter((task) => !task.recurrenceSourceId)
     .forEach((sourceTask) => {
       const recurrence = normalizeTaskRecurrence(sourceTask);
-      if (recurrence === TASK_RECURRENCE_NONE || !sourceTask.due) return;
+      const step = recurrenceStepMonths(recurrence);
+      if (!step || !sourceTask.due) return;
       const sourcePeriod = taskPeriod(sourceTask);
       const sourceIndex = periodIndex(sourcePeriod);
-      if (sourceIndex < 0 || sourceIndex > targetIndex) return;
+      if (sourceIndex < 0 || sourceIndex >= targetIndex) return;
       const seriesId = sourceTask.recurrenceSeriesId || sourceTask.id;
       const anchorDay = Number(sourceTask.recurrenceAnchorDay) || Number(sourceTask.due.slice(8, 10));
-      const appendRepeatedTask = (due, startDate) => {
-        if (!due) return;
+      for (let offset = step; sourceIndex + offset <= targetIndex && offset <= 60; offset += step) {
+        const due = addMonthsToIsoDate(sourceTask.due, offset, anchorDay);
+        if (!due) continue;
         const key = `${seriesId}|${due}`;
-        if (existingKeys.has(key)) return;
+        if (existingKeys.has(key)) continue;
         existingKeys.add(key);
         const repeatedTask = applyRecordAudit(
           {
             ...sourceTask,
             id: uid("task"),
-            startDate: startDate || due,
+            startDate: sourceTask.startDate ? addMonthsToIsoDate(sourceTask.startDate, offset, Number(sourceTask.startDate.slice(8, 10))) : due,
             due,
             dueTime: sourceTask.dueTime || "",
             status: TASK_STATUS_PREPARING,
@@ -5297,26 +4771,6 @@ function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) 
           details: `${taskRecurrenceLabels[recurrence]} · từ công việc gốc ${sourceTask.title} · hoàn thành ${formatTaskDeadline(repeatedTask)}`,
           score: "0%",
         });
-      };
-
-      const recurringDayStep = recurrence === TASK_RECURRENCE_DAILY ? 1 : recurrence === TASK_RECURRENCE_WEEKLY ? 7 : 0;
-      if (recurringDayStep) {
-        const anchorDue = sourceTask.recurrenceAnchorDue || sourceTask.due;
-        const daysToTargetStart = Math.max(0, daysBetweenIsoDates(anchorDue, `${targetPeriod}-01`));
-        const firstOffset = Math.max(recurringDayStep, Math.ceil(daysToTargetStart / recurringDayStep) * recurringDayStep);
-        for (let offset = firstOffset; ; offset += recurringDayStep) {
-          const due = addDaysToIsoDate(anchorDue, offset);
-          if (!due || due > targetEnd) break;
-          appendRepeatedTask(due, sourceTask.startDate ? addDaysToIsoDate(sourceTask.startDate, offset) : due);
-        }
-        return;
-      }
-
-      const step = recurrenceStepMonths(recurrence);
-      if (!step || sourceIndex >= targetIndex) return;
-      for (let offset = step; sourceIndex + offset <= targetIndex && offset <= 60; offset += step) {
-        const due = addMonthsToIsoDate(sourceTask.due, offset, anchorDay);
-        appendRepeatedTask(due, sourceTask.startDate ? addMonthsToIsoDate(sourceTask.startDate, offset, Number(sourceTask.startDate.slice(8, 10))) : due);
       }
     });
   if (!additions.length) return false;
@@ -5418,8 +4872,6 @@ function normalizeTaskWorkType(task) {
 function normalizeTaskRecurrence(task) {
   const value = typeof task === "string" ? task : task?.recurrence || task?.periodicity || "";
   const normalized = normalizeSearchText(value);
-  if (value === TASK_RECURRENCE_DAILY || normalized.includes("hang ngay")) return TASK_RECURRENCE_DAILY;
-  if (value === TASK_RECURRENCE_WEEKLY || normalized.includes("hang tuan")) return TASK_RECURRENCE_WEEKLY;
   if (value === TASK_RECURRENCE_MONTHLY || normalized.includes("hang thang")) return TASK_RECURRENCE_MONTHLY;
   if (value === TASK_RECURRENCE_QUARTERLY || normalized.includes("hang quy")) return TASK_RECURRENCE_QUARTERLY;
   return TASK_RECURRENCE_NONE;
@@ -5459,16 +4911,7 @@ function taskCollaboratorIds(task) {
 function taskParticipantPersonId(value) {
   const id = String(value || "").trim();
   if (!id || personById(id)) return id;
-  const linkedPersonId = String(accountById(id)?.personId || "").trim();
-  if (linkedPersonId && personById(linkedPersonId)) return linkedPersonId;
-
-  // Older task records may contain a username or display name instead of a
-  // personnel ID. Resolve it only when it identifies one person exactly.
-  const identity = normalizeSearchText(id);
-  const matches = identity
-    ? state.people.filter((person) => normalizeSearchText(person.name) === identity)
-    : [];
-  return matches.length === 1 ? matches[0].id : id;
+  return String(accountById(id)?.personId || id);
 }
 
 function ensureTaskOwnerOption(task) {
@@ -5493,18 +4936,9 @@ function taskHasParticipantInDepartment(task, departmentId) {
   return !!departmentId && taskParticipantIds(task).some((personId) => personById(personId)?.departmentId === departmentId);
 }
 
-function taskOwnerName(task, fallback = "Chưa rõ") {
-  return personById(taskParticipantPersonId(task?.ownerId))?.name || String(task?.ownerName || "").trim() || fallback;
-}
-
 function taskCollaboratorNames(task) {
-  const savedNames = Array.isArray(task?.collaboratorNames)
-    ? task.collaboratorNames.map((name) => String(name || "").trim())
-    : String(task?.collaboratorNames || task?.collaboratorName || "")
-      .split(",")
-      .map((name) => name.trim());
   return taskCollaboratorIds(task)
-    .map((id, index) => personById(id)?.name || savedNames[index] || "")
+    .map((id) => personById(id)?.name)
     .filter(Boolean);
 }
 
@@ -5738,22 +5172,6 @@ function addMonthsToIsoDate(dateText, monthOffset, preferredDay) {
   return `${targetYear}-${padDatePart(normalizedMonthIndex + 1)}-${padDatePart(day)}`;
 }
 
-function addDaysToIsoDate(dateText, dayOffset) {
-  const match = String(dateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return "";
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + Number(dayOffset || 0)));
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
-}
-
-function daysBetweenIsoDates(startDateText, endDateText) {
-  const start = String(startDateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const end = String(endDateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!start || !end) return 0;
-  const startTime = Date.UTC(Number(start[1]), Number(start[2]) - 1, Number(start[3]));
-  const endTime = Date.UTC(Number(end[1]), Number(end[2]) - 1, Number(end[3]));
-  return Math.floor((endTime - startTime) / 86400000);
-}
-
 function recurrenceStepMonths(recurrence) {
   if (recurrence === TASK_RECURRENCE_MONTHLY) return 1;
   if (recurrence === TASK_RECURRENCE_QUARTERLY) return 3;
@@ -5802,128 +5220,69 @@ function taskViolationReasons(task) {
 
 function taskBehaviorRuleIndexes() {
   return {
+    report: behaviorRules.findIndex((rule) => rule[0] === "Không báo cáo đúng hạn"),
     deadline: behaviorRules.findIndex((rule) => rule[0] === "Chậm thời hạn hoàn thành"),
-    ahead: behaviorRules.findIndex((rule) => rule[0] === "Làm vượt tiến độ"),
   };
-}
-
-function automaticTaskBehaviorRuleIndexes() {
-  return new Set(Object.values(taskBehaviorRuleIndexes()).filter((index) => Number.isInteger(index) && index >= 0));
-}
-
-function taskIsApprovedAheadOfSchedule(task) {
-  return taskCompletionIsApproved(task) && taskCompletionTimingStatus(task) === "ahead";
 }
 
 function personalCriterionForTask(task, personId) {
   const person = personById(personId);
   const criteria = roleById(person?.roleId)?.criteria || [];
   const category = String(task?.category || "").trim();
-  if (!criteria.length) return "Chưa gắn tiêu chí KPI";
-
-  // The selected category is authoritative. A legacy shortened category is
-  // accepted only when it identifies exactly one criterion.
   if (category) {
-    const categoryKey = kpiCriterionKey(category);
-    const exactCriterion = criteria.find(([criterionName]) => kpiCriterionKey(criterionName) === categoryKey);
-    if (exactCriterion) return exactCriterion[0];
-
-    const compatibleCriteria = criteria.filter(([criterionName]) => {
-      const criterionKey = kpiCriterionKey(criterionName);
-      return categoryKey && criterionKey && (categoryKey.includes(criterionKey) || criterionKey.includes(categoryKey));
+    const directCriterion = criteria.find(([criterionName]) => {
+      const normalizedCategory = normalizeSearchText(category);
+      const normalizedCriterion = normalizeSearchText(criterionName);
+      return normalizedCategory === normalizedCriterion
+        || normalizedCategory.includes(normalizedCriterion)
+        || normalizedCriterion.includes(normalizedCategory);
     });
-    return compatibleCriteria.length === 1 ? compatibleCriteria[0][0] : "Chưa gắn tiêu chí KPI";
+    if (directCriterion) return directCriterion[0];
   }
-
-  // Older records without a selected category are counted only when their
-  // content can be matched to one criterion without ambiguity.
-  const legacyMatches = criteria.filter(([criterionName]) => taskMatchesKpiCriterion(task, criterionName));
-  return legacyMatches.length === 1 ? legacyMatches[0][0] : "Chưa gắn tiêu chí KPI";
+  const matchedCriterion = criteria.find(([criterionName]) => taskMatchesKpiCriterion(task, criterionName));
+  return matchedCriterion?.[0] || category || "Chưa gắn tiêu chí KPI";
 }
 
 function taskBehaviorViolationCount(links, criterionName) {
   return links
-    .filter((item) => item.type !== "reward" && item.criterionName === criterionName)
+    .filter((item) => item.criterionName === criterionName)
     .reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
 }
 
 function taskBehaviorReasonsForRule(reasons = [], ruleName = "") {
   const list = Array.isArray(reasons) ? reasons : [];
+  if (ruleName === "Không báo cáo đúng hạn") {
+    return list.filter((reason) => reason.includes("phản hồi") || reason.includes("báo cáo"));
+  }
   if (ruleName === "Chậm thời hạn hoàn thành") {
     return list.filter((reason) => reason.includes("Chậm thời hạn hoàn thành"));
-  }
-  if (ruleName === "Làm vượt tiến độ") {
-    return list.filter((reason) => reason.includes("Làm vượt tiến độ"));
   }
   return [];
 }
 
-function automaticTaskBehaviorForPerson(personId, period, preparedTasks = null) {
+function automaticTaskBehaviorForPerson(personId, period) {
   const indexes = taskBehaviorRuleIndexes();
   const counts = {};
   const links = [];
-  const tasks = Array.isArray(preparedTasks)
-    ? preparedTasks
-    : state.tasks.filter((task) => taskBelongsToPersonForKpi(task, personId) && taskPeriod(task) === period);
-  tasks
+  state.tasks
+    .filter((task) => task.ownerId === personId && taskPeriod(task) === period)
     .forEach((task) => {
-      const criterionName = personalCriterionForTask(task, personId);
-      const completedAhead = taskIsApprovedAheadOfSchedule(task);
-      if (completedAhead && indexes.ahead >= 0) {
-        counts[indexes.ahead] = (counts[indexes.ahead] || 0) + 1;
-        links.push({
-          taskId: task.id,
-          title: task.title,
-          due: task.due,
-          dueTime: task.dueTime || "",
-          criterionName,
-          reasons: ["Làm vượt tiến độ"],
-          type: "reward",
-        });
-      }
-
-      // The deadline discipline remains assigned only to the primary person
-      // in charge. The ahead-of-schedule reward above is credited to every
-      // participant because the task is counted in each participant's KPI.
-      if (taskParticipantPersonId(task.ownerId) !== personId) return;
       const reasons = taskViolationReasons(task);
+      if (!reasons.length) return;
+      const missingReport = reasons.some((reason) => reason.includes("phản hồi") || reason.includes("báo cáo"));
       const missedDeadline = reasons.some((reason) => reason.includes("hoàn thành"));
-      if (!missedDeadline || indexes.deadline < 0) return;
-      counts[indexes.deadline] = (counts[indexes.deadline] || 0) + 1;
+      if (missingReport && indexes.report >= 0) counts[indexes.report] = (counts[indexes.report] || 0) + 1;
+      if (missedDeadline && indexes.deadline >= 0) counts[indexes.deadline] = (counts[indexes.deadline] || 0) + 1;
       links.push({
         taskId: task.id,
         title: task.title,
         due: task.due,
         dueTime: task.dueTime || "",
-        criterionName,
-        reasons: ["Chậm thời hạn hoàn thành"],
-        type: "discipline",
+        criterionName: personalCriterionForTask(task, personId),
+        reasons,
       });
     });
   return { counts, links };
-}
-
-function calculatedTaskBehaviorForPerson(personId, period, existing = {}, preparedTasks = null) {
-  const savedManualValues = behaviorManualValues(existing);
-  const automaticIndexes = automaticTaskBehaviorRuleIndexes();
-  const manualValues = {};
-  const automatic = automaticTaskBehaviorForPerson(personId, period, preparedTasks);
-  const behavior = {};
-  let behaviorScore = 0;
-  behaviorRules.forEach((rule, index) => {
-    const manualCount = automaticIndexes.has(index) ? 0 : clamp(savedManualValues[index], 0, 99);
-    const count = manualCount + Number(automatic.counts[index] || 0);
-    manualValues[index] = manualCount;
-    behavior[index] = count;
-    behaviorScore += count * Number(rule[1] || 0);
-  });
-  return {
-    behavior,
-    behaviorManual: manualValues,
-    behaviorAutomatic: automatic.counts,
-    taskBehaviorLinks: automatic.links,
-    behaviorScore,
-  };
 }
 
 function isPeriodInRange(period, from, to) {
@@ -5955,17 +5314,15 @@ function calculateEvaluationFromForm() {
   const criteriaScores = {};
   const criteriaResults = [];
   let personalScore = 0;
-  const calculated = person ? personalCriteriaScoresFromTasks(person.id, period) : null;
   if (role) {
     role.criteria.forEach((criterion, index) => {
-      const score = calculated?.criteriaScores?.[index] || { plan: 0, actual: 0 };
-      const plan = score.plan;
-      const actual = score.actual;
+      const plan = plannedTaskCountForPersonalCriterion(person.id, period, criterion[0]);
+      const actual = actualTaskScoreForPersonalCriterion(person.id, period, criterion[0]);
       const planInput = byId(`criterion-plan-${index}`);
       const actualInput = byId(`criterion-actual-${index}`);
       if (planInput) planInput.value = plan;
       if (actualInput) actualInput.value = formatScore(actual);
-      const result = calculated?.criteriaResults?.[index] || calculateCriterionResult(plan, actual, criterion[1]);
+      const result = calculateCriterionResult(plan, actual, criterion[1]);
       criteriaScores[index] = {
         plan,
         actual,
@@ -5980,10 +5337,9 @@ function calculateEvaluationFromForm() {
   const behavior = {};
   const behaviorManual = {};
   const automaticBehavior = automaticTaskBehaviorForPerson(person?.id || "", byId("evalPeriod").value || state.activePeriod);
-  const automaticIndexes = automaticTaskBehaviorRuleIndexes();
   let behaviorScore = 0;
   behaviorRules.forEach((rule, index) => {
-    const manualCount = automaticIndexes.has(index) ? 0 : clamp(byId(`behavior-${index}`)?.value, 0, 99);
+    const manualCount = clamp(byId(`behavior-${index}`)?.value, 0, 99);
     const autoCount = automaticBehavior.counts[index] || 0;
     const count = manualCount + autoCount;
     behaviorManual[index] = manualCount;
@@ -6009,19 +5365,33 @@ function calculateEvaluationFromForm() {
 
 function calculateDepartmentEvaluationFromForm() {
   const department = departmentById(byId("deptEvalDepartment").value);
-  const period = byId("deptEvalPeriod").value || state.activePeriod;
-  const calculated = department
-    ? departmentCriteriaScoresFromTasks(department.id, period)
-    : { criteriaScores: {}, criteriaResults: [], criteriaScore: 0 };
+  const criteriaScores = {};
+  const criteriaResults = [];
+  let criteriaScore = 0;
+  if (department) {
+    department.criteria.forEach((criterion, index) => {
+      const plan = normalizeNumberInput(byId(`dept-criterion-plan-${index}`)?.value);
+      const actual = normalizeNumberInput(byId(`dept-criterion-actual-${index}`)?.value);
+      const result = calculateCriterionResult(plan, actual, criterion[1]);
+      criteriaScores[index] = {
+        plan,
+        actual,
+        completionPercent: result.completionPercent,
+        points: result.points,
+      };
+      criteriaResults[index] = result;
+      criteriaScore += result.points;
+    });
+  }
   const adjustmentType = normalizeDepartmentAdjustmentType(byId("deptEvalAdjustmentType")?.value);
   const adjustmentPoints = Math.max(0, normalizeNumberInput(byId("deptEvalAdjustmentPoints")?.value));
   const adjustmentScore = departmentAdjustmentSignedScore(adjustmentType, adjustmentPoints);
   const rewardDisciplineNote = byId("deptEvalRewardDiscipline")?.value.trim() || "";
-  const finalScore = calculateDepartmentFinalScore(calculated.criteriaScore, adjustmentScore);
+  const finalScore = calculateDepartmentFinalScore(criteriaScore, adjustmentScore);
   return {
-    criteriaScores: calculated.criteriaScores,
-    criteriaResults: calculated.criteriaResults,
-    criteriaScore: calculated.criteriaScore,
+    criteriaScores,
+    criteriaResults,
+    criteriaScore: clamp(criteriaScore, 0, 120),
     adjustmentType,
     adjustmentPoints,
     adjustmentScore,
@@ -6121,7 +5491,6 @@ function renderDepartmentAndRoleOptions() {
     departments.map((item) => ({ value: item.id, label: item.name })),
   );
   updateRoleOptions();
-  updatePersonSectionHeadOptions();
 }
 
 function renderDepartmentEvaluationOptions(selectedValue) {
@@ -6135,6 +5504,84 @@ function renderDepartmentEvaluationOptions(selectedValue) {
   );
 }
 
+function addNameOption(options, seen, name, suffix = "") {
+  const value = String(name || "").trim();
+  if (!value || seen.has(value)) return;
+  seen.add(value);
+  options.push({ value, label: suffix ? `${value} - ${suffix}` : value });
+}
+
+function departmentReporterNames(departmentId) {
+  const options = [];
+  const seen = new Set();
+  state.people
+    .filter((person) => person.departmentId === departmentId)
+    .filter((person) => {
+      const roleId = person.roleId || "";
+      return roleId.startsWith("truong-phong-") || roleId.startsWith("pho-phong-");
+    })
+    .forEach((person) => addNameOption(options, seen, person.name, roleById(person.roleId)?.name || ""));
+
+  state.accounts
+    .filter((account) => ["manager", "deputy_manager"].includes(account.role))
+    .forEach((account) => {
+      const person = account.personId ? personById(account.personId) : null;
+      const accountDepartmentId = departmentById(account.departmentId) ? account.departmentId : person?.departmentId || "";
+      if (accountDepartmentId !== departmentId) return;
+      addNameOption(options, seen, account.displayName, accountRoleLabels[account.role] || "");
+    });
+
+  const account = currentAccount();
+  if (account && hasDepartmentManagementAccess() && currentDepartmentId() === departmentId) {
+    addNameOption(options, seen, account.displayName, accountRoleLabels[account.role] || "");
+  }
+  return options;
+}
+
+function directorReviewerNames() {
+  const options = [];
+  const seen = new Set();
+  state.accounts
+    .filter((account) => account.role === "director")
+    .forEach((account) => addNameOption(options, seen, account.displayName, accountRoleLabels[account.role] || ""));
+  const account = currentAccount();
+  if (account && isDirector()) {
+    addNameOption(options, seen, account.displayName, accountRoleLabels[account.role] || "");
+  }
+  return options;
+}
+
+function renderDepartmentReporterOptions(selectedValue = "") {
+  const departmentId = byId("deptEvalDepartment").value;
+  const reporterOptions = departmentReporterNames(departmentId);
+  const seen = new Set(reporterOptions.map((item) => item.value));
+  const options = [{ value: "", label: "Chọn trưởng/phó phòng báo cáo" }, ...reporterOptions];
+  if (selectedValue && !seen.has(selectedValue)) {
+    options.push({ value: selectedValue, label: `${selectedValue} - dữ liệu cũ` });
+  }
+  fillSelect(byId("deptEvalReporter"), options, selectedValue);
+}
+
+function renderDepartmentReviewerOptions(selectedValue = "") {
+  const reviewerOptions = directorReviewerNames();
+  const seen = new Set(reviewerOptions.map((item) => item.value));
+  const options = [{ value: "", label: "Chọn Ban giám đốc xác nhận" }, ...reviewerOptions];
+  if (selectedValue && !seen.has(selectedValue)) {
+    options.push({ value: selectedValue, label: `${selectedValue} - dữ liệu cũ` });
+  }
+  fillSelect(byId("deptEvalReviewer"), options, selectedValue);
+}
+
+function isValidDepartmentReporterName(departmentId, value) {
+  if (!value) return false;
+  return departmentReporterNames(departmentId).some((item) => item.value === value);
+}
+
+function isValidDepartmentReviewerName(value) {
+  if (!value) return false;
+  return directorReviewerNames().some((item) => item.value === value);
+}
+
 function updateRoleOptions(selectedValue) {
   const departmentId = byId("personDepartment").value;
   const filtered = roles.filter((item) => item.departmentId === departmentId);
@@ -6143,29 +5590,6 @@ function updateRoleOptions(selectedValue) {
     filtered.map((item) => ({ value: item.id, label: item.name })),
     selectedValue,
   );
-}
-
-function updatePersonSectionHeadOptions(selectedValue) {
-  const field = byId("personSectionHeadField");
-  const select = byId("personSectionHead");
-  if (!field || !select) return;
-  const personId = byId("personId").value;
-  const departmentId = byId("personDepartment").value;
-  const roleId = byId("personRole").value;
-  const personDraft = { id: personId, departmentId, roleId };
-  const isSectionHead = isSectionHeadPerson(personDraft);
-  const leaders = state.people.filter((person) => person.id !== personId && person.departmentId === departmentId && isSectionHeadPerson(person));
-  const requested = selectedValue ?? select.value;
-  const selected = normalizeSectionHeadIdForPerson(personDraft, requested);
-  fillSelect(
-    select,
-    [{ value: "", label: "Không phân nhóm quản lý" }].concat(
-      leaders.map((person) => ({ value: person.id, label: `${person.name} - ${roleById(person.roleId)?.name || "Trưởng bộ phận/Trưởng nhóm"}` })),
-    ),
-    selected,
-  );
-  select.disabled = isSectionHead || !leaders.length;
-  field.classList.toggle("is-hidden", isSectionHead);
 }
 
 function taskCategoryOptionsForPerson(personId) {
@@ -6350,10 +5774,6 @@ function renderPeopleTable() {
     if (!search) return true;
     const department = departmentById(person.departmentId)?.name || "";
     const role = roleById(person.roleId)?.name || "";
-    const sectionHead = sectionHeadForPerson(person);
-    const managedNames = isSectionHeadPerson(person)
-      ? managedTeamMembers(person.id).map((member) => member.name)
-      : [];
     return normalizeSearchText(
       [
         person.name,
@@ -6371,8 +5791,6 @@ function renderPeopleTable() {
         person.salaryGrade,
         person.salaryReviewDate,
         person.note,
-        sectionHead?.name,
-        ...managedNames,
       ].join(" "),
     ).includes(search);
   });
@@ -6383,11 +5801,9 @@ function renderPeopleTable() {
   }
   tbody.innerHTML = people
     .map((person) => {
-      const evaluation = personalEvaluationSnapshot(person.id, state.activePeriod);
+      const evaluation = latestEvaluation(person.id);
       const department = departmentById(person.departmentId)?.name || "";
       const role = roleById(person.roleId)?.name || "";
-      const sectionHead = sectionHeadForPerson(person);
-      const managedMembers = isSectionHeadPerson(person) ? managedTeamMembers(person.id) : [];
       const contractDetails = [
         person.contractTerm,
         person.contractSignedDate ? `Ký HĐ: ${formatDate(person.contractSignedDate)}` : "",
@@ -6416,7 +5832,7 @@ function renderPeopleTable() {
           </td>
           <td class="people-gender"><span class="people-tag">${escapeHtml(person.gender || "-")}</span></td>
           <td class="people-department-cell"><span class="people-department">${escapeHtml(department || "Chưa cập nhật")}</span></td>
-          <td class="people-role-cell"><span class="people-role">${escapeHtml(role || "Chưa cập nhật")}</span>${sectionHead ? `<span class="people-contact">Nhóm: ${escapeHtml(sectionHead.name)}</span>` : managedMembers.length ? `<span class="people-contact">Quản lý ${managedMembers.length} nhân sự</span>` : ""}</td>
+          <td class="people-role-cell"><span class="people-role">${escapeHtml(role || "Chưa cập nhật")}</span></td>
           <td><span class="people-detail-text">${escapeHtml(person.qualification || "Chưa cập nhật")}</span></td>
           <td class="people-birth-date"><span class="people-date">${escapeHtml(formatDate(person.birthDate) || "-")}</span></td>
           <td><span class="people-address">${escapeHtml(person.address || "Chưa cập nhật")}</span></td>
@@ -6481,6 +5897,7 @@ function renderTaskInboxDialog() {
   byId("taskInboxList").innerHTML = assignedTasks.length
     ? assignedTasks
         .map((task) => {
+          const owner = personById(task.ownerId);
           const collaboratorNames = taskCollaboratorNames(task);
           const latestReport = latestTaskProgressReport(task);
           const violations = taskViolationReasons(task);
@@ -6503,7 +5920,7 @@ function renderTaskInboxDialog() {
                 <span><strong>Đánh giá chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))}</span>
                 <span><strong>Điểm thực hiện KPI:</strong> ${formatScore(taskKpiActualScore(task))}</span>
                 <span><strong>Người giao:</strong> ${escapeHtml(task.assignedByName || task.createdBy || "Chưa ghi nhận")}</span>
-                <span><strong>Người được giao:</strong> ${escapeHtml(taskOwnerName(task))}</span>
+                <span><strong>Người được giao:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
                 <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
                 <span><strong>Phản hồi:</strong> ${escapeHtml(task.responseStatus || "Chưa phản hồi")}</span>
                 <span><strong>Báo cáo gần nhất:</strong> ${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% - ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
@@ -6533,7 +5950,7 @@ function closeTaskInboxDialog() {
 }
 
 function taskBoardSearchText(task) {
-  const owner = taskOwnerName(task, "");
+  const owner = personById(task.ownerId)?.name || "";
   const collaborators = taskCollaboratorNames(task).join(" ");
   const assigner = task.assignedByName || task.createdBy || "";
   const attachments = (task.attachments || []).map((file) => file.name).join(" ");
@@ -6569,6 +5986,73 @@ function taskProjectOptions() {
     .map((project) => ({ value: project.id, label: project.name }));
 }
 
+function updateTaskProjectSummary() {
+  const select = byId("taskProjectId");
+  const summary = byId("taskProjectSummary");
+  if (!select || !summary) return;
+  const option = Array.from(select.options).find((item) => item.value === select.value);
+  summary.textContent = option?.value ? option.textContent || "Chưa chọn danh mục dự án" : "Chưa chọn danh mục dự án";
+}
+
+function renderTaskProjectPickerOptions() {
+  const container = byId("taskProjectOptions");
+  const select = byId("taskProjectId");
+  if (!container || !select) return;
+  const selectedId = String(select.value || "");
+  const projects = taskProjectOptions();
+  container.innerHTML = projects
+    .map((project) => `
+      <button class="task-project-option ${project.value === selectedId ? "is-selected" : ""}" type="button" role="option" aria-selected="${project.value === selectedId}" data-task-project-value="${escapeHtml(project.value)}">${escapeHtml(project.label)}</button>
+    `)
+    .join("");
+  updateTaskProjectSummary();
+  filterTaskProjectPickerOptions();
+}
+
+function filterTaskProjectPickerOptions() {
+  const container = byId("taskProjectOptions");
+  const input = byId("taskProjectSearch");
+  const empty = byId("taskProjectSearchEmpty");
+  if (!container || !input) return;
+  const query = normalizeSearchText(input.value || "");
+  let visible = 0;
+  container.querySelectorAll(".task-project-option").forEach((button) => {
+    const show = !query || normalizeSearchText(button.textContent || "").includes(query);
+    button.classList.toggle("is-hidden", !show);
+    if (show) visible += 1;
+  });
+  empty?.classList.toggle("is-hidden", visible > 0);
+}
+
+function resetTaskProjectSearch() {
+  const input = byId("taskProjectSearch");
+  if (input) input.value = "";
+  filterTaskProjectPickerOptions();
+}
+
+function isTaskProjectPickerOpen() {
+  const panel = byId("taskProjectPanel");
+  return !!panel && !panel.classList.contains("is-hidden");
+}
+
+function setTaskProjectPickerOpen(open) {
+  const picker = byId("taskProjectPicker");
+  const panel = byId("taskProjectPanel");
+  const toggle = byId("taskProjectToggle");
+  if (!picker || !panel || !toggle) return;
+  const shouldOpen = Boolean(open) && !picker.classList.contains("is-disabled");
+  picker.classList.toggle("is-open", shouldOpen);
+  panel.classList.toggle("is-hidden", !shouldOpen);
+  toggle.setAttribute("aria-expanded", String(shouldOpen));
+  if (!shouldOpen) {
+    resetTaskProjectSearch();
+    return;
+  }
+  setTaskOwnerPickerOpen(false);
+  setTaskCollaboratorPickerOpen(false);
+  requestAnimationFrame(() => byId("taskProjectSearch")?.focus());
+}
+
 function renderTaskProjectOptions() {
   const options = [{ value: "", label: "Chưa chọn danh mục dự án" }, ...taskProjectOptions()];
   ["taskProjectId"].forEach((selectId) => {
@@ -6577,6 +6061,7 @@ function renderTaskProjectOptions() {
     const selected = select.value;
     fillSelect(select, options, selected);
   });
+  renderTaskProjectPickerOptions();
 }
 
 function resetTaskProjectCatalogForm() {
@@ -6980,8 +6465,6 @@ function taskBulkImportWorkType(value) {
 function taskBulkImportRecurrence(value) {
   const normalized = normalizeSearchText(value);
   if (!normalized || normalized === "none" || normalized.includes("khong dinh ky")) return TASK_RECURRENCE_NONE;
-  if (normalized === "daily" || normalized.includes("hang ngay")) return TASK_RECURRENCE_DAILY;
-  if (normalized === "weekly" || normalized.includes("hang tuan")) return TASK_RECURRENCE_WEEKLY;
   if (normalized === "monthly" || normalized.includes("hang thang")) return TASK_RECURRENCE_MONTHLY;
   if (normalized === "quarterly" || normalized.includes("hang quy")) return TASK_RECURRENCE_QUARTERLY;
   return "";
@@ -7259,7 +6742,7 @@ function importTaskBulkRows() {
         departmentId: owner?.departmentId || "",
         period: taskPeriod(task),
         title: task.title,
-        details: `${task.projectName} · ${taskOwnerName(task, "Chưa rõ người thực hiện")} · ${task.category} · ${normalizeTaskStatus(task.status)}`,
+        details: `${task.projectName} · ${owner?.name || "Chưa rõ người thực hiện"} · ${task.category} · ${normalizeTaskStatus(task.status)}`,
         score: `${formatScore(task.progress)}%`,
       });
     });
@@ -7351,6 +6834,7 @@ function renderTaskBoard(options = {}) {
         const cards = tasks
           .filter((task) => taskMatchesStatusFilter(task, status))
           .map((task) => {
+            const owner = personById(task.ownerId);
             const collaboratorNames = taskCollaboratorNames(task);
             const assigned = isAssignedTask(task);
             const taskKind = normalizeTaskKind(task);
@@ -7379,7 +6863,7 @@ function renderTaskBoard(options = {}) {
               <article class="task-card task-card-clickable" data-open-task-detail="${escapeHtml(task.id)}">
                 <h4>${escapeHtml(task.title)}</h4>
                 ${projectNameForTask(task) ? `<div class="task-meta">Dự án: ${escapeHtml(projectNameForTask(task))}</div>` : ""}
-                <div class="task-meta">${assigned ? "Giao cho" : "Người thực hiện"} ${escapeHtml(taskOwnerName(task))} · bắt đầu ${escapeHtml(formatTaskStartDate(task) || "chưa có")} · hoàn thành ${escapeHtml(formatTaskDeadline(task) || "chưa có")}</div>
+                <div class="task-meta">${assigned ? "Giao cho" : "Người thực hiện"} ${escapeHtml(owner?.name || "Chưa rõ")} · bắt đầu ${escapeHtml(formatTaskStartDate(task) || "chưa có")} · hoàn thành ${escapeHtml(formatTaskDeadline(task) || "chưa có")}</div>
                 ${collaboratorNames.length ? `<div class="task-meta">Người phối hợp: ${escapeHtml(collaboratorNames.join(", "))}</div>` : ""}
                 ${!assigned ? `<div class="task-meta">${escapeHtml(taskWorkMeta(task))}</div>` : ""}
                 ${assigned ? `<div class="task-meta">Người giao: ${escapeHtml(task.assignedByName || task.createdBy || "Chưa ghi nhận")}</div>` : ""}
@@ -7425,6 +6909,7 @@ function renderTaskBoard(options = {}) {
 }
 
 function renderTaskStatusDetailItem(task) {
+  const owner = personById(task.ownerId);
   const collaboratorNames = taskCollaboratorNames(task);
   const status = task.computedStatus || getDueStatus(task);
   const latestReport = latestTaskProgressReport(task);
@@ -7441,7 +6926,7 @@ function renderTaskStatusDetailItem(task) {
         ${canOpen ? `<button class="ghost" data-open-status-task="${escapeHtml(task.id)}" type="button">Mở công việc</button>` : "<span class=\"muted\">Chỉ xem</span>"}
       </div>
       <div class="kpi-task-detail-meta">
-        <span><strong>${isAssignedTask(task) ? "Người được giao" : "Người thực hiện"}:</strong> ${escapeHtml(taskOwnerName(task))}</span>
+        <span><strong>${isAssignedTask(task) ? "Người được giao" : "Người thực hiện"}:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
         <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
         <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
         ${isAssignedTask(task) ? `<span><strong>Người giao:</strong> ${escapeHtml(task.assignedByName || task.createdBy || "Chưa ghi nhận")}</span>` : ""}
@@ -7535,6 +7020,7 @@ function updateTaskCompletionReviewQualityField() {
 function openTaskCompletionReviewDialog(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task || !canReviewTaskCompletion(task)) return;
+  const owner = personById(task.ownerId);
   const currentStatus = getDueStatus(task);
   byId("taskCompletionReviewTaskId").value = task.id;
   byId("taskCompletionReviewStatus").value = taskCompletionIsApproved(task) ? "passed" : "";
@@ -7542,7 +7028,7 @@ function openTaskCompletionReviewDialog(taskId) {
   byId("taskCompletionReviewNote").value = "";
   updateTaskCompletionReviewQualityField();
   byId("taskCompletionReviewTitle").textContent = `Duyệt hoàn thành: ${task.title}`;
-  byId("taskCompletionReviewSummary").textContent = `${taskOwnerName(task, "Chưa rõ người thực hiện")} · Trạng thái hiện tại: ${currentStatus} · Ngày hoàn thành: ${formatTaskDeadline(task) || "chưa cập nhật"}`;
+  byId("taskCompletionReviewSummary").textContent = `${owner?.name || "Chưa rõ người thực hiện"} · Trạng thái hiện tại: ${currentStatus} · Ngày hoàn thành: ${formatTaskDeadline(task) || "chưa cập nhật"}`;
   byId("taskCompletionReviewDialog").classList.remove("is-hidden");
   byId("taskCompletionReviewDialog").setAttribute("aria-hidden", "false");
   byId("taskCompletionReviewStatus").focus();
@@ -7730,7 +7216,7 @@ function deleteTaskRecord(taskId) {
     departmentId: owner?.departmentId || "",
     period: taskPeriod(task),
     title: task.title,
-    details: `${taskOwnerName(task, "Chưa rõ người nhận")} · ${normalizeTaskStatus(task.status)}`,
+    details: `${owner?.name || "Chưa rõ người nhận"} · ${normalizeTaskStatus(task.status)}`,
     score: `${formatScore(task.progress)}%`,
   });
   saveState();
@@ -7742,6 +7228,7 @@ function openTaskDetailDialog(taskId) {
   restoreTaskDetailInlineEditor({ reset: true });
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task || !canViewTaskRecord(task)) return;
+  const owner = personById(task.ownerId);
   const collaborators = taskCollaboratorNames(task);
   const status = task.computedStatus || getDueStatus(task);
   const assigned = isAssignedTask(task);
@@ -7768,7 +7255,7 @@ function openTaskDetailDialog(taskId) {
     <section class="task-detail-section task-detail-information">
       <h3>Thông tin công việc</h3>
       <div class="task-detail-info-grid">
-        <span><strong>${assigned ? "Người được giao" : "Người thực hiện"}</strong>${escapeHtml(taskOwnerName(task, "Chưa cập nhật"))}</span>
+        <span><strong>${assigned ? "Người được giao" : "Người thực hiện"}</strong>${escapeHtml(owner?.name || "Chưa cập nhật")}</span>
         <span><strong>Người phối hợp</strong>${escapeHtml(collaborators.length ? collaborators.join(", ") : "Chưa chọn")}</span>
         ${assigned ? `<span><strong>Người giao</strong>${escapeHtml(task.assignedByName || task.createdBy || "Chưa cập nhật")}</span>` : ""}
         <span><strong>Tên dự án</strong>${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
@@ -7872,15 +7359,14 @@ function renderCriteriaInputs(existing = {}) {
   const role = person ? roleById(person.roleId) : null;
   const period = byId("evalPeriod").value || state.activePeriod;
   const automaticBehaviorLinks = person ? automaticTaskBehaviorForPerson(person.id, period).links : [];
-  const calculated = person ? personalCriteriaScoresFromTasks(person.id, period) : null;
+  byId("roleHint").textContent = role
+    ? `${role.name}. Kế hoạch tự động lấy từ số công việc trong kỳ ${formatMonthPeriod(period)}; Thực hiện tự động cộng từ điểm chất lượng của các công việc hoàn thành. Hệ thống tự tính % hoàn thành = Thực hiện / Kế hoạch, tối đa 120% theo quy chế.`
+    : "Chọn nhân sự để hiển thị bộ tiêu chí.";
   byId("criteriaInputs").innerHTML = role
     ? role.criteria
         .map((criterion, index) => {
-          const criterionScore = calculated?.criteriaScores?.[index] || { plan: 0, actual: 0 };
-          const calculationSource = calculated?.criterionScopes?.[index]?.label
-            || "Tự động tổng hợp từ công việc cá nhân theo danh mục KPI trong kỳ đánh giá.";
-          const plan = criterionScore.plan;
-          const actual = criterionScore.actual;
+          const plan = plannedTaskCountForPersonalCriterion(person.id, period, criterion[0]);
+          const actual = actualTaskScoreForPersonalCriterion(person.id, period, criterion[0]);
           const result = calculateCriterionResult(plan, actual, criterion[1]);
           const violationCount = taskBehaviorViolationCount(automaticBehaviorLinks, criterion[0]);
           return `
@@ -7895,10 +7381,10 @@ function renderCriteriaInputs(existing = {}) {
               </div>
               <div class="criteria-input-grid">
                 <label>Kế hoạch
-                  <input id="criterion-plan-${index}" class="auto-plan-input" type="number" min="0" step="1" value="${escapeHtml(plan)}" readonly aria-readonly="true" title="${escapeHtml(calculationSource)}">
+                  <input id="criterion-plan-${index}" class="auto-plan-input" type="number" min="0" step="1" value="${escapeHtml(plan)}" readonly aria-readonly="true" title="Tự động tính theo số công việc thuộc tiêu chí này trong kỳ ${escapeHtml(formatMonthPeriod(period))}.">
                 </label>
                 <label>Thực hiện
-                  <input id="criterion-actual-${index}" class="auto-actual-input" type="number" min="0" step="0.01" value="${escapeHtml(formatScore(actual))}" readonly aria-readonly="true" title="${escapeHtml(calculationSource)}">
+                  <input id="criterion-actual-${index}" class="auto-actual-input" type="number" min="0" step="0.01" value="${escapeHtml(formatScore(actual))}" readonly aria-readonly="true" title="Tự động cộng từ đánh giá chất lượng của công việc hoàn thành trong kỳ ${escapeHtml(formatMonthPeriod(period))}.">
                 </label>
               </div>
               <div class="criteria-calculated">
@@ -7930,18 +7416,12 @@ function renderTaskBehaviorLinks(links = []) {
 function renderBehaviorInputs(existing = {}) {
   const manualValues = behaviorManualValues(existing);
   const automatic = automaticTaskBehaviorForPerson(byId("evalPerson").value, byId("evalPeriod").value || state.activePeriod);
-  const automaticIndexes = automaticTaskBehaviorRuleIndexes();
   renderTaskBehaviorLinks(automatic.links);
   byId("behaviorInputs").innerHTML = behaviorRules
     .map(
       (rule, index) => {
         const automaticCount = automatic.counts[index] || 0;
-        const isAutomatic = automaticIndexes.has(index);
         const manualValue = hasOwnValue(manualValues, index) ? manualValues[index] : "";
-        const value = isAutomatic ? automaticCount : manualValue;
-        const inputAttributes = isAutomatic
-          ? 'readonly aria-readonly="true" title="Hệ thống tự tổng hợp từ công việc trong kỳ đánh giá."'
-          : 'data-score-input placeholder="Nhập số lượng"';
         return `
         <article class="behavior-item">
           <div class="behavior-top">
@@ -7951,10 +7431,10 @@ function renderBehaviorInputs(existing = {}) {
             </span>
             <strong class="behavior-title">${rule[0]}</strong>
           </div>
-          <div class="behavior-count-field">
-            <input id="behavior-${index}" type="number" min="0" value="${escapeHtml(value)}" ${inputAttributes} aria-label="Số lượng áp dụng cho ${escapeHtml(rule[0])}">
-          </div>
-          ${isAutomatic ? `<span class="field-note">Hệ thống tự ghi nhận từ công việc: ${automaticCount} lần</span>` : ""}
+          <label class="behavior-count-field">Số lần ghi nhận
+            <input id="behavior-${index}" type="number" min="0" value="${escapeHtml(manualValue)}" data-score-input>
+          </label>
+          ${automaticCount ? `<span class="field-note is-warning">Tự động từ công việc: ${automaticCount} lỗi</span>` : ""}
         </article>
       `;
       },
@@ -7966,12 +7446,13 @@ function renderBehaviorInputs(existing = {}) {
 
 function renderDepartmentCriteriaInputs(existing = {}) {
   const department = departmentById(byId("deptEvalDepartment").value);
-  const period = byId("deptEvalPeriod").value || state.activePeriod;
-  const calculated = department ? departmentCriteriaScoresFromTasks(department.id, period) : null;
+  byId("departmentCriteriaHint").textContent = department
+    ? `${department.name}. Nhập số kế hoạch và số thực hiện. Hệ thống tự tính % hoàn thành = Thực hiện / Kế hoạch, giới hạn tối đa 120% theo quy chế.`
+    : "Chọn phòng để nhập số kế hoạch và số thực hiện theo từng chỉ tiêu.";
   byId("departmentCriteriaInputs").innerHTML = department
     ? department.criteria
         .map((criterion, index) => {
-          const values = calculated?.criteriaScores?.[index] || criterionInputValues(existing, index);
+          const values = criterionInputValues(existing, index);
           const result = calculateCriterionResult(values.plan, values.actual, criterion[1]);
           return `
             <article class="criteria-item department-criteria-item">
@@ -7984,10 +7465,10 @@ function renderDepartmentCriteriaInputs(existing = {}) {
               </div>
               <div class="criteria-input-grid">
                 <label>Kế hoạch
-                  <input id="dept-criterion-plan-${index}" class="auto-plan-input" type="number" min="0" step="1" value="${escapeHtml(values.plan)}" readonly aria-readonly="true" title="Tự động tổng hợp toàn bộ công việc của phòng trong kỳ đánh giá.">
+                  <input id="dept-criterion-plan-${index}" type="number" min="0" step="0.01" value="${escapeHtml(values.plan)}" data-department-score-input>
                 </label>
                 <label>Thực hiện
-                  <input id="dept-criterion-actual-${index}" class="auto-actual-input" type="number" min="0" step="1" value="${escapeHtml(values.actual)}" readonly aria-readonly="true" title="Tự động tổng hợp các công việc Hoàn thành đã được đánh giá Đạt trong kỳ đánh giá.">
+                  <input id="dept-criterion-actual-${index}" type="number" min="0" step="0.01" value="${escapeHtml(values.actual)}" data-department-score-input>
                 </label>
               </div>
               <div class="criteria-calculated">
@@ -8038,10 +7519,6 @@ function kpiTaskSearchText(task) {
   return normalizeSearchText([task?.category, task?.title, task?.note, task?.responseNote, reports].filter(Boolean).join(" "));
 }
 
-function kpiCriterionKey(value) {
-  return normalizeSearchText(String(value || "")).replace(/\s+/g, " ").trim();
-}
-
 function taskMatchesKpiCriterion(task, criterionName) {
   const criterion = normalizeSearchText(criterionName);
   if (!criterion) return false;
@@ -8059,297 +7536,32 @@ function taskBelongsToPersonForKpi(task, personId) {
   return !!task && !!personId && taskParticipantIds(task).includes(personId);
 }
 
-function taskCountsForPersonalCriterion(task, personId, criterionName) {
-  const assignedCriterion = personalCriterionForTask(task, personId);
-  const assignedKey = kpiCriterionKey(assignedCriterion);
-  const criterionKey = kpiCriterionKey(criterionName);
-  return Boolean(assignedKey && criterionKey && assignedKey === criterionKey);
-}
-
-function plannedTaskCountForPersonalCriterion(personId, period, criterionName, preparedTasks = null) {
+function plannedTaskCountForPersonalCriterion(personId, period, criterionName) {
   if (!personId || !period || !criterionName) return 0;
-  const tasks = Array.isArray(preparedTasks)
-    ? preparedTasks
-    : state.tasks.filter((task) => taskBelongsToPersonForKpi(task, personId) && taskPeriod(task) === period);
-  return tasks
-    .filter((task) => taskCountsForPersonalCriterion(task, personId, criterionName))
+  return state.tasks
+    .filter((task) => taskBelongsToPersonForKpi(task, personId) && taskPeriod(task) === period)
+    .filter((task) => taskMatchesKpiCriterion(task, criterionName))
     .length;
 }
 
-function actualTaskScoreForPersonalCriterion(personId, period, criterionName, preparedTasks = null) {
+function actualTaskScoreForPersonalCriterion(personId, period, criterionName) {
   if (!personId || !period || !criterionName) return 0;
-  const tasks = Array.isArray(preparedTasks)
-    ? preparedTasks
-    : state.tasks.filter((task) => taskBelongsToPersonForKpi(task, personId) && taskPeriod(task) === period);
-  return tasks
-    .filter((task) => taskCountsForPersonalCriterion(task, personId, criterionName))
+  return state.tasks
+    .filter((task) => taskBelongsToPersonForKpi(task, personId) && taskPeriod(task) === period)
+    .filter((task) => taskMatchesKpiCriterion(task, criterionName))
     .reduce((sum, task) => sum + taskKpiActualScore(task), 0);
 }
 
-function uniqueTaskRecords(...collections) {
-  const seen = new Set();
-  return collections
-    .flat()
-    .filter((task) => {
-      const id = String(task?.id || "");
-      if (!id || seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    });
-}
-
-function approvedCompletedTaskCount(tasks) {
-  return (tasks || []).filter(
-    (task) => normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED && taskCompletionIsApproved(task),
-  ).length;
-}
-
-function approvedTaskKpiActualScore(tasks) {
-  return (tasks || []).reduce((sum, task) => sum + taskKpiActualScore(task), 0);
-}
-
-function sectionHeadKpiScopes(personId, period, preparedTasks = null) {
-  const person = personById(personId);
-  const teamMembers = isSectionHeadPerson(person) ? managedTeamMembers(personId) : [];
-  const teamMemberIds = teamMembers.map((member) => member.id);
-  const sourceTasks = Array.isArray(preparedTasks) ? preparedTasks : state.tasks;
-  const periodTasks = sourceTasks.filter((task) => taskPeriod(task) === period);
-  return {
-    teamMembers,
-    teamMemberIds,
-    ownTasks: periodTasks.filter((task) => taskBelongsToPersonForKpi(task, personId)),
-    teamTasks: periodTasks.filter((task) => teamMemberIds.some((memberId) => taskBelongsToPersonForKpi(task, memberId))),
-  };
-}
-
-function sectionHeadCriterionScope(sectionHeadScopes, criterionName) {
-  const criterionKey = kpiCriterionKey(criterionName);
-  if (criterionKey === kpiCriterionKey(SECTION_HEAD_PERSONAL_CRITERION)) {
-    return {
-      type: "own",
-      tasks: sectionHeadScopes.ownTasks,
-      label: "Tự động tổng hợp các công việc có Trưởng bộ phận/Trưởng nhóm tham gia trong kỳ đánh giá.",
-      emptyText: "Chưa có công việc của Trưởng bộ phận/Trưởng nhóm trong kỳ đã chọn.",
-    };
-  }
-  if (criterionKey === kpiCriterionKey(SECTION_HEAD_TEAM_CRITERION)) {
-    const teamNames = sectionHeadScopes.teamMembers.map((member) => member.name).filter(Boolean);
-    return {
-      type: "team",
-      tasks: sectionHeadScopes.teamTasks,
-      teamMembers: sectionHeadScopes.teamMembers,
-      label: teamNames.length
-        ? `Tự động tổng hợp các công việc của ${teamNames.length} nhân sự trong nhóm quản lý: ${teamNames.join(", ")}.`
-        : "Chưa phân nhóm nhân sự quản lý nên chưa có công việc để tổng hợp.",
-      emptyText: "Chưa có công việc của nhóm nhân sự quản lý trong kỳ đã chọn.",
-    };
-  }
-  return null;
-}
-
-function personalKpiTaskScope(personId, period, preparedTasks = null) {
-  const person = personById(personId);
-  const sourceTasks = Array.isArray(preparedTasks) ? preparedTasks : state.tasks;
-  const tasks = sourceTasks.filter((task) => {
-    if (taskPeriod(task) !== period) return false;
-    return taskBelongsToPersonForKpi(task, personId);
-  });
-  return { tasks, groupManaged: false, teamMembers: [], teamMemberIds: [], person };
-}
-
-function departmentTasksForKpi(departmentId, period, preparedTasks = null) {
-  if (!departmentId || !period) return [];
-  const tasks = Array.isArray(preparedTasks) ? preparedTasks : state.tasks;
-  return tasks.filter(
-    (task) => taskHasParticipantInDepartment(task, departmentId) && taskPeriod(task) === period,
-  );
-}
-
-function departmentCriteriaScoresFromTasks(departmentId, period, preparedTasks = null) {
-  const tasks = Array.isArray(preparedTasks) ? preparedTasks : departmentTasksForKpi(departmentId, period);
-  const plan = tasks.length;
-  const actual = tasks.filter(
-    (task) => normalizeTaskStatus(task.status) === TASK_STATUS_COMPLETED && taskCompletionIsApproved(task),
-  ).length;
-  const result = calculateCriterionResult(plan, actual, departmentCompletionCriterion[1]);
-  return {
-    tasks,
-    criteriaScores: {
-      0: {
-        plan,
-        actual,
-        completionPercent: result.completionPercent,
-        points: result.points,
-      },
-    },
-    criteriaResults: [result],
-    criteriaScore: clamp(result.points, 0, 120),
-  };
-}
-
-function departmentEvaluationSnapshot(departmentId, period = state.activePeriod, context = null) {
-  if (!departmentId || !period || isKpiExemptDepartment(departmentId)) return undefined;
-  const existing = context?.departmentRecordsById?.has(departmentId)
-    ? context.departmentRecordsById.get(departmentId)
-    : latestDepartmentEvaluation(departmentId, period);
-  const calculated = context?.departmentCalculatedById?.get(departmentId)
-    || departmentCriteriaScoresFromTasks(departmentId, period, context?.tasksByDepartmentId?.get(departmentId));
-  if (!existing && !calculated.tasks.length) return undefined;
-  const adjustmentType = normalizeDepartmentAdjustmentType(existing?.adjustmentType);
-  const adjustmentPoints = Math.max(0, Number(existing?.adjustmentPoints || 0));
-  const adjustmentScore = departmentAdjustmentSignedScore(adjustmentType, adjustmentPoints);
-  const finalScore = calculateDepartmentFinalScore(calculated.criteriaScore, adjustmentScore);
-  return {
-    ...(existing || {}),
-    id: existing?.id || `auto-department-evaluation:${departmentId}:${period}`,
-    period,
-    departmentId,
-    criteriaScores: calculated.criteriaScores,
-    criteriaResults: calculated.criteriaResults,
-    criteriaScore: calculated.criteriaScore,
-    adjustmentType,
-    adjustmentPoints,
-    adjustmentScore,
-    rewardDisciplineNote: existing?.rewardDisciplineNote || "",
-    finalScore,
-    grade: gradeDepartment(finalScore),
-    autoCalculated: !existing,
-  };
-}
-
-function personalEvaluationSnapshot(personId, period = state.activePeriod, context = null) {
-  const person = personById(personId);
-  if (!isKpiEligiblePerson(person) || !period) return undefined;
-  const existing = context?.personalRecordsById?.has(personId)
-    ? context.personalRecordsById.get(personId)
-    : latestEvaluation(personId, period);
-  const preparedTasks = context
-    ? isSectionHeadPerson(person)
-      ? uniqueTaskRecords(
-        context.tasksByPersonId.get(personId) || [],
-        context.tasksBySectionHeadId.get(personId) || [],
-      )
-      : context.tasksByPersonId.get(personId) || []
-    : null;
-  const calculated = personalCriteriaScoresFromTasks(personId, period, preparedTasks);
-  const hasTasks = Object.values(calculated.criteriaScores).some((score) => Number(score?.plan || 0) > 0);
-  if (!existing && !hasTasks) return undefined;
-  const taskBehavior = calculatedTaskBehaviorForPerson(
-    personId,
-    period,
-    existing || {},
-    context ? context.behaviorTasksByPersonId.get(personId) || [] : null,
-  );
-  const departmentEvaluation = context?.departmentEvaluationsById?.has(person.departmentId)
-    ? context.departmentEvaluationsById.get(person.departmentId)
-    : departmentEvaluationSnapshot(person.departmentId, period);
-  const departmentScore = Number(departmentEvaluation?.finalScore || 0);
-  const finalScore = calculatePersonalFinalScore(calculated.personalScore, departmentScore, taskBehavior.behaviorScore);
-  return {
-    ...(existing || {}),
-    id: existing?.id || `auto-personal-evaluation:${personId}:${period}`,
-    period,
-    personId,
-    criteriaScores: calculated.criteriaScores,
-    criteriaResults: calculated.criteriaResults,
-    personalScore: calculated.personalScore,
-    departmentScore,
-    ...taskBehavior,
-    finalScore,
-    grade: gradePersonal(finalScore),
-    autoCalculated: !existing,
-  };
-}
-
-function personalEvaluationsForDashboard(period = state.activePeriod, context = null) {
-  return state.people
-    .filter(isKpiEligiblePerson)
-    .map((person) => personalEvaluationSnapshot(person.id, period, context))
-    .filter(Boolean);
-}
-
-function buildDashboardKpiContext(period = state.activePeriod) {
-  const tasksByPersonId = new Map();
-  const tasksBySectionHeadId = new Map();
-  const behaviorTasksByPersonId = new Map();
-  const tasksByDepartmentId = new Map();
-  const addTask = (map, key, task) => {
-    if (!key) return;
-    const items = map.get(key) || [];
-    items.push(task);
-    map.set(key, items);
-  };
-
-  state.tasks
-    .filter((task) => taskPeriod(task) === period)
-    .forEach((task) => {
-      const participantIds = taskParticipantIds(task);
-      const departmentIds = new Set();
-      const sectionHeadIds = new Set();
-      participantIds.forEach((personId) => {
-        addTask(tasksByPersonId, personId, task);
-        addTask(behaviorTasksByPersonId, personId, task);
-        const participant = personById(personId);
-        const departmentId = participant?.departmentId;
-        if (departmentId) departmentIds.add(departmentId);
-        const sectionHead = sectionHeadForPerson(participant);
-        if (sectionHead) sectionHeadIds.add(sectionHead.id);
-      });
-      sectionHeadIds.forEach((sectionHeadId) => addTask(tasksBySectionHeadId, sectionHeadId, task));
-      departmentIds.forEach((departmentId) => addTask(tasksByDepartmentId, departmentId, task));
-    });
-
-  const personalRecordsById = new Map(
-    evaluationsForPeriod(period).map((evaluation) => [String(evaluation.personId), evaluation]),
-  );
-  const departmentRecordsById = new Map(
-    departmentEvaluationsForPeriod(period).map((evaluation) => [String(evaluation.departmentId), evaluation]),
-  );
-  const context = {
-    tasksByPersonId,
-    tasksBySectionHeadId,
-    behaviorTasksByPersonId,
-    tasksByDepartmentId,
-    personalRecordsById,
-    departmentRecordsById,
-    departmentCalculatedById: new Map(),
-    departmentEvaluationsById: new Map(),
-  };
-  kpiEligibleDepartments().forEach((department) => {
-    const calculated = departmentCriteriaScoresFromTasks(
-      department.id,
-      period,
-      tasksByDepartmentId.get(department.id) || [],
-    );
-    context.departmentCalculatedById.set(department.id, calculated);
-    context.departmentEvaluationsById.set(
-      department.id,
-      departmentEvaluationSnapshot(department.id, period, context),
-    );
-  });
-  return context;
-}
-
-function personalCriteriaScoresFromTasks(personId, period, preparedTasks = null) {
+function personalCriteriaScoresFromTasks(personId, period) {
   const person = personById(personId);
   const role = person ? roleById(person.roleId) : null;
   const criteriaScores = {};
   const criteriaResults = [];
-  const criterionScopes = {};
   let personalScore = 0;
-  if (!role) return { criteriaScores, criteriaResults, criterionScopes, personalScore, groupManaged: false, teamMembers: [], tasks: [] };
-  const taskScope = personalKpiTaskScope(personId, period, preparedTasks);
-  const sectionHeadScopes = isSectionHeadPerson(person)
-    ? sectionHeadKpiScopes(personId, period, preparedTasks)
-    : null;
+  if (!role) return { criteriaScores, criteriaResults, personalScore };
   role.criteria.forEach((criterion, index) => {
-    const sectionHeadScope = sectionHeadScopes ? sectionHeadCriterionScope(sectionHeadScopes, criterion[0]) : null;
-    const plan = sectionHeadScope
-      ? sectionHeadScope.tasks.length
-      : plannedTaskCountForPersonalCriterion(person.id, period, criterion[0], taskScope.tasks);
-    const actual = sectionHeadScope
-      ? approvedTaskKpiActualScore(sectionHeadScope.tasks)
-      : actualTaskScoreForPersonalCriterion(person.id, period, criterion[0], taskScope.tasks);
+    const plan = plannedTaskCountForPersonalCriterion(person.id, period, criterion[0]);
+    const actual = actualTaskScoreForPersonalCriterion(person.id, period, criterion[0]);
     const result = calculateCriterionResult(plan, actual, criterion[1]);
     criteriaScores[index] = {
       plan,
@@ -8358,18 +7570,9 @@ function personalCriteriaScoresFromTasks(personId, period, preparedTasks = null)
       points: result.points,
     };
     criteriaResults[index] = result;
-    if (sectionHeadScope) criterionScopes[index] = sectionHeadScope;
     personalScore += result.points;
   });
-  return {
-    ...taskScope,
-    criteriaScores,
-    criteriaResults,
-    criterionScopes,
-    personalScore,
-    groupManaged: Boolean(sectionHeadScopes?.teamMembers.length),
-    teamMembers: sectionHeadScopes?.teamMembers || [],
-  };
+  return { criteriaScores, criteriaResults, personalScore };
 }
 
 function syncPersonalEvaluationTaskScores(personId, period) {
@@ -8378,107 +7581,18 @@ function syncPersonalEvaluationTaskScores(personId, period) {
   if (index < 0) return;
   const evaluation = state.evaluations[index];
   const recalculated = personalCriteriaScoresFromTasks(personId, period);
-  const taskBehavior = calculatedTaskBehaviorForPerson(personId, period, evaluation);
   const nextEvaluation = {
     ...evaluation,
     criteriaScores: recalculated.criteriaScores,
     personalScore: recalculated.personalScore,
-    ...taskBehavior,
   };
   nextEvaluation.finalScore = calculatePersonalFinalScore(
     nextEvaluation.personalScore,
     Number(nextEvaluation.departmentScore || 0),
-    taskBehavior.behaviorScore,
+    Number(nextEvaluation.behaviorScore || 0),
   );
   nextEvaluation.grade = gradePersonal(nextEvaluation.finalScore);
   state.evaluations = state.evaluations.map((item, itemIndex) => (itemIndex === index ? nextEvaluation : item));
-}
-
-function recalculateSavedPersonalEvaluationScores() {
-  const tasksByPersonPeriod = new Map();
-  const tasksBySectionHeadPeriod = new Map();
-  const addTask = (map, personId, period, task) => {
-    if (!personId || !period) return;
-    const key = `${personId}|${period}`;
-    const tasks = map.get(key) || [];
-    tasks.push(task);
-    map.set(key, tasks);
-  };
-  state.tasks.forEach((task) => {
-    const period = taskPeriod(task);
-    const sectionHeadIds = new Set();
-    taskParticipantIds(task).forEach((personId) => {
-      addTask(tasksByPersonPeriod, personId, period, task);
-      const sectionHead = sectionHeadForPerson(personById(personId));
-      if (sectionHead) sectionHeadIds.add(sectionHead.id);
-    });
-    sectionHeadIds.forEach((sectionHeadId) => addTask(tasksBySectionHeadPeriod, sectionHeadId, period, task));
-  });
-
-  let changed = false;
-  state.evaluations = state.evaluations.map((evaluation) => {
-    const person = personById(evaluation.personId);
-    if (!isKpiEligiblePerson(person) || !evaluation.period) return evaluation;
-    const personPeriodKey = `${evaluation.personId}|${evaluation.period}`;
-    const criteriaTasks = isSectionHeadPerson(person)
-      ? uniqueTaskRecords(
-        tasksByPersonPeriod.get(personPeriodKey) || [],
-        tasksBySectionHeadPeriod.get(personPeriodKey) || [],
-      )
-      : tasksByPersonPeriod.get(personPeriodKey) || [];
-    const calculated = personalCriteriaScoresFromTasks(
-      evaluation.personId,
-      evaluation.period,
-      criteriaTasks,
-    );
-    const taskBehavior = calculatedTaskBehaviorForPerson(
-      evaluation.personId,
-      evaluation.period,
-      evaluation,
-      tasksByPersonPeriod.get(personPeriodKey) || [],
-    );
-    const finalScore = calculatePersonalFinalScore(
-      calculated.personalScore,
-      Number(evaluation.departmentScore || 0),
-      taskBehavior.behaviorScore,
-    );
-    const grade = gradePersonal(finalScore);
-    const criteriaChanged = JSON.stringify(evaluation.criteriaScores || {}) !== JSON.stringify(calculated.criteriaScores);
-    const behaviorChanged = JSON.stringify(evaluation.behavior || {}) !== JSON.stringify(taskBehavior.behavior)
-      || JSON.stringify(evaluation.behaviorAutomatic || {}) !== JSON.stringify(taskBehavior.behaviorAutomatic)
-      || JSON.stringify(evaluation.taskBehaviorLinks || []) !== JSON.stringify(taskBehavior.taskBehaviorLinks)
-      || Number(evaluation.behaviorScore || 0) !== taskBehavior.behaviorScore;
-    if (
-      !criteriaChanged
-      && !behaviorChanged
-      && Number(evaluation.personalScore || 0) === calculated.personalScore
-      && Number(evaluation.finalScore || 0) === finalScore
-      && evaluation.grade === grade
-    ) {
-      return evaluation;
-    }
-    changed = true;
-    return {
-      ...evaluation,
-      criteriaScores: calculated.criteriaScores,
-      personalScore: calculated.personalScore,
-      ...taskBehavior,
-      finalScore,
-      grade,
-    };
-  });
-  return changed;
-}
-
-function migratePersonalKpiClassification() {
-  if (state.personalKpiClassificationVersion === PERSONAL_KPI_CLASSIFICATION_VERSION) return false;
-  // The migration writes shared KPI records and the catalog version. Only the
-  // Admin account may perform that central update; all other accounts still
-  // receive the live, correctly calculated KPI snapshot for viewing.
-  if (!isAdmin()) return false;
-  recalculateSavedPersonalEvaluationScores();
-  state.personalKpiClassificationVersion = PERSONAL_KPI_CLASSIFICATION_VERSION;
-  return true;
 }
 
 function syncPersonalEvaluationTaskScoresForTask(task, previousTask = null) {
@@ -8491,11 +7605,7 @@ function syncPersonalEvaluationTaskScoresForTask(task, previousTask = null) {
   };
   [task, previousTask].filter(Boolean).forEach((item) => {
     const period = taskPeriod(item);
-    taskParticipantIds(item).forEach((personId) => {
-      addTarget(personId, period);
-      const sectionHead = sectionHeadForPerson(personById(personId));
-      if (sectionHead) addTarget(sectionHead.id, period);
-    });
+    taskParticipantIds(item).forEach((personId) => addTarget(personId, period));
   });
   targets
     .filter((item) => {
@@ -8519,43 +7629,25 @@ function kpiTasksForCriterion(scope, criterionName) {
   if (scope === "department") {
     const departmentId = byId("deptEvalDepartment").value;
     const department = departmentById(departmentId);
-    const isCompletionCriterion = criterionName === departmentCompletionCriterion[0];
-    const tasks = departmentTasksForKpi(departmentId, period)
-      .filter((task) => canViewTaskRecord(task))
-      .filter((task) => isCompletionCriterion || taskMatchesKpiCriterion(task, criterionName))
+    const peopleIds = new Set(state.people.filter((person) => person.departmentId === departmentId).map((person) => person.id));
+    const tasks = state.tasks
+      .filter((task) => taskParticipantIds(task).some((personId) => peopleIds.has(personId)) && taskPeriod(task) === period && canViewTaskRecord(task))
+      .filter((task) => taskMatchesKpiCriterion(task, criterionName))
       .sort(sortKpiDetailTasks);
     return {
       period,
       tasks,
       subject: department?.name || "Phòng chưa rõ",
       scopeLabel: "KPI phòng",
-      emptyText: isCompletionCriterion
-        ? "Chưa có công việc của phòng trong kỳ đã chọn."
-        : "Chưa có công việc trong phòng khớp với tiêu chí này ở kỳ đã chọn.",
+      emptyText: "Chưa có công việc trong phòng khớp với tiêu chí này ở kỳ đã chọn.",
     };
   }
 
   const personId = byId("evalPerson").value;
   const person = personById(personId);
-  const sectionHeadScope = isSectionHeadPerson(person)
-    ? sectionHeadCriterionScope(sectionHeadKpiScopes(personId, period), criterionName)
-    : null;
-  if (sectionHeadScope) {
-    const teamNames = sectionHeadScope.teamMembers?.map((member) => member.name).filter(Boolean) || [];
-    return {
-      period,
-      tasks: sectionHeadScope.tasks.filter((task) => canViewTaskRecord(task)).sort(sortKpiDetailTasks),
-      subject: sectionHeadScope.type === "team"
-        ? `${person?.name || "Trưởng bộ phận/Trưởng nhóm"} · Nhóm quản lý (${teamNames.length} nhân sự)`
-        : `${person?.name || "Trưởng bộ phận/Trưởng nhóm"} · Công việc phụ trách`,
-      scopeLabel: "KPI cá nhân",
-      emptyText: sectionHeadScope.emptyText,
-    };
-  }
-  const taskScope = personalKpiTaskScope(personId, period);
-  const tasks = taskScope.tasks
-    .filter((task) => canViewTaskRecord(task))
-    .filter((task) => taskCountsForPersonalCriterion(task, personId, criterionName))
+  const tasks = state.tasks
+    .filter((task) => taskBelongsToPersonForKpi(task, personId) && taskPeriod(task) === period && canViewTaskRecord(task))
+    .filter((task) => taskMatchesKpiCriterion(task, criterionName))
     .sort(sortKpiDetailTasks);
   return {
     period,
@@ -8567,6 +7659,7 @@ function kpiTasksForCriterion(scope, criterionName) {
 }
 
 function renderKpiTaskDetailItem(task) {
+  const owner = personById(task.ownerId);
   const collaboratorNames = taskCollaboratorNames(task);
   const status = getDueStatus(task);
   const latestReport = latestTaskProgressReport(task);
@@ -8582,7 +7675,7 @@ function renderKpiTaskDetailItem(task) {
         <button class="ghost" data-open-kpi-task="${escapeHtml(task.id)}" type="button">Mở công việc</button>
       </div>
       <div class="kpi-task-detail-meta">
-        <span><strong>Người thực hiện:</strong> ${escapeHtml(taskOwnerName(task))}</span>
+        <span><strong>Người thực hiện:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
         <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
         <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
         <span><strong>Loại:</strong> ${escapeHtml(taskKindLabels[normalizeTaskKind(task)] || "Công việc")}</span>
@@ -8632,13 +7725,13 @@ function taskBehaviorDetailsForCurrentEvaluation(criterionName = "", behaviorRul
 
 function renderTaskBehaviorDetailItem(item) {
   const task = item.task;
+  const owner = personById(task.ownerId);
   const collaboratorNames = taskCollaboratorNames(task);
-  const isReward = item.type === "reward";
   return `
     <article class="kpi-task-detail-item task-behavior-detail-item">
       <div class="section-head">
         <div>
-          <span class="badge ${isReward ? "good" : "bad"}">${isReward ? "Ghi nhận tự động" : "Lỗi tự động"}</span>
+          <span class="badge bad">Lỗi tự động</span>
           <h3>${escapeHtml(item.title || task.title || "Công việc")}</h3>
         </div>
         <button class="ghost criteria-detail-button" data-open-kpi-criterion="${escapeHtml(item.criterionName)}" type="button">Mở tiêu chí</button>
@@ -8646,13 +7739,12 @@ function renderTaskBehaviorDetailItem(item) {
       <div class="kpi-task-detail-meta">
         <span><strong>Tiêu chí KPI theo vị trí:</strong> ${escapeHtml(item.criterionName || "Chưa gắn tiêu chí KPI")}</span>
         <span><strong>Trạng thái:</strong> ${escapeHtml(getDueStatus(task))}</span>
-        ${isReward ? `<span><strong>Đánh giá hoàn thành:</strong> ${taskCompletionReviewValueHtml(task)}</span>` : ""}
-        <span><strong>Người thực hiện:</strong> ${escapeHtml(taskOwnerName(task))}</span>
+        <span><strong>Người thực hiện:</strong> ${escapeHtml(owner?.name || "Chưa rõ")}</span>
         <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
         <span><strong>Ngày hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa cập nhật")}</span>
         <span><strong>Danh mục công việc:</strong> ${escapeHtml(task.category || "Chưa phân loại")}</span>
       </div>
-      <div class="task-violation"><strong>${isReward ? "Ghi nhận:": "Lỗi ghi nhận:"}</strong> ${escapeHtml(item.reasons.join("; "))}</div>
+      <div class="task-violation"><strong>Lỗi ghi nhận:</strong> ${escapeHtml(item.reasons.join("; "))}</div>
       <div class="task-behavior-detail-actions">
         <button class="ghost criteria-detail-button" data-open-kpi-task="${escapeHtml(task.id)}" type="button">Mở công việc</button>
       </div>
@@ -8662,20 +7754,19 @@ function renderTaskBehaviorDetailItem(item) {
 
 function openTaskBehaviorDetailDialog(criterionName = "", behaviorRuleIndex = null) {
   const detail = taskBehaviorDetailsForCurrentEvaluation(criterionName, behaviorRuleIndex);
-  const recordCount = detail.links.reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
+  const violationCount = detail.links.reduce((sum, item) => sum + (item.reasons?.length || 0), 0);
   const criteriaCount = new Set(detail.links.map((item) => item.criterionName).filter(Boolean)).size;
-  const isReward = Number.isInteger(behaviorRuleIndex) && Number(behaviorRules[behaviorRuleIndex]?.[1] || 0) > 0;
-  const title = detail.behaviorRuleName || criterionName || "Ghi nhận tự động từ công việc";
+  const title = detail.behaviorRuleName || criterionName || "Lỗi tự động từ công việc";
   byId("kpiTaskDetailTitle").textContent = title;
   byId("kpiTaskDetailSubtitle").textContent = `KPI cá nhân · ${detail.person?.name || "Chưa chọn nhân sự"} · kỳ ${formatPeriod(detail.period)}`;
   byId("kpiTaskDetailContext").innerHTML = `
-    <span><strong>${detail.links.length}</strong> công việc được ghi nhận</span>
-    <span><strong>${recordCount}</strong> ${isReward ? "ghi nhận tự động" : "lỗi tự động"}</span>
+    <span><strong>${detail.links.length}</strong> công việc có lỗi</span>
+    <span><strong>${violationCount}</strong> lỗi tự động</span>
     <span><strong>${criteriaCount}</strong> tiêu chí KPI liên quan</span>
   `;
   byId("kpiTaskDetailList").innerHTML = detail.links.length
     ? detail.links.map(renderTaskBehaviorDetailItem).join("")
-    : `<div class="empty-state">Chưa có ghi nhận tự động từ công việc thuộc ${escapeHtml(detail.behaviorRuleName || criterionName || "tiêu chí này")} trong kỳ đã chọn.</div>`;
+    : `<div class="empty-state">Chưa có lỗi tự động từ công việc thuộc ${escapeHtml(detail.behaviorRuleName || criterionName || "tiêu chí này")} trong kỳ đã chọn.</div>`;
   byId("kpiTaskDetailDialog").classList.remove("is-hidden");
   byId("kpiTaskDetailDialog").setAttribute("aria-hidden", "false");
 }
@@ -8709,7 +7800,10 @@ function loadDepartmentEvaluationForSelection() {
   const period = byId("deptEvalPeriod").value || state.activePeriod;
   const departmentId = byId("deptEvalDepartment").value;
   const existing = latestDepartmentEvaluation(departmentId, period);
-  renderAdjustmentActorInput("deptEvalReviewer", existing);
+  const defaultReporter = canReportDepartmentEvaluation(departmentId, period) ? currentActorInfo().name : "";
+  const defaultReviewer = isDirector() && canConfirmDepartmentEvaluation(departmentId, period) ? currentActorInfo().name : "";
+  renderDepartmentReporterOptions(existing?.reporter || defaultReporter);
+  renderDepartmentReviewerOptions(existing?.reviewer || defaultReviewer);
   byId("deptEvalRewardDiscipline").value = existing?.rewardDisciplineNote || "";
   byId("deptEvalAdjustmentType").value = normalizeDepartmentAdjustmentType(existing?.adjustmentType);
   byId("deptEvalAdjustmentPoints").value = hasOwnValue(existing, "adjustmentPoints") ? existing.adjustmentPoints : "";
@@ -8734,15 +7828,15 @@ function syncDepartmentScoreFromSelectedPerson() {
     return;
   }
   const department = departmentById(person.departmentId);
-  const departmentEvaluation = person ? departmentEvaluationSnapshot(person.departmentId, period) : null;
-  scoreInput.value = departmentEvaluation ? formatScore(departmentEvaluation.finalScore) : "0";
+  const departmentEvaluation = person ? latestDepartmentEvaluation(person.departmentId, period) : null;
+  scoreInput.value = departmentEvaluation ? formatScore(departmentEvaluation.finalScore) : "";
   scoreInput.dataset.sourceId = departmentEvaluation?.id || "";
   scoreInput.title = departmentEvaluation
-    ? `Tự tổng hợp từ công việc phòng: ${departmentEvaluation.grade}`
-    : "Chưa có công việc của phòng trong kỳ; KPI phòng tạm tính 0 điểm.";
+    ? `Tự lấy từ KPI phòng: ${departmentEvaluation.grade}`
+    : "Chưa có KPI phòng trong kỳ. Nhập KPI phòng trước khi lưu KPI cá nhân.";
   hint.textContent = departmentEvaluation
-    ? `Đã tự tổng hợp ${department?.name || "phòng"} kỳ ${formatPeriod(period)}: ${formatScore(departmentEvaluation.finalScore)} điểm - ${departmentEvaluation.grade}. Không cần xác nhận.`
-    : `Chưa có công việc ${department?.name || ""} kỳ ${formatPeriod(period)}. Không cần xác nhận để lưu KPI cá nhân.`;
+    ? `Đã liên kết ${department?.name || "phòng"} kỳ ${formatPeriod(period)}: ${formatScore(departmentEvaluation.finalScore)} điểm - ${departmentEvaluation.grade}.`
+    : `Chưa có KPI phòng ${department?.name || ""} kỳ ${formatPeriod(period)}. Hãy nhập ở tab KPI phòng trước.`;
   hint.className = departmentEvaluation ? "field-note is-linked" : "field-note is-warning";
   updateScorePreview();
 }
@@ -8756,6 +7850,7 @@ function updateEvaluationFormLock() {
   byId("evaluationForm").querySelectorAll("#criteriaInputs [data-score-input], #evalComment").forEach((input) => {
     input.disabled = !canEditBase;
   });
+  byId("evalReviewer").disabled = !canEditBase || isEmployee();
   byId("evaluationForm").querySelectorAll("#behaviorInputs [data-score-input]").forEach((input) => {
     input.disabled = !canEditBehavior;
   });
@@ -8784,7 +7879,10 @@ function updateDepartmentFormLock() {
   const period = byId("deptEvalPeriod").value || state.activePeriod;
   const canReportData = canReportDepartmentEvaluation(departmentId, period);
   const canConfirm = canConfirmDepartmentEvaluation(departmentId, period);
-  byId("departmentEvaluationForm").querySelectorAll("#deptEvalComment, #deptEvalRewardDiscipline, #deptEvalAdjustmentType, #deptEvalAdjustmentPoints").forEach((input) => {
+  byId("departmentEvaluationForm").querySelectorAll("[data-department-score-input], #deptEvalReporter").forEach((input) => {
+    input.disabled = !canReportData;
+  });
+  byId("departmentEvaluationForm").querySelectorAll("#deptEvalReviewer, #deptEvalComment").forEach((input) => {
     input.disabled = !canConfirm;
   });
   byId("departmentEvaluationForm").querySelector("button[type='submit']").disabled = !canReportData && !canConfirm;
@@ -8820,22 +7918,10 @@ function updateDepartmentScorePreview() {
   updateDepartmentFormLock();
 }
 
-function livePersonalEvaluationRecord(evaluation, contextsByPeriod) {
-  if (!evaluation?.personId || !evaluation?.period) return evaluation;
-  let context = contextsByPeriod.get(evaluation.period);
-  if (!context) {
-    context = buildDashboardKpiContext(evaluation.period);
-    contextsByPeriod.set(evaluation.period, context);
-  }
-  return personalEvaluationSnapshot(evaluation.personId, evaluation.period, context) || evaluation;
-}
-
 function renderEvaluationTable() {
   const tbody = byId("evaluationTable");
-  const contextsByPeriod = new Map();
   const evaluations = [...state.evaluations]
     .filter((evaluation) => personIsVisible(evaluation.personId))
-    .map((evaluation) => livePersonalEvaluationRecord(evaluation, contextsByPeriod))
     .filter((evaluation) => {
       if (!evaluationGradeFilter) return true;
       return evaluation.period === state.activePeriod && (evaluation.grade || gradePersonal(evaluation.finalScore)) === evaluationGradeFilter;
@@ -8893,7 +7979,7 @@ function renderDepartmentEvaluationTable() {
     .filter((evaluation) => visibleDepartmentIds.has(evaluation.departmentId))
     .sort((a, b) => b.period.localeCompare(a.period) || b.finalScore - a.finalScore);
   if (!evaluations.length) {
-    tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"6\"");
+    tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"7\"");
     return;
   }
   tbody.innerHTML = evaluations
@@ -8906,6 +7992,7 @@ function renderDepartmentEvaluationTable() {
           <td><strong>${escapeHtml(department?.name || "Phòng đã xóa")}</strong></td>
           <td><span class="badge ${badgeClass(evaluation.finalScore)}">${formatScore(evaluation.finalScore)}</span>${departmentAdjustmentSummary(evaluation) ? `<br><span class="muted">${escapeHtml(departmentAdjustmentSummary(evaluation))}</span>` : ""}</td>
           <td>${escapeHtml(evaluation.grade)}</td>
+          <td>${escapeHtml(evaluation.reporter || "")}</td>
           <td>${escapeHtml(evaluation.reviewer || "")}</td>
           <td>
             <span class="row-actions">
@@ -9065,14 +8152,12 @@ function renderGradeDistribution(periodEvaluations, eligiblePeople = state.peopl
   `;
 }
 
-function renderDepartmentEffectivenessChart(context = null) {
+function renderDepartmentEffectivenessChart() {
   const eligibleDepartments = visibleDepartmentsForDepartmentEvaluations();
   const items = eligibleDepartments.map((department, index) => {
     const people = state.people.filter((person) => person.departmentId === department.id);
-    const calculatedEvaluation = context?.departmentEvaluationsById?.has(department.id)
-      ? context.departmentEvaluationsById.get(department.id)
-      : departmentEvaluationSnapshot(department.id, state.activePeriod);
-    const evaluation = hasRecordedKpiResult(calculatedEvaluation) ? calculatedEvaluation : undefined;
+    const savedEvaluation = latestDepartmentEvaluation(department.id);
+    const evaluation = hasRecordedKpiResult(savedEvaluation) ? savedEvaluation : undefined;
     const score = evaluation ? kpiResultScore(evaluation) : 0;
     return {
       department,
@@ -9085,7 +8170,7 @@ function renderDepartmentEffectivenessChart(context = null) {
   });
   const scored = items.filter((item) => item.evaluation);
   byId("departmentChartSummary").textContent = scored.length
-    ? `${scored.length}/${eligibleDepartments.length} phòng đã có KPI phòng được tự tổng hợp trong kỳ ${formatMonthPeriod(state.activePeriod)}.`
+    ? `${scored.length}/${eligibleDepartments.length} phòng đã có KPI phòng trong kỳ ${formatMonthPeriod(state.activePeriod)}.`
     : "Chưa có dữ liệu KPI phòng trong kỳ này.";
 
   byId("departmentSummary").innerHTML = items
@@ -9273,7 +8358,8 @@ function evaluationTimelineItems(evaluation) {
 function departmentEvaluationTimelineItems(evaluation) {
   const department = departmentById(evaluation.departmentId);
   const details = [
-    evaluation.reviewer ? `Điều chỉnh điểm: ${evaluation.reviewer}` : "",
+    evaluation.reporter ? `Báo cáo: ${evaluation.reporter}` : "",
+    evaluation.reviewer ? `Xác nhận: ${evaluation.reviewer}` : "",
     departmentAdjustmentSummary(evaluation),
     evaluation.comment || "",
   ]
@@ -9339,7 +8425,7 @@ function taskTimelineItems(task) {
   const projectMeta = projectName ? ` · dự án ${projectName}` : "";
   const qualityMeta = taskHasQualityPercent(task) ? ` · chất lượng ${formatScore(taskQualityPercentValue(task))}%` : "";
   const startMeta = task.startDate ? ` · bắt đầu ${formatTaskStartDate(task)}` : "";
-  const baseMeta = `${taskKindLabels[normalizeTaskKind(task)]}${regularMeta}${projectMeta} · ${taskOwnerName(task)}${collaboratorMeta} · ${status}${startMeta} · hoàn thành ${formatTaskDeadline(task) || "chưa có"}${qualityMeta}`;
+  const baseMeta = `${taskKindLabels[normalizeTaskKind(task)]}${regularMeta}${projectMeta} · ${owner?.name || "Chưa rõ"}${collaboratorMeta} · ${status}${startMeta} · hoàn thành ${formatTaskDeadline(task) || "chưa có"}${qualityMeta}`;
   const base = {
     period: taskPeriod(task),
     targetType: "task",
@@ -9369,7 +8455,7 @@ function taskTimelineItems(task) {
       type: "Giao việc",
       timestamp: task.assignedAt,
       actorName: task.assignedByName || task.createdBy || base.actorName,
-      meta: `Người giao: ${task.assignedByName || task.createdBy || "Chưa rõ"} · Người nhận: ${taskOwnerName(task)} · ${task.category || "Chưa phân loại"}${projectMeta}`,
+      meta: `Người giao: ${task.assignedByName || task.createdBy || "Chưa rõ"} · Người nhận: ${owner?.name || "Chưa rõ"} · ${task.category || "Chưa phân loại"}${projectMeta}`,
       badgeClass: "warn",
     });
   }
@@ -9552,6 +8638,7 @@ function renderHistory() {
   if (type === "department") {
     const department = departmentById(targetId);
     const people = state.people.filter((person) => person.departmentId === targetId);
+    const peopleIds = people.map((person) => person.id);
     const eligiblePeopleIds = people.filter(isKpiEligiblePerson).map((person) => person.id);
     const departmentEvals = isKpiExemptDepartment(targetId)
       ? []
@@ -9610,10 +8697,9 @@ function renderHistory() {
 
 function renderDashboard(options = {}) {
   byId("dashboardPeriodLabel").textContent = formatMonthPeriod(state.activePeriod || currentMonth());
-  const kpiContext = buildDashboardKpiContext(state.activePeriod);
   const visiblePeople = visiblePeopleForEvaluation();
   const visiblePersonIds = new Set(visiblePeople.map((person) => person.id));
-  const periodEvaluations = personalEvaluationsForDashboard(state.activePeriod, kpiContext).filter(
+  const periodEvaluations = evaluationsForPeriod().filter(
     (evaluation) => visiblePersonIds.has(evaluation.personId) && hasRecordedKpiResult(evaluation),
   );
   const avg = averageScore(periodEvaluations);
@@ -9653,8 +8739,7 @@ function renderDashboard(options = {}) {
   periodEvaluations
     .filter((item) => kpiResultScore(item) < 70)
     .forEach((item) => alerts.push({ text: `KPI dưới 70: ${personById(item.personId)?.name || "nhân sự đã xóa"} - ${formatScore(kpiResultScore(item))}`, personId: item.personId }));
-  visibleDepartmentsForDepartmentEvaluations()
-    .map((department) => kpiContext.departmentEvaluationsById.get(department.id))
+  departmentEvaluationsForPeriod()
     .filter((item) => hasRecordedKpiResult(item) && kpiResultScore(item) < 65)
     .forEach((item) => alerts.push({ text: `KPI phòng dưới mức khá: ${departmentById(item.departmentId)?.name || "phòng đã xóa"} - ${formatScore(kpiResultScore(item))}`, departmentId: item.departmentId }));
   byId("alertList").classList.toggle("empty-state", !alerts.length);
@@ -9673,7 +8758,7 @@ function renderDashboard(options = {}) {
         .join("")
     : "Chưa có cảnh báo.";
 
-  renderDepartmentEffectivenessChart(kpiContext);
+  renderDepartmentEffectivenessChart();
   if (options.animate) animateDashboardCharts();
   else finishDashboardChartAnimations();
 }
@@ -9757,16 +8842,7 @@ function kpiCatalogDepartmentMarkup(department) {
         </label>
         <button class="ghost kpi-catalog-delete" data-kpi-catalog-action="remove-department" data-kpi-catalog-record="${escapeHtml(department.id)}" type="button">Xóa phòng</button>
       </div>
-      <div class="kpi-catalog-criteria kpi-catalog-criteria-locked">
-        <div class="kpi-catalog-criteria-head">
-          <span>Tiêu chí KPI phòng tự động</span>
-          <span>Tổng trọng số: <strong class="kpi-catalog-total">${department.kpiExempt ? "0" : "100"}</strong></span>
-        </div>
-        <div class="kpi-catalog-criterion">
-          <strong>${department.kpiExempt ? "Miễn đánh giá KPI" : departmentCompletionCriterion[0]}</strong>
-          <span>${department.kpiExempt ? "" : "Trọng số 100 · Kế hoạch và thực hiện tự tổng hợp từ công việc"}</span>
-        </div>
-      </div>
+      ${kpiCatalogCriteriaMarkup("department", department.id, department.criteria)}
     </article>
   `;
 }
@@ -10065,31 +9141,14 @@ function createKpiCatalogDraft() {
   const customization = normalizeSystemCustomization(state.systemCustomization);
   return {
     departments: cloneKpiCatalog(state.departments),
-    // Use the effective runtime catalog so the Admin always sees the current
-    // Trưởng bộ phận/Trưởng nhóm criteria, including before the server marker
-    // has been upgraded.
-    roles: cloneKpiCatalog(roles),
+    roles: cloneKpiCatalog(state.roles),
     behaviorRules: cloneKpiCatalog(state.behaviorRules),
     kpiParameters: cloneKpiCatalog(customization.kpiParameters),
   };
 }
 
-async function openKpiCatalogManager() {
+function openKpiCatalogManager() {
   if (!isAdmin()) return;
-  if (sharedSync.session && sharedSync.available === true && !sharedSync.dirty && !sharedSync.inFlight) {
-    try {
-      const { response, payload } = await sharedJsonRequest("state", {
-        query: sharedSync.revision === null ? {} : { revision: String(sharedSync.revision) },
-      });
-      if (response.ok && payload?.state && Number(payload.revision) !== sharedSync.revision) {
-        sharedSync.revision = Number(payload.revision) || sharedSync.revision;
-        sharedSync.initialized = sharedSync.revision > 0;
-        await adoptSharedState(payload.state, { render: false });
-      }
-    } catch {
-      // The current local catalog remains usable while the connection is unavailable.
-    }
-  }
   kpiCatalogDraft = createKpiCatalogDraft();
   setKpiCatalogNotice();
   renderKpiCatalogManager();
@@ -10103,7 +9162,7 @@ function resetKpiCatalogManager() {
   renderKpiCatalogManager();
 }
 
-async function saveKpiCatalogManager() {
+function saveKpiCatalogManager() {
   if (!isAdmin() || !kpiCatalogDraft) return;
   const validationError = kpiCatalogValidationError(kpiCatalogDraft);
   if (validationError) {
@@ -10134,7 +9193,6 @@ async function saveKpiCatalogManager() {
     kpiParameters: kpiCatalogDraft.kpiParameters,
   });
   applyRuntimeKpiCatalogs(state);
-  recalculateSavedPersonalEvaluationScores();
   logActivity({
     action: "Cập nhật",
     module: "Quy chế",
@@ -10144,42 +9202,10 @@ async function saveKpiCatalogManager() {
     details: `Phòng: ${state.departments.length}; vị trí: ${state.roles.length}; danh mục khen thưởng/kỷ luật: ${state.behaviorRules.length}; đã cập nhật các hệ số công thức KPI.`,
   });
   saveState();
-  const saveButton = byId("saveKpiCatalogManager");
-  if (saveButton) saveButton.disabled = true;
-  setKpiCatalogNotice("Đang lưu danh mục và kiểm tra dữ liệu đồng bộ...");
-  try {
-    if (sharedSync.session && !isOfflineFileRuntime()) {
-      const syncResult = await flushSharedStateSync();
-      if (syncResult?.denied?.length || syncResult?.conflict) {
-        kpiCatalogDraft = createKpiCatalogDraft();
-        renderAll();
-        renderKpiCatalogManager();
-        setKpiCatalogNotice("Một số mục vừa được thay đổi đồng thời trên thiết bị khác. Hệ thống đã giữ dữ liệu hợp lệ mới nhất; hãy kiểm tra lại mục đang chỉnh sửa trước khi lưu.", true);
-        return;
-      }
-      if (!syncResult?.ok && syncResult?.reason === "offline") {
-        kpiCatalogDraft = createKpiCatalogDraft();
-        setKpiCatalogNotice("Đã lưu danh mục trên thiết bị này. Hệ thống sẽ tự đồng bộ khi kết nối máy chủ được khôi phục.");
-        renderAll();
-        renderKpiCatalogManager();
-        return;
-      }
-      if (!syncResult?.ok) {
-        kpiCatalogDraft = createKpiCatalogDraft();
-        renderAll();
-        renderKpiCatalogManager();
-        setKpiCatalogNotice("Chưa thể xác nhận lưu trên máy chủ. Danh mục được giữ trên thiết bị này và sẽ tự đồng bộ khi có kết nối.", true);
-        return;
-      }
-    }
-    kpiCatalogDraft = createKpiCatalogDraft();
-    setKpiCatalogNotice("Đã lưu danh mục. Dữ liệu mới sẽ được đồng bộ tới các tài khoản theo phân quyền.");
-    renderAll();
-    renderKpiCatalogManager();
-  } finally {
-    const currentSaveButton = byId("saveKpiCatalogManager");
-    if (currentSaveButton) currentSaveButton.disabled = false;
-  }
+  kpiCatalogDraft = createKpiCatalogDraft();
+  setKpiCatalogNotice("Đã lưu danh mục. Dữ liệu mới sẽ được đồng bộ tới các tài khoản theo phân quyền.");
+  renderAll();
+  renderKpiCatalogManager();
 }
 
 const supportRequestStatusLabels = {
@@ -10283,10 +9309,7 @@ function renderSupportRequestCard(request) {
         <label>Phản hồi của Admin
           <textarea name="message" rows="3" maxlength="4000" placeholder="Nhập hướng dẫn hoặc kết quả xử lý..."></textarea>
         </label>
-        <div class="support-admin-actions">
-          <button type="submit">Cập nhật hỗ trợ</button>
-          <button class="ghost danger-action" data-delete-support-request="${escapeHtml(request.id)}" type="button">Xóa yêu cầu</button>
-        </div>
+        <button type="submit">Cập nhật hỗ trợ</button>
       </form>
     `
     : canReply
@@ -10444,26 +9467,6 @@ function updateSupportRequest(requestId, messageText, nextStatus = "") {
     title: updated.title || "Yêu cầu hỗ trợ",
     details: isAdmin() ? `Trạng thái: ${status}.` : "Đã bổ sung thông tin cho yêu cầu hỗ trợ.",
   });
-  saveState();
-  renderAll();
-}
-
-function deleteSupportRequest(requestId) {
-  if (!isAdmin()) return;
-  const request = (state.supportRequests || []).find((item) => item.id === requestId);
-  if (!request) return;
-  if (!confirm(`Xóa yêu cầu hỗ trợ "${request.title || "Chưa có tiêu đề"}"? Toàn bộ nội dung trao đổi sẽ bị xóa trên hệ thống.`)) return;
-  registerDeletedId(requestId);
-  state.supportRequests = state.supportRequests.filter((item) => item.id !== requestId);
-  logActivity({
-    action: "Xóa",
-    module: "Trợ giúp",
-    targetType: "support-request",
-    targetId: requestId,
-    title: request.title || "Yêu cầu hỗ trợ",
-    details: `Xóa yêu cầu hỗ trợ của ${request.createdBy || "tài khoản"}.`,
-  });
-  closeSupportRequestDialog();
   saveState();
   renderAll();
 }
@@ -12862,7 +11865,6 @@ function populatePersonForm(person) {
   byId("personGender").value = person.gender || "";
   byId("personDepartment").value = person.departmentId;
   updateRoleOptions(person.roleId);
-  updatePersonSectionHeadOptions(person.sectionHeadId);
   byId("personContract").value = person.contract;
   byId("personQualification").value = person.qualification || "";
   byId("personContractTerm").value = person.contractTerm || "";
@@ -12886,6 +11888,7 @@ function populateTaskForm(task) {
   byId("taskTitle").value = task.title;
   renderTaskProjectOptions();
   byId("taskProjectId").value = projectIdForTask(task);
+  renderTaskProjectPickerOptions();
   ensureTaskOwnerOption(task);
   byId("taskOwner").value = task.ownerId;
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
@@ -13041,6 +12044,14 @@ function updateTaskFormLock(task = null) {
     .forEach((input) => {
       input.disabled = !canEditDetails;
     });
+  const projectPicker = byId("taskProjectPicker");
+  if (projectPicker) {
+    projectPicker.classList.toggle("is-disabled", !canEditDetails);
+    projectPicker.setAttribute("aria-disabled", String(!canEditDetails));
+    byId("taskProjectToggle").disabled = !canEditDetails;
+    byId("taskProjectSearch").disabled = !canEditDetails;
+    if (!canEditDetails) setTaskProjectPickerOpen(false);
+  }
   const ownerPickerLocked = !canEditDetails || (isEmployee() && kind === TASK_KIND_REGULAR);
   const ownerPicker = byId("taskOwnerPicker");
   if (ownerPicker) {
@@ -13348,7 +12359,8 @@ function populateDepartmentEvaluationForm(evaluation) {
   byId("deptEvalPeriod").value = evaluation.period;
   renderDepartmentEvaluationOptions(evaluation.departmentId);
   byId("deptEvalDepartment").value = evaluation.departmentId;
-  renderAdjustmentActorInput("deptEvalReviewer", evaluation);
+  renderDepartmentReporterOptions(evaluation.reporter || "");
+  renderDepartmentReviewerOptions(evaluation.reviewer || "");
   byId("deptEvalRewardDiscipline").value = evaluation.rewardDisciplineNote || "";
   byId("deptEvalAdjustmentType").value = normalizeDepartmentAdjustmentType(evaluation.adjustmentType);
   byId("deptEvalAdjustmentPoints").value = hasOwnValue(evaluation, "adjustmentPoints") ? evaluation.adjustmentPoints : "";
@@ -13362,7 +12374,7 @@ function populateEvaluationForm(evaluation) {
   if (!evaluation) return;
   byId("evalPeriod").value = evaluation.period;
   byId("evalPerson").value = evaluation.personId;
-  renderAdjustmentActorInput("evalReviewer", evaluation);
+  byId("evalReviewer").value = evaluation.reviewer || "";
   byId("evalComment").value = evaluation.comment || "";
   syncDepartmentScoreFromSelectedPerson();
   renderCriteriaInputs(evaluation.criteriaScores);
@@ -13376,7 +12388,7 @@ function loadEvaluationForSelection() {
   const period = byId("evalPeriod").value || state.activePeriod;
   const personId = byId("evalPerson").value;
   const existing = latestEvaluation(personId, period);
-  renderAdjustmentActorInput("evalReviewer", existing);
+  byId("evalReviewer").value = existing?.reviewer || "";
   byId("evalComment").value = existing?.comment || "";
   syncDepartmentScoreFromSelectedPerson();
   renderCriteriaInputs(existing?.criteriaScores || {});
@@ -13526,20 +12538,10 @@ function openDashboardDepartmentEvaluationDetail(departmentId) {
 
 function openDashboardPersonalEvaluationDetail(evaluationId) {
   if (!evaluationId || !canAccessView("evaluations")) return;
-  let evaluation = state.evaluations.find((item) => item.id === evaluationId);
-  if (!evaluation && String(evaluationId).startsWith("auto-personal-evaluation:")) {
-    const [, personId, period] = String(evaluationId).match(/^auto-personal-evaluation:(.+):(\d{4}-\d{2})$/) || [];
-    evaluation = personalEvaluationSnapshot(personId, period);
-  }
+  const evaluation = state.evaluations.find((item) => item.id === evaluationId);
   if (!evaluation || !personIsVisible(evaluation.personId)) return;
   clearDashboardDrillFilters();
-  if (evaluation.autoCalculated) {
-    byId("evalPeriod").value = evaluation.period;
-    byId("evalPerson").value = evaluation.personId;
-    loadEvaluationForSelection();
-  } else {
-    populateEvaluationForm(evaluation);
-  }
+  populateEvaluationForm(evaluation);
   renderEvaluationTable();
   switchView("evaluations");
   focusEditForm("evaluationForm", "evalPeriod");
@@ -13663,6 +12665,8 @@ function resetTaskForm() {
   byId("taskId").value = "";
   renderTaskProjectOptions();
   byId("taskProjectId").value = "";
+  renderTaskProjectPickerOptions();
+  setTaskProjectPickerOpen(false);
   byId("taskCollaborators").innerHTML = "";
   setTaskOwnerPickerOpen(false);
   setTaskCollaboratorPickerOpen(false);
@@ -13773,6 +12777,7 @@ function seedDemoData() {
       criteriaScores: {},
       finalScore: score,
       grade: gradeDepartment(score),
+      reporter: "Trưởng phòng mẫu",
       reviewer: "Giám đốc",
       comment: "Dữ liệu mẫu phục vụ chạy thử KPI phòng.",
     }));
@@ -13831,10 +12836,38 @@ function loginGuardEntryKey(username) {
   return String(username || "").trim().toLowerCase().slice(0, 96) || "anonymous";
 }
 
+function loginGuardRemainingSeconds(username) {
+  const entry = readLoginGuard()[loginGuardEntryKey(username)];
+  const lockedUntil = Number(entry?.lockedUntil || 0);
+  return lockedUntil > Date.now() ? Math.ceil((lockedUntil - Date.now()) / 1000) : 0;
+}
+
+function recordLocalLoginFailure(username) {
+  const now = Date.now();
+  const guard = readLoginGuard();
+  const key = loginGuardEntryKey(username);
+  const previous = guard[key];
+  const entry = !previous || Number(previous.windowStartedAt || 0) < now - LOGIN_GUARD_WINDOW_MS
+    ? { count: 0, windowStartedAt: now, lockedUntil: 0 }
+    : previous;
+  entry.count = Number(entry.count || 0) + 1;
+  if (entry.count >= LOGIN_GUARD_MAX_FAILURES) entry.lockedUntil = now + LOGIN_GUARD_LOCK_MS;
+  guard[key] = entry;
+  Object.keys(guard).forEach((entryKey) => {
+    const value = guard[entryKey];
+    if (Number(value?.lockedUntil || 0) <= now && Number(value?.windowStartedAt || 0) < now - LOGIN_GUARD_WINDOW_MS) delete guard[entryKey];
+  });
+  writeLoginGuard(guard);
+}
+
 function clearLocalLoginFailures(username) {
   const guard = readLoginGuard();
   delete guard[loginGuardEntryKey(username)];
   writeLoginGuard(guard);
+}
+
+function isCredentialError(message) {
+  return /invalid username or password|sai tài khoản hoặc mật khẩu/i.test(String(message || ""));
 }
 
 function renderApplicationIdentity() {
@@ -13845,116 +12878,20 @@ function renderApplicationIdentity() {
 
 renderApplicationIdentity();
 
-function offlineTestSetupAvailable() {
-  return isOfflineFileRuntime();
-}
-
-function closeOfflineTestSetupDialog() {
-  closeModal("offlineTestSetupDialog");
-  byId("offlineTestSetupError").textContent = "";
-}
-
-function openOfflineTestSetupDialog() {
-  if (!offlineTestSetupAvailable()) return;
-  const existingAdmin = (state.accounts || []).find((account) => account?.role === "admin");
-  if (existingAdmin && !existingAdmin.offlineTestOnly) {
-    byId("loginError").textContent = "Bản kiểm thử này đã có tài khoản Admin. Hãy đăng nhập bằng tài khoản đó hoặc xóa dữ liệu trình duyệt của bản file:// để khởi tạo lại.";
-    return;
-  }
-  byId("offlineTestSetupForm").reset();
-  byId("offlineTestUsername").value = existingAdmin?.username || "admin-test";
-  byId("offlineTestSetupError").textContent = "";
-  openModal("offlineTestSetupDialog");
-  window.setTimeout(() => byId("offlineTestUsername")?.focus(), 0);
-}
-
-async function createOfflineTestAdmin(event) {
-  event.preventDefault();
-  if (!offlineTestSetupAvailable()) return;
-  const username = byId("offlineTestUsername").value.trim();
-  const password = byId("offlineTestPassword").value;
-  const confirmation = byId("offlineTestPasswordConfirm").value;
-  const error = byId("offlineTestSetupError");
-  error.textContent = "";
-
-  if (!/^[A-Za-z0-9._-]{3,96}$/.test(username)) {
-    error.textContent = "Tên đăng nhập gồm 3-96 ký tự: chữ cái, số, dấu chấm, gạch dưới hoặc gạch ngang.";
-    return;
-  }
-  if (!isStrongAccountPassword(password)) {
-    error.textContent = "Mật khẩu cần từ 10 ký tự và có ít nhất 3 nhóm: chữ hoa, chữ thường, số, ký tự đặc biệt.";
-    return;
-  }
-  if (password !== confirmation) {
-    error.textContent = "Xác nhận mật khẩu chưa khớp.";
-    return;
-  }
-  const usernameKey = normalizedLoginUsername(username);
-  const duplicate = (state.accounts || []).find(
-    (account) => normalizedLoginUsername(account?.username) === usernameKey && !account.offlineTestOnly,
-  );
-  if (duplicate) {
-    error.textContent = "Tên đăng nhập này đã có trong dữ liệu kiểm thử. Hãy chọn tên khác.";
-    return;
-  }
-
-  state.accounts = (state.accounts || []).filter((account) => !account?.offlineTestOnly);
-  const timestamp = new Date().toISOString();
-  const account = {
-    id: uid("offline-admin"),
-    username,
-    password: "",
-    displayName: "Admin kiểm thử offline",
-    role: "admin",
-    personId: "",
-    departmentId: "",
-    accessGrants: {},
-    offlineTestOnly: true,
-    createdAt: timestamp,
-    createdBy: "Khởi tạo kiểm thử offline",
-    updatedAt: timestamp,
-    updatedBy: "Khởi tạo kiểm thử offline",
-  };
-  // Store only a one-way verifier. The password is never retained in the local test state.
-  await rememberOfflineLogin({ ...account, password }, password);
-  state.accounts.push(account);
-  cacheOfflineAccountDirectory(state.accounts);
-  persistState();
-  sharedSync.session = true;
-  sharedSync.accountId = account.id;
-  sharedSync.available = null;
-  sharedSync.initialized = null;
-  sharedSync.sessionToken = "";
-  localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-  localStorage.setItem(SESSION_KEY, account.id);
-  birthdayCelebrationDisplayKey = "";
-  closeOfflineTestSetupDialog();
-  byId("loginForm").reset();
-  renderAll();
-  showSystemToast("Đã mở môi trường kiểm thử offline", "Tài khoản Admin kiểm thử chỉ hoạt động trên bản file:// của trình duyệt này và không đồng bộ lên máy chủ.", { tone: "success" });
-}
-
-byId("openOfflineTestSetup")?.classList.toggle("is-hidden", !offlineTestSetupAvailable());
-byId("openOfflineTestSetup")?.addEventListener("click", openOfflineTestSetupDialog);
-byId("offlineTestSetupForm")?.addEventListener("submit", createOfflineTestAdmin);
-byId("closeOfflineTestSetup")?.addEventListener("click", closeOfflineTestSetupDialog);
-byId("cancelOfflineTestSetup")?.addEventListener("click", closeOfflineTestSetupDialog);
-byId("offlineTestSetupDialog")?.addEventListener("click", (event) => {
-  if (event.target === byId("offlineTestSetupDialog")) closeOfflineTestSetupDialog();
-});
-
 // 🌟 Tự động kéo dữ liệu mây MỚI NHẤT ngay khi Đăng nhập thành công
 byId("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const username = byId("loginUsername").value.trim();
   const password = byId("loginPassword").value;
   byId("loginError").textContent = "";
-  // Browser-level lockouts caused valid users to be rejected after a few
-  // mistyped attempts. Authentication and its light throttle are centralised
-  // on the server; clear only the obsolete local marker from older versions.
-  clearLocalLoginFailures(username);
+  const localRetryAfter = loginGuardRemainingSeconds(username);
+  if (localRetryAfter > 0) {
+    byId("loginError").textContent = `Đăng nhập tạm khóa trên thiết bị này. Vui lòng thử lại sau ${localRetryAfter} giây.`;
+    return;
+  }
   const sharedLogin = await loginSharedSession(username, password);
   if (sharedLogin.error) {
+    if (isCredentialError(sharedLogin.error)) recordLocalLoginFailure(username);
     byId("loginError").textContent = sharedLogin.error;
     return;
   }
@@ -13966,7 +12903,8 @@ byId("loginForm").addEventListener("submit", async (event) => {
     ? state.accounts.find((item) => String(item.id || "") === String(sharedLogin.offlineAccountId || ""))
     : state.accounts.find((item) => String(item.username || "").toLowerCase() === normalizedUsername && (remoteSupabaseLogin || item.password === password));
   if (!account) {
-    byId("loginError").textContent = "Máy chủ đã xác thực nhưng chưa tải được hồ sơ tài khoản. Vui lòng thử lại; lần thử này không bị tính là nhập sai mật khẩu.";
+    recordLocalLoginFailure(username);
+    byId("loginError").textContent = "Sai tài khoản hoặc mật khẩu.";
     return;
   }
   if (account.disabled) {
@@ -13977,12 +12915,6 @@ byId("loginForm").addEventListener("submit", async (event) => {
   clearLocalLoginFailures(username);
   localStorage.setItem(SESSION_KEY, account.id);
   birthdayCelebrationDisplayKey = "";
-  const sectionHeadCatalogMigrated = migrateSectionHeadKpiCatalog();
-  const personalKpiMigrated = migratePersonalKpiClassification();
-  if (sectionHeadCatalogMigrated || personalKpiMigrated) {
-    saveState();
-    if (sharedSync.session && !isOfflineFileRuntime()) await flushSharedStateSync();
-  }
   byId("loginForm").reset();
   renderAll();
   startAccountPresenceMonitoring();
@@ -14081,11 +13013,6 @@ byId("help")?.addEventListener("submit", (event) => {
 byId("closeSupportRequestDetail")?.addEventListener("click", closeSupportRequestDialog);
 
 byId("supportRequestDialog")?.addEventListener("click", (event) => {
-  const deleteButton = event.target.closest("[data-delete-support-request]");
-  if (deleteButton) {
-    deleteSupportRequest(deleteButton.dataset.deleteSupportRequest);
-    return;
-  }
   if (event.target === byId("supportRequestDialog")) closeSupportRequestDialog();
 });
 
@@ -14848,11 +13775,7 @@ byId("archiveDetailDialog").addEventListener("click", async (event) => {
   }
 });
 
-byId("personDepartment").addEventListener("change", () => {
-  updateRoleOptions();
-  updatePersonSectionHeadOptions();
-});
-byId("personRole").addEventListener("change", () => updatePersonSectionHeadOptions());
+byId("personDepartment").addEventListener("change", () => updateRoleOptions());
 byId("personSearch").addEventListener("input", debounce(renderPeopleTable, 200));
 byId("clearPersonSearch").addEventListener("click", () => {
   byId("personSearch").value = "";
@@ -14871,19 +13794,12 @@ byId("personForm").addEventListener("submit", (event) => {
     return;
   }
   const id = byId("personId").value || uid("person");
-  const personDraft = {
-    id,
-    departmentId: byId("personDepartment").value,
-    roleId: byId("personRole").value,
-  };
-  const sectionHeadId = normalizeSectionHeadIdForPerson(personDraft, byId("personSectionHead").value);
   const record = {
     id,
     name: byId("personName").value.trim(),
     gender: byId("personGender").value,
-    departmentId: personDraft.departmentId,
-    roleId: personDraft.roleId,
-    sectionHeadId,
+    departmentId: byId("personDepartment").value,
+    roleId: byId("personRole").value,
     contract: byId("personContract").value,
     qualification: byId("personQualification").value.trim(),
     contractTerm: byId("personContractTerm").value.trim(),
@@ -14902,9 +13818,6 @@ byId("personForm").addEventListener("submit", (event) => {
   const auditedRecord = applyRecordAudit(record, existing);
   if (index >= 0) state.people[index] = auditedRecord;
   else state.people.push(auditedRecord);
-  normalizeSectionHeadManagementLinks();
-  recalculateSavedPersonalEvaluationScores();
-  const sectionHead = sectionHeadForPerson(auditedRecord);
   logActivity({
     action: existing ? "Cập nhật" : "Tạo",
     module: "Nhân sự",
@@ -14913,7 +13826,7 @@ byId("personForm").addEventListener("submit", (event) => {
     personId: id,
     departmentId: auditedRecord.departmentId,
     title: auditedRecord.name,
-    details: `${departmentById(auditedRecord.departmentId)?.name || ""} · ${roleById(auditedRecord.roleId)?.name || ""}${sectionHead ? ` · nhóm ${sectionHead.name}` : ""}`,
+    details: `${departmentById(auditedRecord.departmentId)?.name || ""} · ${roleById(auditedRecord.roleId)?.name || ""}`,
   });
   syncPersonnelAccounts();
   saveState();
@@ -15097,7 +14010,6 @@ byId("refreshAccountPresence").addEventListener("click", () => {
 byId("accountUsageDepartmentFilter").addEventListener("change", (event) => {
   if (!isAdmin()) return;
   accountPresence.usageDepartmentId = String(event.target.value || "");
-  renderAccountTaskCreationStatistics();
   renderAccountUsageDetails();
 });
 
@@ -15201,7 +14113,6 @@ byId("peopleTable").addEventListener("click", (event) => {
     byId("personGender").value = person.gender || "";
     byId("personDepartment").value = person.departmentId;
     updateRoleOptions(person.roleId);
-    updatePersonSectionHeadOptions(person.sectionHeadId);
     byId("personContract").value = person.contract;
     byId("personQualification").value = person.qualification || "";
     byId("personContractTerm").value = person.contractTerm || "";
@@ -15221,8 +14132,6 @@ byId("peopleTable").addEventListener("click", (event) => {
     registerDeletedId(deleteId); // 🔥 THÊM DÒNG NÀY Ở ĐÂY
     const person = personById(deleteId);
     state.people = state.people.filter((item) => item.id !== deleteId);
-    normalizeSectionHeadManagementLinks();
-    recalculateSavedPersonalEvaluationScores();
     logActivity({
       action: "Xóa",
       module: "Nhân sự",
@@ -15579,7 +14488,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     departmentId: owner?.departmentId || "",
     period: taskPeriod(auditedRecord),
     title: auditedRecord.title,
-    details: `${taskKindLabels[recordKind]}${recordKind === TASK_KIND_REGULAR ? ` · ${taskWorkMeta(auditedRecord)}` : ""}${projectMeta} · ${taskOwnerName(auditedRecord, "Chưa rõ người nhận")}${collaboratorMeta} · ${normalizeTaskStatus(auditedRecord.status)} · hoàn thành ${formatTaskDeadline(auditedRecord) || "chưa có"}${taskHasQualityPercent(auditedRecord) ? ` · chất lượng ${formatScore(taskQualityPercentValue(auditedRecord))}%` : ""}`,
+    details: `${taskKindLabels[recordKind]}${recordKind === TASK_KIND_REGULAR ? ` · ${taskWorkMeta(auditedRecord)}` : ""}${projectMeta} · ${owner?.name || "Chưa rõ người nhận"}${collaboratorMeta} · ${normalizeTaskStatus(auditedRecord.status)} · hoàn thành ${formatTaskDeadline(auditedRecord) || "chưa có"}${taskHasQualityPercent(auditedRecord) ? ` · chất lượng ${formatScore(taskQualityPercentValue(auditedRecord))}%` : ""}`,
     score: taskHasQualityPercent(auditedRecord)
       ? `Tiến độ ${formatScore(auditedRecord.progress)}% · Chất lượng ${formatScore(taskQualityPercentValue(auditedRecord))}%`
       : `${formatScore(auditedRecord.progress)}%`,
@@ -15723,6 +14632,25 @@ byId("taskProjectCatalogList").addEventListener("click", (event) => {
   const deleteProjectId = event.target.closest("[data-delete-task-project]")?.dataset.deleteTaskProject;
   if (deleteProjectId) deleteTaskProjectCatalog(deleteProjectId);
 });
+byId("taskProjectToggle")?.addEventListener("click", () => {
+  setTaskProjectPickerOpen(!isTaskProjectPickerOpen());
+});
+byId("taskProjectSearch")?.addEventListener("input", debounce(filterTaskProjectPickerOptions, 80));
+byId("taskProjectSearch")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  setTaskProjectPickerOpen(false);
+  byId("taskProjectToggle")?.focus();
+});
+byId("taskProjectOptions")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-task-project-value]");
+  if (!button || byId("taskProjectId")?.disabled) return;
+  byId("taskProjectId").value = button.dataset.taskProjectValue || "";
+  byId("taskProjectId").dispatchEvent(new Event("change", { bubbles: true }));
+  renderTaskProjectPickerOptions();
+  setTaskProjectPickerOpen(false);
+  byId("taskProjectToggle")?.focus();
+});
+byId("taskProjectId")?.addEventListener("change", renderTaskProjectPickerOptions);
 byId("taskOwner").addEventListener("change", () => {
   byId("taskCategory").value = "";
   updateTaskOwnerOptions();
@@ -15759,11 +14687,15 @@ byId("taskCollaboratorToggle").addEventListener("click", () => {
 document.addEventListener("pointerdown", (event) => {
   const collaboratorPicker = byId("taskCollaboratorPicker");
   const ownerPicker = byId("taskOwnerPicker");
+  const projectPicker = byId("taskProjectPicker");
   if (isTaskCollaboratorPickerOpen() && !collaboratorPicker?.contains(event.target)) {
     setTaskCollaboratorPickerOpen(false);
   }
   if (isTaskOwnerPickerOpen() && !ownerPicker?.contains(event.target)) {
     setTaskOwnerPickerOpen(false);
+  }
+  if (isTaskProjectPickerOpen() && !projectPicker?.contains(event.target)) {
+    setTaskProjectPickerOpen(false);
   }
 });
 byId("taskStatus").addEventListener("change", () => {
@@ -15995,23 +14927,31 @@ byId("departmentEvaluationForm").addEventListener("submit", (event) => {
     return;
   }
   const existing = latestDepartmentEvaluation(departmentId, period);
-  const adjustmentActor = currentAdjustmentActor();
-  const calculated = calculateDepartmentEvaluationFromForm();
-  const adjustmentType = canConfirm
-    ? calculated.adjustmentType
-    : normalizeDepartmentAdjustmentType(existing?.adjustmentType);
-  const adjustmentPoints = canConfirm
-    ? calculated.adjustmentPoints
-    : Math.max(0, Number(existing?.adjustmentPoints || 0));
-  const adjustmentScore = departmentAdjustmentSignedScore(adjustmentType, adjustmentPoints);
-  const result = {
-    ...calculated,
-    adjustmentType,
-    adjustmentPoints,
-    adjustmentScore,
-    rewardDisciplineNote: canConfirm ? calculated.rewardDisciplineNote : existing?.rewardDisciplineNote || "",
-    finalScore: calculateDepartmentFinalScore(calculated.criteriaScore, adjustmentScore),
-  };
+  if (!existing && !canReportData) {
+    alert("Chưa có số liệu KPI phòng để xác nhận.");
+    return;
+  }
+  const reporter = byId("deptEvalReporter").value.trim();
+  if (canReportData && !isValidDepartmentReporterName(departmentId, reporter)) {
+    alert("Người báo cáo phải là Trưởng phòng hoặc Phó phòng của phòng được chọn.");
+    return;
+  }
+  const reviewer = byId("deptEvalReviewer").value.trim();
+  if (canConfirm && reviewer && !isValidDepartmentReviewerName(reviewer)) {
+    alert("Người xác nhận phải thuộc Ban giám đốc.");
+    return;
+  }
+  const result = canReportData
+    ? calculateDepartmentEvaluationFromForm()
+    : {
+        criteriaScores: existing?.criteriaScores || {},
+        criteriaScore: existing?.criteriaScore || existing?.finalScore || 0,
+        adjustmentType: normalizeDepartmentAdjustmentType(existing?.adjustmentType),
+        adjustmentPoints: existing?.adjustmentPoints || 0,
+        adjustmentScore: existing?.adjustmentScore || 0,
+        rewardDisciplineNote: existing?.rewardDisciplineNote || "",
+        finalScore: existing?.finalScore || 0,
+      };
   const record = applyRecordAudit({
     id: existing?.id || uid("dept-eval"),
     period,
@@ -16024,14 +14964,14 @@ byId("departmentEvaluationForm").addEventListener("submit", (event) => {
     rewardDisciplineNote: result.rewardDisciplineNote,
     finalScore: result.finalScore,
     grade: gradeDepartment(result.finalScore),
-    reviewer: canConfirm ? adjustmentActor.label : existing?.reviewer || "",
-    reviewerId: canConfirm ? adjustmentActor.id : existing?.reviewerId || "",
+    reporter: canReportData ? reporter : existing?.reporter || "",
+    reviewer: canConfirm ? reviewer : existing?.reviewer || "",
     comment: canConfirm ? byId("deptEvalComment").value.trim() : existing?.comment || "",
     customFields: collectCustomFieldValues("department-evaluations", existing?.customFields),
   }, existing);
   if (existing) Object.assign(existing, record);
   else state.departmentEvaluations.push(record);
-  syncIndividualScoresForDepartment(period, departmentId, result.finalScore);
+  if (canReportData) syncIndividualScoresForDepartment(period, departmentId, result.finalScore);
   logActivity({
     action: existing ? "Cập nhật" : "Tạo",
     module: "KPI phòng",
@@ -16041,7 +14981,8 @@ byId("departmentEvaluationForm").addEventListener("submit", (event) => {
     period,
     title: departmentById(departmentId)?.name || "Phòng",
     details: [
-      record.reviewer ? `Điều chỉnh điểm: ${record.reviewer}` : "",
+      record.reporter ? `Báo cáo: ${record.reporter}` : "",
+      record.reviewer ? `Xác nhận: ${record.reviewer}` : "",
       departmentAdjustmentSummary(record),
       record.comment || "",
     ]
@@ -16077,7 +15018,7 @@ byId("departmentEvaluationTable").addEventListener("click", (event) => {
       departmentId: evaluation.departmentId,
       period: evaluation.period,
       title: departmentById(evaluation.departmentId)?.name || "Phòng đã xóa",
-      details: [evaluation.reviewer ? `Điều chỉnh điểm: ${evaluation.reviewer}` : "", evaluation.comment || ""].filter(Boolean).join(" · "),
+      details: [evaluation.reporter ? `Báo cáo: ${evaluation.reporter}` : "", evaluation.reviewer ? `Xác nhận: ${evaluation.reviewer}` : "", evaluation.comment || ""].filter(Boolean).join(" · "),
       score: `${formatScore(evaluation.finalScore)} điểm - ${evaluation.grade}`,
     });
     saveState();
@@ -16130,6 +15071,11 @@ byId("evaluationForm").addEventListener("submit", (event) => {
     alert("Chưa có phiếu KPI cá nhân trong kỳ này. Tài khoản hiện tại chỉ được nhập phần khen thưởng, kỷ luật, tác phong trên phiếu đã có.");
     return;
   }
+  const departmentEvaluation = person ? latestDepartmentEvaluation(person.departmentId, period) : null;
+  if (!departmentEvaluation) {
+    alert("Chưa có KPI phòng cho nhân sự/kỳ này. Vui lòng nhập KPI phòng trước khi lưu KPI cá nhân.");
+    return;
+  }
   syncDepartmentScoreFromSelectedPerson();
   const result = calculateEvaluationFromForm();
   const criteriaScores = canEditBase ? result.criteriaScores : existing?.criteriaScores || {};
@@ -16141,7 +15087,7 @@ byId("evaluationForm").addEventListener("submit", (event) => {
   const taskBehaviorLinks = canEditBehavior ? result.taskBehaviorLinks : existing?.taskBehaviorLinks || [];
   const behaviorScore = canEditBehavior ? result.behaviorScore : existing?.behaviorScore || 0;
   const finalScore = calculatePersonalFinalScore(personalScore, departmentScore, behaviorScore);
-  const adjustmentActor = currentAdjustmentActor();
+  const canEditReviewer = canEditBase && !isEmployee();
   const record = applyRecordAudit({
     id: existing?.id || uid("eval"),
     period,
@@ -16156,8 +15102,7 @@ byId("evaluationForm").addEventListener("submit", (event) => {
     behaviorScore,
     finalScore,
     grade: gradePersonal(finalScore),
-    reviewer: canEditBehavior ? adjustmentActor.label : existing?.reviewer || "",
-    reviewerId: canEditBehavior ? adjustmentActor.id : existing?.reviewerId || "",
+    reviewer: canEditReviewer ? byId("evalReviewer").value.trim() : existing?.reviewer || "",
     comment: canEditBase ? byId("evalComment").value.trim() : existing?.comment || "",
     customFields: collectCustomFieldValues("evaluations", existing?.customFields),
   }, existing);
@@ -16194,7 +15139,7 @@ byId("evaluationTable").addEventListener("click", (event) => {
     if (!evaluation || (!canEditEvaluation(evaluation.personId, evaluation.period) && !canEditEvaluationBehavior(evaluation.personId, evaluation.period))) return;
     byId("evalPeriod").value = evaluation.period;
     byId("evalPerson").value = evaluation.personId;
-    renderAdjustmentActorInput("evalReviewer", evaluation);
+    byId("evalReviewer").value = evaluation.reviewer || "";
     byId("evalComment").value = evaluation.comment || "";
     syncDepartmentScoreFromSelectedPerson();
     renderCriteriaInputs(evaluation.criteriaScores);
@@ -16381,8 +15326,6 @@ function splitStateForExport(exported) {
         supportRequests: exported.supportRequests || [],
         activityLog: exported.activityLog || [],
         canBoGpmbKpiCatalogVersion: exported.canBoGpmbKpiCatalogVersion || "",
-        sectionHeadKpiCatalogVersion: exported.sectionHeadKpiCatalogVersion || "",
-        personalKpiClassificationVersion: exported.personalKpiClassificationVersion || "",
         deletedIds: exported.deletedIds || [],
       },
     },
@@ -16537,8 +15480,6 @@ function mergeOperations(target, data, timestamp, allowMissing = false) {
   if (Array.isArray(data.supportRequests)) target.supportRequests = mergeImportedRecords(target.supportRequests, data.supportRequests, timestamp);
   if (Array.isArray(data.activityLog)) target.activityLog = data.activityLog;
   if (data.canBoGpmbKpiCatalogVersion) target.canBoGpmbKpiCatalogVersion = data.canBoGpmbKpiCatalogVersion;
-  if (data.sectionHeadKpiCatalogVersion) target.sectionHeadKpiCatalogVersion = data.sectionHeadKpiCatalogVersion;
-  if (data.personalKpiClassificationVersion) target.personalKpiClassificationVersion = data.personalKpiClassificationVersion;
   if (Array.isArray(data.deletedIds)) target.deletedIds = data.deletedIds;
 }
 
@@ -17074,7 +16015,6 @@ runWhenDocumentReady(() => {
     byId("personGender").value = person.gender || "";
     byId("personDepartment").value = person.departmentId || "";
     updateRoleOptions(person.roleId);
-    updatePersonSectionHeadOptions(person.sectionHeadId);
     byId("personContract").value = person.contract || "";
     byId("personQualification").value = person.qualification || "";
     byId("personContractTerm").value = person.contractTerm || "";
@@ -17133,8 +16073,6 @@ runWhenDocumentReady(() => {
     if (!confirm("Xóa nhân sự này? Công việc và đánh giá liên quan vẫn được giữ để tra cứu.")) return;
     registerDeletedId(person.id);
     state.people = state.people.filter((item) => item.id !== person.id);
-    normalizeSectionHeadManagementLinks();
-    recalculateSavedPersonalEvaluationScores();
     logActivity({
       action: "Xóa",
       module: "Nhân sự",
@@ -17155,15 +16093,8 @@ runWhenDocumentReady(() => {
     if (!person) return;
     const department = departmentById(person.departmentId)?.name || "Chưa cập nhật";
     const role = roleById(person.roleId)?.name || "Chưa cập nhật";
-    const evaluation = personalEvaluationSnapshot(person.id, state.activePeriod);
+    const evaluation = latestEvaluation(person.id);
     const account = state.accounts.find((item) => item.personId === person.id);
-    const sectionHead = sectionHeadForPerson(person);
-    const managedMembers = isSectionHeadPerson(person) ? managedTeamMembers(person.id) : [];
-    const managementLabel = isSectionHeadPerson(person)
-      ? managedMembers.length
-        ? `${managedMembers.length} nhân sự: ${managedMembers.map((member) => member.name).join(", ")}`
-        : "Chưa phân nhóm nhân sự"
-      : sectionHead?.name || "Không phân nhóm quản lý";
     const salary = [
       person.salaryCoefficient ? `Hệ số ${person.salaryCoefficient}` : "",
       person.salaryGrade ? `Bậc ${person.salaryGrade}` : "",
@@ -17185,7 +16116,6 @@ runWhenDocumentReady(() => {
       detailSection("Công tác", [
         detailValue("Phòng", department),
         detailValue("Vị trí", role),
-        detailValue(isSectionHeadPerson(person) ? "Nhóm nhân sự quản lý" : "Trưởng bộ phận/Trưởng nhóm quản lý", managementLabel, true),
         detailValue("Trình độ chuyên môn", person.qualification, true),
         detailValue("KPI kỳ này", kpi, true),
       ].join("")),
