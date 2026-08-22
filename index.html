@@ -6,7 +6,7 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.0.35">
+  <meta name="application-version" content="3.0.38">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
@@ -42,11 +42,10 @@
         </label>
         <p id="loginError" class="form-error" role="alert"></p>
         <button type="submit">Đăng nhập</button>
-        <button id="openOfflineTestSetup" class="ghost login-offline-setup is-hidden" type="button">Khởi tạo kiểm thử offline</button>
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.0.35</strong>
+          <strong data-app-version>Phiên bản 3.0.38</strong>
         </p>
       </form>
     </div>
@@ -1120,7 +1119,7 @@
             <input id="accountUsername" required autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="96" placeholder="nguyenvana">
           </label>
           <label>Mật khẩu mới (tùy chọn)
-            <input id="accountPassword" type="password" autocomplete="new-password" maxlength="128" title="Để trống để giữ nguyên mật khẩu hiện tại. Khi đổi mật khẩu, dùng tối thiểu 10 ký tự và ít nhất 3 nhóm ký tự." placeholder="Để trống để giữ nguyên mật khẩu">
+            <input id="accountPassword" type="password" autocomplete="new-password" maxlength="128" title="Để trống để giữ nguyên mật khẩu hiện tại." placeholder="Để trống để giữ nguyên mật khẩu">
           </label>
           <label>Vai trò
             <select id="accountRole">
@@ -1333,7 +1332,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.0.35</strong>
+    <strong data-app-version>Phiên bản 3.0.38</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -1352,35 +1351,6 @@
       </div>
       <button id="dismissBirthdayCelebration" type="button">Tiếp tục làm việc</button>
     </div>
-  </section>
-
-  <section id="offlineTestSetupDialog" class="modal-backdrop is-hidden" aria-hidden="true">
-    <form id="offlineTestSetupForm" class="modal-card offline-test-setup-modal" aria-labelledby="offlineTestSetupTitle">
-      <div class="section-head">
-        <div>
-          <p class="eyebrow">Kiểm thử cục bộ</p>
-          <h2 id="offlineTestSetupTitle">Khởi tạo tài khoản Admin</h2>
-        </div>
-        <button id="closeOfflineTestSetup" class="ghost icon-button" type="button" aria-label="Đóng">×</button>
-      </div>
-      <p class="offline-test-setup-note">Dữ liệu này chỉ lưu trên trình duyệt đang mở tệp ứng dụng. Không được đồng bộ hoặc ghi đè dữ liệu hệ thống online.</p>
-      <div class="form-grid offline-test-setup-fields">
-        <label>Tên đăng nhập Admin
-          <input id="offlineTestUsername" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="96" required placeholder="Ví dụ: admin-test">
-        </label>
-        <label>Mật khẩu kiểm thử
-          <input id="offlineTestPassword" type="password" autocomplete="new-password" maxlength="128" required placeholder="Tối thiểu 10 ký tự, gồm 3 nhóm ký tự">
-        </label>
-        <label>Xác nhận mật khẩu
-          <input id="offlineTestPasswordConfirm" type="password" autocomplete="new-password" maxlength="128" required placeholder="Nhập lại mật khẩu">
-        </label>
-      </div>
-      <p id="offlineTestSetupError" class="form-error" role="alert"></p>
-      <div class="form-actions">
-        <button id="cancelOfflineTestSetup" class="ghost" type="button">Hủy</button>
-        <button type="submit">Khởi tạo và đăng nhập</button>
-      </div>
-    </form>
   </section>
 
   <section id="printDialog" class="modal-backdrop is-hidden" aria-hidden="true">

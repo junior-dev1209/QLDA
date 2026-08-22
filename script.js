@@ -1,7 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.0.35";
-const LOGIN_GUARD_KEY = "phuc-thinh-login-guard-v1";
+const APP_VERSION = "3.0.38";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -16,10 +15,8 @@ const SHARED_SYNC_ENDPOINT = "api/sync.php";
 const SHARED_SYNC_CONFLICT_KEY = "phuc-thinh-shared-sync-conflict-v1";
 const SHARED_SYNC_REQUIRED_KEY = "phuc-thinh-shared-sync-required-v1";
 const SHARED_SYNC_SESSION_TOKEN_KEY = "phuc-thinh-shared-sync-session-v1";
+const LOGIN_SESSION_CREDENTIAL_KEY = "phuc-thinh-login-session-v1";
 const SHARED_SYNC_DIRTY_KEY = "phuc-thinh-shared-sync-dirty-v1";
-const OFFLINE_LOGIN_PROOFS_KEY = "phuc-thinh-offline-login-proofs-v1";
-const OFFLINE_ACCOUNT_DIRECTORY_KEY = "phuc-thinh-offline-account-directory-v1";
-const OFFLINE_ADMIN_STATE_SNAPSHOT_ID = "offline-admin-state";
 const STATE_SAVED_AT_KEY = "phuc-thinh-state-saved-at-v1";
 // Poll less often while a tab is idle. Focus/online events still refresh at
 // once, and the server returns only a revision check when nothing changed.
@@ -30,10 +27,6 @@ const SHARED_SYNC_RETRY_MAX_MS = 60000;
 const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
 const ACCOUNT_USAGE_REQUEST_TIMEOUT_MS = 45000;
 const ACCOUNT_USAGE_AUTO_REFRESH_MS = 60000;
-const OFFLINE_LOGIN_PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const OFFLINE_ADMIN_STATE_MAX_AGE_MS = OFFLINE_LOGIN_PROOF_MAX_AGE_MS;
-const OFFLINE_LOGIN_PBKDF2_ITERATIONS = 120000;
-const OFFLINE_LOGIN_PROOF_MAX_ENTRIES = 500;
 const MAX_DELETED_ID_HISTORY = 2000;
 const ACCOUNT_PRESENCE_HEARTBEAT_MS = 60000;
 const SHARED_SYNC_COLLECTIONS = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"];
@@ -919,9 +912,17 @@ const defaultKpiParameters = {
 };
 
 function defaultAccounts() {
-  // Credentials are never embedded in the browser bundle. A new offline
-  // browser profile must be initialized from an authenticated data backup.
-  return [];
+  // These accounts exist only when index.html is opened directly from disk
+  // for local testing. The online application always authenticates against
+  // the central server state instead.
+  if (!isOfflineFileRuntime()) return [];
+  return [
+    { id: "account-admin", username: "admin", password: "123456", displayName: "Admin tổng hợp", role: "admin", personId: "", departmentId: "" },
+    { id: "account-director", username: "giamdoc", password: "123456", displayName: "Giám đốc", role: "director", personId: "", departmentId: "" },
+    { id: "account-deputy-1", username: "phogiamdoc1", password: "123456", displayName: "Phó giám đốc 1", role: "director", personId: "", departmentId: "" },
+    { id: "account-deputy-2", username: "phogiamdoc2", password: "123456", displayName: "Phó giám đốc 2", role: "director", personId: "", departmentId: "" },
+    { id: "account-deputy-3", username: "phogiamdoc3", password: "123456", displayName: "Phó giám đốc 3", role: "director", personId: "", departmentId: "" },
+  ];
 }
 
 function ensureDefaultAccounts(accounts, { bootstrap = false } = {}) {
@@ -966,26 +967,16 @@ function uniqueUsernameForPerson(person, accounts) {
   return username;
 }
 
-function createTemporaryPassword() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
-  const bytes = new Uint8Array(16);
-  if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes);
-  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
-  return `Pht!${Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("")}`;
-}
-
-function isStrongAccountPassword(password) {
-  const value = String(password || "");
-  const groups = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(value)).length;
-  return value.length >= 10 && value.length <= 128 && groups >= 3;
-}
+const DEFAULT_NEW_ACCOUNT_PASSWORD = "123456";
 
 function createPersonnelAccount(person, accounts) {
   const timestamp = new Date().toISOString();
   return {
     id: `account-person-${person.id}`,
     username: uniqueUsernameForPerson(person, accounts),
-    password: createTemporaryPassword(),
+    // Applied only to newly generated personnel accounts. Existing account
+    // passwords remain unchanged until they are explicitly changed.
+    password: DEFAULT_NEW_ACCOUNT_PASSWORD,
     // Existing and newly created accounts keep their password until the
     // account owner or an authorized administrator changes it voluntarily.
     passwordChangeRequired: false,
@@ -1291,8 +1282,6 @@ let durableStorageRequestPromise = null;
 let durableStateWritePromise = Promise.resolve();
 let durableStateRestorePromise = null;
 let durableStateRestoreComplete = false;
-let offlineLoginProofCacheTimer = 0;
-let offlineLoginProofCacheInFlight = false;
 const storedFileDataCache = new Map();
 const storedFileObjectUrlCache = new Map();
 const taskSearchTextCache = new WeakMap();
@@ -2104,6 +2093,13 @@ function registerDeletedId(id) {
 function normalizeStatePayload(parsed) {
   const fallback = defaultStatePayload();
   if (!parsed || typeof parsed !== "object") return fallback;
+  const sourceAccounts = Array.isArray(parsed.accounts) ? parsed.accounts : fallback.accounts;
+  // A cloud response intentionally omits passwords. When that response is
+  // opened as a local file, return to the bundled test accounts instead of
+  // leaving the local login screen with no usable credential.
+  const accounts = isOfflineFileRuntime() && !sourceAccounts.some((account) => String(account?.password || "").trim())
+    ? fallback.accounts
+    : sourceAccounts;
   const sourceTasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
   const retiredAssignmentTaskIds = new Set(
     sourceTasks.filter((task) => isRetiredAssignmentTaskRecord(task)).map((task) => String(task?.id || "")).filter(Boolean),
@@ -2119,7 +2115,7 @@ function normalizeStatePayload(parsed) {
     archiveRecords: Array.isArray(parsed.archiveRecords) ? parsed.archiveRecords : [],
     evaluations: Array.isArray(parsed.evaluations) ? parsed.evaluations : [],
     departmentEvaluations: Array.isArray(parsed.departmentEvaluations) ? parsed.departmentEvaluations : [],
-    accounts: Array.isArray(parsed.accounts) ? parsed.accounts : fallback.accounts,
+    accounts,
     supportRequests: Array.isArray(parsed.supportRequests) ? parsed.supportRequests : [],
     moduleSettings: normalizeModuleSettings(parsed.moduleSettings),
     systemCustomization: normalizeSystemCustomization(parsed.systemCustomization),
@@ -2297,276 +2293,36 @@ function normalizedLoginUsername(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function readOfflineLoginProofs() {
+function readSessionLoginCredential() {
   try {
-    const raw = JSON.parse(localStorage.getItem(OFFLINE_LOGIN_PROOFS_KEY) || "{}");
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeOfflineLoginProofs(proofs) {
-  try {
-    const entries = Object.entries(proofs || {})
-      .filter(([, proof]) => proof && typeof proof === "object")
-      .sort(([, left], [, right]) => String(right?.verifiedAt || "").localeCompare(String(left?.verifiedAt || "")))
-      .slice(0, OFFLINE_LOGIN_PROOF_MAX_ENTRIES);
-    localStorage.setItem(OFFLINE_LOGIN_PROOFS_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch {
-    // Offline sign-in remains unavailable if this browser blocks local storage.
-  }
-}
-
-function offlineAccountDirectoryRecord(account) {
-  if (!account?.id || !account?.username) return null;
-  return {
-    id: String(account.id),
-    username: String(account.username),
-    displayName: String(account.displayName || account.username),
-    role: String(account.role || "employee"),
-    personId: String(account.personId || ""),
-    disabled: Boolean(account.disabled),
-    accessGrants: account.accessGrants && typeof account.accessGrants === "object" ? { ...account.accessGrants } : {},
-    updatedAt: String(account.updatedAt || ""),
-  };
-}
-
-function readOfflineAccountDirectory() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(OFFLINE_ACCOUNT_DIRECTORY_KEY) || "{}");
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  } catch {
-    return {};
-  }
-}
-
-function cacheOfflineAccountDirectory(accounts) {
-  const directory = readOfflineAccountDirectory();
-  let changed = false;
-  (Array.isArray(accounts) ? accounts : []).forEach((account) => {
-    const record = offlineAccountDirectoryRecord(account);
-    if (!record) return;
-    directory[normalizedLoginUsername(record.username)] = record;
-    changed = true;
-  });
-  if (!changed) return;
-  try {
-    const entries = Object.entries(directory)
-      .sort(([, left], [, right]) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")))
-      .slice(0, OFFLINE_LOGIN_PROOF_MAX_ENTRIES);
-    localStorage.setItem(OFFLINE_ACCOUNT_DIRECTORY_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch {
-    // The current browser state can still serve accounts already cached in state.accounts.
-  }
-}
-
-function offlineAccountByUsername(username) {
-  const normalizedUsername = normalizedLoginUsername(username);
-  if (!normalizedUsername) return null;
-  const localAccount = (state.accounts || []).find((item) => normalizedLoginUsername(item?.username) === normalizedUsername);
-  return localAccount || readOfflineAccountDirectory()[normalizedUsername] || null;
-}
-
-async function cacheOfflineAdminState(account, payload = state) {
-  if (account?.role !== "admin" || !account?.id) return;
-  try {
-    const snapshot = normalizeStatePayload(payload);
-    const sanitizedAccounts = (snapshot.accounts || []).map(offlineAccountDirectoryRecord).filter(Boolean);
-    await writeBinaryMetadata(OFFLINE_ADMIN_STATE_SNAPSHOT_ID, {
-      accountId: String(account.id),
-      savedAt: new Date().toISOString(),
-      state: { ...snapshot, accounts: sanitizedAccounts },
-    });
-  } catch (error) {
-    console.warn("Offline Admin state cache failed:", error);
-  }
-}
-
-async function restoreOfflineAdminState(account) {
-  if (account?.role !== "admin" || !account?.id) return false;
-  try {
-    const record = await readBinaryMetadata(OFFLINE_ADMIN_STATE_SNAPSHOT_ID);
-    const payload = record?.value;
-    const savedAt = new Date(payload?.savedAt || record?.updatedAt || "").getTime();
-    if (
-      !payload?.state ||
-      String(payload.accountId || "") !== String(account.id) ||
-      Number.isNaN(savedAt) ||
-      savedAt + OFFLINE_ADMIN_STATE_MAX_AGE_MS < Date.now()
-    ) {
-      return false;
-    }
-    Object.assign(state, normalizeStatePayload(payload.state));
-    applyRuntimeKpiCatalogs(state);
-    persistState();
-    cacheOfflineAccountDirectory(state.accounts);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function bytesToBase64(bytes) {
-  let output = "";
-  Array.from(bytes || []).forEach((value) => {
-    output += String.fromCharCode(value);
-  });
-  return btoa(output);
-}
-
-function base64ToBytes(value) {
-  const binary = atob(String(value || ""));
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-function secureTextEquals(left, right) {
-  const first = String(left || "");
-  const second = String(right || "");
-  if (first.length !== second.length) return false;
-  let difference = 0;
-  for (let index = 0; index < first.length; index += 1) difference |= first.charCodeAt(index) ^ second.charCodeAt(index);
-  return difference === 0;
-}
-
-async function offlineCredentialDigest(password, salt, iterations = OFFLINE_LOGIN_PBKDF2_ITERATIONS) {
-  if (!window.crypto?.subtle || !password || !salt?.length) return "";
-  const workFactor = Math.max(50000, Math.min(OFFLINE_LOGIN_PBKDF2_ITERATIONS, Number(iterations) || OFFLINE_LOGIN_PBKDF2_ITERATIONS));
-  const material = await window.crypto.subtle.importKey("raw", new TextEncoder().encode(String(password)), "PBKDF2", false, ["deriveBits"]);
-  const bits = await window.crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: workFactor, hash: "SHA-256" },
-    material,
-    256,
-  );
-  return bytesToBase64(new Uint8Array(bits));
-}
-
-async function rememberOfflineLogin(account, password) {
-  const username = normalizedLoginUsername(account?.username);
-  if (!username || !account?.id || !password || !window.crypto?.getRandomValues) return;
-  try {
-    const salt = window.crypto.getRandomValues(new Uint8Array(16));
-    const verifier = await offlineCredentialDigest(password, salt);
-    if (!verifier) return;
-    const proofs = readOfflineLoginProofs();
-    proofs[username] = {
-      accountId: String(account.id),
-      username,
-      salt: bytesToBase64(salt),
-      verifier,
-      iterations: OFFLINE_LOGIN_PBKDF2_ITERATIONS,
-      verifiedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + OFFLINE_LOGIN_PROOF_MAX_AGE_MS).toISOString(),
-    };
-    writeOfflineLoginProofs(proofs);
-  } catch {
-    // A successful online sign-in must not fail just because offline caching is unavailable.
-  }
-}
-
-function cacheServerOfflineLoginProofs(proofs) {
-  if (!Array.isArray(proofs) || !proofs.length) return;
-  const storedProofs = readOfflineLoginProofs();
-  let changed = false;
-  proofs.forEach((proof) => {
-    const username = normalizedLoginUsername(proof?.username);
-    const expiresAt = new Date(proof?.expiresAt || "").getTime();
-    if (!username || !proof?.accountId || !proof?.salt || !proof?.verifier || Number.isNaN(expiresAt) || expiresAt <= Date.now()) return;
-    storedProofs[username] = {
-      accountId: String(proof.accountId),
-      username,
-      salt: String(proof.salt),
-      verifier: String(proof.verifier),
-      iterations: Math.max(50000, Math.min(OFFLINE_LOGIN_PBKDF2_ITERATIONS, Number(proof.iterations) || OFFLINE_LOGIN_PBKDF2_ITERATIONS)),
-      verifiedAt: proof.verifiedAt || new Date().toISOString(),
-      expiresAt: proof.expiresAt,
-    };
-    changed = true;
-  });
-  if (changed) writeOfflineLoginProofs(storedProofs);
-}
-
-function offlineLoginProofNeedsRefresh(account, proof) {
-  const proofExpiresAt = new Date(proof?.expiresAt || "").getTime();
-  const accountUpdatedAt = new Date(account?.updatedAt || 0).getTime();
-  const proofVerifiedAt = new Date(proof?.verifiedAt || 0).getTime();
-  return (
-    !proof ||
-    String(proof.accountId || "") !== String(account?.id || "") ||
-    Number.isNaN(proofExpiresAt) ||
-    proofExpiresAt <= Date.now() ||
-    (accountUpdatedAt > 0 && accountUpdatedAt > proofVerifiedAt)
-  );
-}
-
-function shouldRequestAdminOfflineCredentials(username) {
-  const normalizedUsername = normalizedLoginUsername(username);
-  const signedInAccount = (state.accounts || []).find((account) => normalizedLoginUsername(account?.username) === normalizedUsername);
-  if (signedInAccount?.role !== "admin") {
-    // A non-Admin view receives only its own account, so it cannot know
-    // whether the next online sign-in is the Admin account. The server still
-    // enforces the Admin role before returning any verifier.
-    return !(state.accounts || []).some((account) => account?.role === "admin");
-  }
-  const proofs = readOfflineLoginProofs();
-  return (state.accounts || [])
-    .filter((account) => account?.id && account?.username && !account?.disabled)
-    .some((account) => offlineLoginProofNeedsRefresh(account, proofs[normalizedLoginUsername(account.username)]));
-}
-
-function scheduleLocalOfflineLoginProofCache(accounts) {
-  const candidates = (Array.isArray(accounts) ? accounts : [])
-    .filter((account) => account?.id && account?.username && account?.password && !account?.disabled)
-    .map((account) => ({ id: String(account.id), username: String(account.username), password: String(account.password) }));
-  if (!candidates.length || offlineLoginProofCacheTimer || offlineLoginProofCacheInFlight) return;
-
-  const cacheProofs = async () => {
-    offlineLoginProofCacheTimer = 0;
-    offlineLoginProofCacheInFlight = true;
-    try {
-      const existing = readOfflineLoginProofs();
-      for (const account of candidates) {
-        const username = normalizedLoginUsername(account.username);
-        const proof = existing[username];
-        const isCurrent = proof && String(proof.accountId || "") === account.id && new Date(proof.expiresAt || "").getTime() > Date.now();
-        if (!isCurrent) await rememberOfflineLogin(account, account.password);
-        // Yield between credentials so importing a full personnel file does not stall the interface.
-        await new Promise((resolve) => window.setTimeout(resolve, 0));
-      }
-    } finally {
-      offlineLoginProofCacheInFlight = false;
-    }
-  };
-
-  if (typeof window.requestIdleCallback === "function") {
-    offlineLoginProofCacheTimer = window.requestIdleCallback(() => cacheProofs(), { timeout: 1500 });
-  } else {
-    offlineLoginProofCacheTimer = window.setTimeout(cacheProofs, 120);
-  }
-}
-
-async function verifyOfflineLogin(username, password) {
-  const normalizedUsername = normalizedLoginUsername(username);
-  if (!normalizedUsername || !password) return null;
-  const localAccount = offlineAccountByUsername(normalizedUsername);
-  if (!localAccount || localAccount.disabled) return null;
-  const proof = readOfflineLoginProofs()[normalizedUsername];
-  const proofIsValid = proof && String(proof.accountId || "") === String(localAccount.id || "") && !Number.isNaN(new Date(proof.expiresAt || "").getTime()) && new Date(proof.expiresAt).getTime() >= Date.now();
-  if (!proofIsValid) {
-    // This preserves offline access for a local JSON backup while gradually
-    // replacing plaintext passwords with the one-way offline verifier.
-    if (localAccount.password && secureTextEquals(localAccount.password, password)) {
-      void rememberOfflineLogin(localAccount, password);
-      return localAccount;
-    }
-    return null;
-  }
-  try {
-    const verifier = await offlineCredentialDigest(password, base64ToBytes(proof.salt), proof.iterations);
-    return verifier && secureTextEquals(verifier, proof.verifier) ? localAccount : null;
+    const value = JSON.parse(sessionStorage.getItem(LOGIN_SESSION_CREDENTIAL_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
   } catch {
     return null;
   }
+}
+
+function rememberSessionLoginCredential(account, password) {
+  if (!account?.id || !account?.username || !password) return;
+  try {
+    sessionStorage.setItem(LOGIN_SESSION_CREDENTIAL_KEY, JSON.stringify({
+      accountId: String(account.id),
+      username: normalizedLoginUsername(account.username),
+      password: String(password),
+    }));
+  } catch {
+    // An unavailable session store must not stop a normal online sign-in.
+  }
+}
+
+function cachedSessionLoginAccount(username, password) {
+  const credential = readSessionLoginCredential();
+  if (!credential || credential.username !== normalizedLoginUsername(username) || credential.password !== String(password || "")) return null;
+  const account = (state.accounts || []).find((item) => (
+    String(item?.id || "") === String(credential.accountId || "")
+    && normalizedLoginUsername(item?.username) === credential.username
+  ));
+  return account && !account.disabled ? account : null;
 }
 
 function localStateHasBusinessData(payload = state) {
@@ -3286,109 +3042,44 @@ async function retainUnsyncedLocalChanges(remotePayload, { render = true } = {})
   queueSharedStateSync();
 }
 
-async function bootstrapOfflineFileLogin(username, password) {
-  const config = supabaseSyncConfig();
-  if (!config || navigator.onLine === false) return { error: "" };
-  try {
-    const result = await sharedJsonRequest("login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, includeOfflineCredentials: true }),
-      timeoutMs: 12000,
-    });
-    if (!result.response.ok || !result.payload?.state) {
-      return { error: result.payload?.error || "Không thể xác thực tài khoản từ máy chủ." };
-    }
-    const remoteState = normalizeStatePayload(result.payload.state);
-    const account = (remoteState.accounts || []).find(
-      (item) => normalizedLoginUsername(item?.username) === normalizedLoginUsername(username),
-    );
-    if (!account || account.disabled) return { error: "Tài khoản không hợp lệ hoặc đã bị vô hiệu hóa." };
-    Object.assign(state, remoteState);
-    applyRuntimeKpiCatalogs(state);
-    persistState();
-    cacheOfflineAccountDirectory(remoteState.accounts);
-    cacheServerOfflineLoginProofs(result.payload.offlineCredentials);
-    await cacheOfflineAdminState(account, remoteState);
-    return { account };
-  } catch {
-    return {
-      error: "Không thể xác thực ngoại tuyến trên thiết bị này. Hãy mở hệ thống khi có mạng một lần để lưu dữ liệu và mã xác thực cho thiết bị này.",
-    };
-  }
-}
-
 async function loginSharedSession(username, password) {
   await ensureDurableStateRestored();
   await restoreSharedSyncCheckpoint();
   if (isOfflineFileRuntime()) {
-    const offlineAccount = await verifyOfflineLogin(username, password);
-    if (offlineAccount) {
-      const accountPresent = (state.accounts || []).some((account) => String(account?.id || "") === String(offlineAccount.id));
-      if (!accountPresent && offlineAccount.role === "admin" && !(await restoreOfflineAdminState(offlineAccount))) {
-        return {
-          mode: "offline",
-          error: "Thiết bị này chưa có bản dữ liệu Admin đã xác thực để làm việc ngoại tuyến. Hãy đăng nhập Admin khi có mạng một lần.",
-        };
-      }
-      sharedSync.session = true;
-      sharedSync.accountId = String(offlineAccount.id);
-      sharedSync.available = null;
-      sharedSync.initialized = null;
-      return { mode: "offline", offlineAccountId: String(offlineAccount.id) };
-    }
-    const bootstrap = await bootstrapOfflineFileLogin(username, password);
-    if (bootstrap.account) {
-      sharedSync.session = true;
-      sharedSync.accountId = String(bootstrap.account.id);
-      sharedSync.available = null;
-      sharedSync.initialized = null;
-      return {
-        mode: "offline",
-        offlineAccountId: String(bootstrap.account.id),
-        warning: "Đã xác thực và lưu bản làm việc ngoại tuyến trên thiết bị này. Khi mất mạng, tài khoản vẫn có thể đăng nhập trong thời hạn cho phép.",
-      };
-    }
-    return {
-      mode: "offline",
-      error: bootstrap.error || "Không thể đăng nhập ngoại tuyến trên thiết bị này. Hãy đăng nhập khi có mạng một lần để khởi tạo quyền offline.",
-    };
+    sharedSync.session = false;
+    sharedSync.accountId = "";
+    sharedSync.available = null;
+    sharedSync.initialized = null;
+    return { mode: "local" };
   }
   if (!(await probeSharedSync())) {
-    const offlineAccount = await verifyOfflineLogin(username, password);
-    if (offlineAccount) {
-      sharedSync.session = true;
-      sharedSync.accountId = String(offlineAccount.id);
+    const cachedAccount = cachedSessionLoginAccount(username, password);
+    if (cachedAccount) {
+      sharedSync.session = false;
+      sharedSync.accountId = String(cachedAccount.id);
+      sharedSync.sessionToken = "";
       sharedSync.available = null;
       sharedSync.initialized = null;
-      scheduleSharedStateRefresh({ immediate: true });
-      return {
-        mode: "offline",
-        offlineAccountId: String(offlineAccount.id),
-        warning: "Đang làm việc ngoại tuyến. Thay đổi được lưu trên thiết bị này và sẽ chờ đồng bộ khi đăng nhập lại lúc có mạng.",
-      };
+      return { mode: "cached-session", accountId: String(cachedAccount.id) };
     }
     return usingSupabaseSync() || localStorage.getItem(SHARED_SYNC_REQUIRED_KEY) === "1"
-      ? { mode: "remote", error: "Không thể xác thực ngoại tuyến trên thiết bị này. Hãy đăng nhập online một lần trên chính thiết bị này trước." }
+      ? { mode: "remote", error: "Không thể kết nối máy chủ dữ liệu. Vui lòng kiểm tra kết nối mạng và thử lại." }
       : { mode: "local" };
   }
   let result;
   try {
-    const includeOfflineCredentials = shouldRequestAdminOfflineCredentials(username);
     result = await sharedJsonRequest("login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, includeOfflineCredentials }),
+      body: JSON.stringify({ username, password }),
     });
   } catch {
-    return { mode: "remote", error: "Khong the ket noi may chu du lieu." };
+    return { mode: "remote", error: "Không thể kết nối máy chủ dữ liệu. Vui lòng thử lại." };
   }
   if (!result.response.ok || !result.payload?.state) {
-    return { mode: "remote", error: result.payload?.error || "Khong the dang nhap may chu du lieu." };
+    return { mode: "remote", error: result.payload?.error || "Không thể đăng nhập máy chủ dữ liệu." };
   }
-  cacheServerOfflineLoginProofs(result.payload.offlineCredentials);
   const remoteAccounts = Array.isArray(result.payload.state?.accounts) ? result.payload.state.accounts : [];
-  cacheOfflineAccountDirectory(remoteAccounts);
   const remoteAccount = remoteAccounts.find((account) => String(account?.username || "").toLowerCase() === String(username || "").toLowerCase());
   const remoteAccountId = String(remoteAccount?.id || "");
   if (sharedSync.dirty && sharedSync.dirtyAccountId && remoteAccountId && sharedSync.dirtyAccountId !== remoteAccountId) {
@@ -3439,7 +3130,6 @@ async function loginSharedSession(username, password) {
   } else {
     await adoptSharedState(result.payload.state, { render: false });
   }
-  if (remoteAccount?.role === "admin") void cacheOfflineAdminState(remoteAccount, result.payload.state);
   scheduleSharedStateRefresh({ immediate: true });
   return { mode: "remote" };
 }
@@ -4492,11 +4182,6 @@ function clearMandatoryPasswordChangeFlags() {
 migrateDepartmentTermLabels();
 migrateLegacyProjectDepartments();
 mergeImportedPeopleIntoState();
-if (isOfflineFileRuntime()) {
-  // The bundled personnel source creates a complete, independent test set
-  // when this application is opened directly from disk.
-  scheduleLocalOfflineLoginProofCache(state.accounts);
-}
 migrateCanBoGpmbKpiCatalog();
 const sectionHeadKpiCatalogUpdated = migrateSectionHeadKpiCatalog();
 const passwordPolicyUpdated = clearMandatoryPasswordChangeFlags();
@@ -12499,7 +12184,7 @@ function resetAccountForm() {
   }
   byId("accountForm").reset();
   byId("accountId").value = "";
-  byId("accountPassword").placeholder = "Mật khẩu mới (tối thiểu 10 ký tự)";
+  byId("accountPassword").placeholder = "Mật khẩu mới";
   renderAccountOptions();
   updateAccountFormAccess();
 }
@@ -13733,7 +13418,7 @@ function seedDemoData() {
       state.accounts.push({
         id: uid("account"),
         username,
-        password: createTemporaryPassword(),
+        password: DEFAULT_NEW_ACCOUNT_PASSWORD,
         passwordChangeRequired: false,
         displayName,
         role,
@@ -13810,33 +13495,6 @@ function seedDemoData() {
   renderAll();
 }
 
-function readLoginGuard() {
-  try {
-    const value = JSON.parse(localStorage.getItem(LOGIN_GUARD_KEY) || "{}");
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeLoginGuard(guard) {
-  try {
-    localStorage.setItem(LOGIN_GUARD_KEY, JSON.stringify(guard));
-  } catch {
-    // Server-side protection remains active when this browser blocks storage.
-  }
-}
-
-function loginGuardEntryKey(username) {
-  return String(username || "").trim().toLowerCase().slice(0, 96) || "anonymous";
-}
-
-function clearLocalLoginFailures(username) {
-  const guard = readLoginGuard();
-  delete guard[loginGuardEntryKey(username)];
-  writeLoginGuard(guard);
-}
-
 function renderApplicationIdentity() {
   document.querySelectorAll("[data-app-version]").forEach((element) => {
     element.textContent = `Phiên bản ${APP_VERSION}`;
@@ -13845,114 +13503,12 @@ function renderApplicationIdentity() {
 
 renderApplicationIdentity();
 
-function offlineTestSetupAvailable() {
-  return isOfflineFileRuntime();
-}
-
-function closeOfflineTestSetupDialog() {
-  closeModal("offlineTestSetupDialog");
-  byId("offlineTestSetupError").textContent = "";
-}
-
-function openOfflineTestSetupDialog() {
-  if (!offlineTestSetupAvailable()) return;
-  const existingAdmin = (state.accounts || []).find((account) => account?.role === "admin");
-  if (existingAdmin && !existingAdmin.offlineTestOnly) {
-    byId("loginError").textContent = "Bản kiểm thử này đã có tài khoản Admin. Hãy đăng nhập bằng tài khoản đó hoặc xóa dữ liệu trình duyệt của bản file:// để khởi tạo lại.";
-    return;
-  }
-  byId("offlineTestSetupForm").reset();
-  byId("offlineTestUsername").value = existingAdmin?.username || "admin-test";
-  byId("offlineTestSetupError").textContent = "";
-  openModal("offlineTestSetupDialog");
-  window.setTimeout(() => byId("offlineTestUsername")?.focus(), 0);
-}
-
-async function createOfflineTestAdmin(event) {
-  event.preventDefault();
-  if (!offlineTestSetupAvailable()) return;
-  const username = byId("offlineTestUsername").value.trim();
-  const password = byId("offlineTestPassword").value;
-  const confirmation = byId("offlineTestPasswordConfirm").value;
-  const error = byId("offlineTestSetupError");
-  error.textContent = "";
-
-  if (!/^[A-Za-z0-9._-]{3,96}$/.test(username)) {
-    error.textContent = "Tên đăng nhập gồm 3-96 ký tự: chữ cái, số, dấu chấm, gạch dưới hoặc gạch ngang.";
-    return;
-  }
-  if (!isStrongAccountPassword(password)) {
-    error.textContent = "Mật khẩu cần từ 10 ký tự và có ít nhất 3 nhóm: chữ hoa, chữ thường, số, ký tự đặc biệt.";
-    return;
-  }
-  if (password !== confirmation) {
-    error.textContent = "Xác nhận mật khẩu chưa khớp.";
-    return;
-  }
-  const usernameKey = normalizedLoginUsername(username);
-  const duplicate = (state.accounts || []).find(
-    (account) => normalizedLoginUsername(account?.username) === usernameKey && !account.offlineTestOnly,
-  );
-  if (duplicate) {
-    error.textContent = "Tên đăng nhập này đã có trong dữ liệu kiểm thử. Hãy chọn tên khác.";
-    return;
-  }
-
-  state.accounts = (state.accounts || []).filter((account) => !account?.offlineTestOnly);
-  const timestamp = new Date().toISOString();
-  const account = {
-    id: uid("offline-admin"),
-    username,
-    password: "",
-    displayName: "Admin kiểm thử offline",
-    role: "admin",
-    personId: "",
-    departmentId: "",
-    accessGrants: {},
-    offlineTestOnly: true,
-    createdAt: timestamp,
-    createdBy: "Khởi tạo kiểm thử offline",
-    updatedAt: timestamp,
-    updatedBy: "Khởi tạo kiểm thử offline",
-  };
-  // Store only a one-way verifier. The password is never retained in the local test state.
-  await rememberOfflineLogin({ ...account, password }, password);
-  state.accounts.push(account);
-  cacheOfflineAccountDirectory(state.accounts);
-  persistState();
-  sharedSync.session = true;
-  sharedSync.accountId = account.id;
-  sharedSync.available = null;
-  sharedSync.initialized = null;
-  sharedSync.sessionToken = "";
-  localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
-  localStorage.setItem(SESSION_KEY, account.id);
-  birthdayCelebrationDisplayKey = "";
-  closeOfflineTestSetupDialog();
-  byId("loginForm").reset();
-  renderAll();
-  showSystemToast("Đã mở môi trường kiểm thử offline", "Tài khoản Admin kiểm thử chỉ hoạt động trên bản file:// của trình duyệt này và không đồng bộ lên máy chủ.", { tone: "success" });
-}
-
-byId("openOfflineTestSetup")?.classList.toggle("is-hidden", !offlineTestSetupAvailable());
-byId("openOfflineTestSetup")?.addEventListener("click", openOfflineTestSetupDialog);
-byId("offlineTestSetupForm")?.addEventListener("submit", createOfflineTestAdmin);
-byId("closeOfflineTestSetup")?.addEventListener("click", closeOfflineTestSetupDialog);
-byId("cancelOfflineTestSetup")?.addEventListener("click", closeOfflineTestSetupDialog);
-byId("offlineTestSetupDialog")?.addEventListener("click", (event) => {
-  if (event.target === byId("offlineTestSetupDialog")) closeOfflineTestSetupDialog();
-});
-
 // 🌟 Tự động kéo dữ liệu mây MỚI NHẤT ngay khi Đăng nhập thành công
 byId("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const username = byId("loginUsername").value.trim();
   const password = byId("loginPassword").value;
   byId("loginError").textContent = "";
-  // Browser-level lockouts caused valid users to be rejected after a few
-  // mistyped attempts. Authentication and its light throttle are centralised
-  // on the server; clear only the obsolete local marker from older versions.
-  clearLocalLoginFailures(username);
   const sharedLogin = await loginSharedSession(username, password);
   if (sharedLogin.error) {
     byId("loginError").textContent = sharedLogin.error;
@@ -13960,21 +13516,23 @@ byId("loginForm").addEventListener("submit", async (event) => {
   }
   if (sharedLogin.warning) alert(sharedLogin.warning);
   const remoteSupabaseLogin = usingSupabaseSync() && sharedLogin.mode === "remote";
-  const offlineLogin = sharedLogin.mode === "offline";
+  const cachedSessionLogin = sharedLogin.mode === "cached-session";
   const normalizedUsername = username.toLowerCase();
-  const account = offlineLogin
-    ? state.accounts.find((item) => String(item.id || "") === String(sharedLogin.offlineAccountId || ""))
-    : state.accounts.find((item) => String(item.username || "").toLowerCase() === normalizedUsername && (remoteSupabaseLogin || item.password === password));
+  const account = cachedSessionLogin
+    ? state.accounts.find((item) => String(item.id || "") === String(sharedLogin.accountId || ""))
+    : state.accounts.find((item) => (
+      String(item.username || "").toLowerCase() === normalizedUsername
+      && (remoteSupabaseLogin || item.password === password)
+    ));
   if (!account) {
-    byId("loginError").textContent = "Máy chủ đã xác thực nhưng chưa tải được hồ sơ tài khoản. Vui lòng thử lại; lần thử này không bị tính là nhập sai mật khẩu.";
+    byId("loginError").textContent = "Tên đăng nhập hoặc mật khẩu không đúng.";
     return;
   }
   if (account.disabled) {
     byId("loginError").textContent = "Tài khoản này đang bị vô hiệu hóa. Vui lòng liên hệ Admin.";
     return;
   }
-  if (sharedLogin.mode !== "offline") await rememberOfflineLogin(account, password);
-  clearLocalLoginFailures(username);
+  rememberSessionLoginCredential(account, password);
   localStorage.setItem(SESSION_KEY, account.id);
   birthdayCelebrationDisplayKey = "";
   const sectionHeadCatalogMigrated = migrateSectionHeadKpiCatalog();
@@ -13990,6 +13548,7 @@ byId("loginForm").addEventListener("submit", async (event) => {
 
 byId("logoutButton").addEventListener("click", () => {
   logoutSharedSession();
+  sessionStorage.removeItem(LOGIN_SESSION_CREDENTIAL_KEY);
   localStorage.removeItem(SESSION_KEY);
   renderAll();
 });
@@ -15015,8 +14574,8 @@ byId("accountForm").addEventListener("submit", (event) => {
   }
   const existing = accountById(id);
   const requestedPassword = byId("accountPassword").value;
-  if ((!existing || requestedPassword) && !isStrongAccountPassword(requestedPassword)) {
-    alert("Mật khẩu phải có ít nhất 10 ký tự và sử dụng tối thiểu 3 nhóm: chữ hoa, chữ thường, số, ký tự đặc biệt.");
+  if (!existing && !requestedPassword) {
+    alert("Nhập mật khẩu để tạo tài khoản mới.");
     return;
   }
   const username = ownOnly ? existing?.username || current?.username || "" : byId("accountUsername").value.trim();
@@ -16591,10 +16150,6 @@ async function importSeparatedJsonData(files) {
   applyRuntimeKpiCatalogs(state);
   migrateDepartmentTermLabels({ persist: false });
   syncPersonnelAccounts();
-  // Keep one-way verifiers for every imported credential. This makes an
-  // Admin's local recovery copy usable for offline account testing without
-  // keeping those passwords in the synced browser state.
-  scheduleLocalOfflineLoginProofCache(state.accounts);
   const localPersist = persistState();
   sharedSync.localChangeVersion += 1;
   await markSharedStateDirty();
