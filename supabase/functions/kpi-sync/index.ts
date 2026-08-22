@@ -13,7 +13,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.08.22.4";
+const deploymentVersion = "2026.08.22.5";
 
 const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "deletedIds"] as const;
@@ -992,6 +992,17 @@ function isBlankTaskField(value: unknown): boolean {
   return String(value ?? "").trim() === "";
 }
 
+function taskCompletionIsLateFromTimestamp(task: JsonRecord): boolean {
+  if (!completedTaskStatus(task.status) || !String(task.due || "").trim() || !String(task.completedAt || "").trim()) return false;
+  const dueDate = String(task.due || "").trim();
+  const rawDueTime = String(task.dueTime || "").trim();
+  const dueTime = /^\d{2}:\d{2}$/.test(rawDueTime) ? `${rawDueTime}:00` : "23:59:59";
+  const deadline = new Date(`${dueDate}T${dueTime}+07:00`);
+  const completedAt = new Date(String(task.completedAt || ""));
+  if (Number.isNaN(deadline.getTime()) || Number.isNaN(completedAt.getTime())) return false;
+  return completedAt.getTime() > deadline.getTime();
+}
+
 function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
   const completionFields = [
     "completionReviewedAt",
@@ -1004,9 +1015,12 @@ function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
     "qualityAssessedByName",
   ];
   const cleared = completionFields.every((field) => isBlankTaskField(next[field]));
-  if (!cleared || Boolean(next.lateCompletion)) return false;
-  if (completedTaskStatus(next.status)) return String(next.completionReviewStatus || "") === "pending";
-  return isBlankTaskField(next.completionReviewStatus);
+  if (!cleared) return false;
+  if (completedTaskStatus(next.status)) {
+    if (String(next.completionReviewStatus || "") !== "pending") return false;
+    return Boolean(next.lateCompletion) === taskCompletionIsLateFromTimestamp(next);
+  }
+  return isBlankTaskField(next.completionReviewStatus) && !Boolean(next.lateCompletion);
 }
 
 function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
@@ -1045,11 +1059,12 @@ function normalizeTaskProgressLifecycle(next: JsonRecord): JsonRecord {
   clearFields.forEach((field) => {
     normalized[field] = "";
   });
-  normalized.lateCompletion = false;
   if (completedTaskStatus(normalized.status)) {
     normalized.completionReviewStatus = "pending";
+    normalized.lateCompletion = taskCompletionIsLateFromTimestamp(normalized);
   } else {
     normalized.completionReviewStatus = "";
+    normalized.lateCompletion = false;
     normalized.completedAt = "";
     normalized.completedById = "";
     normalized.completedByName = "";
@@ -1150,6 +1165,74 @@ function canUpdateTaskProgress(state: JsonRecord, account: JsonRecord, task: Jso
   if (taskParticipantForAccount(state, task, account)) return true;
   return isDirector(account)
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, task, accountDepartmentId(state, account)));
+}
+
+function mergeTaskProgressReportsFromMutation(live: JsonRecord, base: JsonRecord, incoming: JsonRecord): JsonRecord[] {
+  const liveReports = Array.isArray(live.progressReports) ? clone(live.progressReports) : [];
+  const baseReports = Array.isArray(base.progressReports) ? base.progressReports : [];
+  const incomingReports = Array.isArray(incoming.progressReports) ? incoming.progressReports.filter(isRecord) : [];
+  const baseIds = new Set(baseReports.map((report) => recordId(report)).filter(Boolean));
+  const liveIds = new Set(liveReports.map((report) => recordId(report)).filter(Boolean));
+  incomingReports.forEach((report) => {
+    const id = recordId(report);
+    if ((id && baseIds.has(id)) || (id && liveIds.has(id))) return;
+    liveReports.push(clone(report));
+    if (id) liveIds.add(id);
+  });
+  return liveReports;
+}
+
+function sanitizeTaskProgressMutation(
+  state: JsonRecord,
+  account: JsonRecord,
+  live: JsonRecord,
+  base: JsonRecord,
+  incoming: JsonRecord,
+): JsonRecord | null {
+  if (!canUpdateTaskProgress(state, account, live) || taskProgressIsLocked(live)) return null;
+  if (taskCompletionReviewChange(base, incoming) || taskQualityOnlyChange(base, incoming)) return null;
+
+  const hasProgressIntent = taskProgressFields(true).some((field) => !sameJson(base[field], incoming[field]));
+  if (!hasProgressIntent || !appendOnly(base.progressReports || [], incoming.progressReports || [])) return null;
+
+  const sanitized = clone(live);
+  [
+    "status",
+    "progress",
+    "attachments",
+    "responseStatus",
+    "responseNote",
+    "responseAt",
+    "responseById",
+    "responseByName",
+    "updatedAt",
+    "updatedBy",
+    "updatedById",
+  ].forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(incoming, field)) sanitized[field] = clone(incoming[field]);
+  });
+  sanitized.progressReports = mergeTaskProgressReportsFromMutation(live, base, incoming);
+
+  const canManageDepartmentProgress = isDirector(account)
+    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, live, accountDepartmentId(state, account)));
+  if (canManageDepartmentProgress) {
+    if (Object.prototype.hasOwnProperty.call(incoming, "collaboratorIds")) sanitized.collaboratorIds = clone(incoming.collaboratorIds);
+    if (Object.prototype.hasOwnProperty.call(incoming, "collaboratorId")) sanitized.collaboratorId = clone(incoming.collaboratorId);
+  }
+
+  const wasCompleted = completedTaskStatus(live.status);
+  const nowCompleted = completedTaskStatus(sanitized.status);
+  if (nowCompleted && !wasCompleted) {
+    sanitized.completedAt = new Date().toISOString();
+    sanitized.completedById = accountPersonId(state, account) || String(account.id || "");
+    sanitized.completedByName = String(account.displayName || account.username || "");
+  } else if (nowCompleted && wasCompleted) {
+    sanitized.completedAt = live.completedAt || "";
+    sanitized.completedById = live.completedById || "";
+    sanitized.completedByName = live.completedByName || "";
+  }
+
+  return normalizeTaskProgressLifecycle(sanitized);
 }
 
 function shouldNormalizeTaskProgressUpdate(
@@ -1409,11 +1492,63 @@ function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number
   state.activityLog = activityLog.slice(-5000);
 }
 
-function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): { state: JsonRecord; denied: DeniedMutation[]; changed: number } {
+const protectedDeleteCollections: CollectionName[] = ["people", "tasks", "accounts"];
+const massDeleteRatio = 0.25;
+const massDeleteMinimum = 10;
+
+function mutationAuditSummary(state: JsonRecord, patch: StatePatch): Record<string, unknown> {
+  const summary: Record<string, unknown> = {};
+  collections.forEach((collection) => {
+    const changes = patch.collections?.[collection];
+    if (!changes) return;
+    summary[collection] = {
+      existing: records(state, collection).length,
+      upserts: Array.isArray(changes.upserts) ? changes.upserts.length : 0,
+      deletes: Array.isArray(changes.deletes) ? changes.deletes.length : 0,
+    };
+  });
+  return summary;
+}
+
+function protectedDeleteReason(state: JsonRecord, collection: CollectionName, deleteIds: string[]): string {
+  if (!protectedDeleteCollections.includes(collection) || !deleteIds.length) return "";
+  const existing = records(state, collection);
+  const existingIds = new Set(existing.map(recordId).filter(Boolean));
+  const effectiveDeleteIds = [...new Set(deleteIds)].filter((id) => existingIds.has(id));
+  const deleteCount = effectiveDeleteIds.length;
+  const existingCount = existing.length;
+  const remainingCount = Math.max(0, existingCount - deleteCount);
+
+  if (existingCount > 0 && remainingCount === 0) {
+    return `Blocked full wipe of ${collection}.`;
+  }
+
+  if (collection === "accounts") {
+    const deleteSet = new Set(effectiveDeleteIds);
+    const remainingAdmins = existing.filter((account) => !deleteSet.has(recordId(account)) && isAdmin(account));
+    if (!remainingAdmins.length) return "Blocked deletion of the last Admin account.";
+  }
+
+  const threshold = Math.max(massDeleteMinimum, Math.ceil(existingCount * massDeleteRatio));
+  if (existingCount >= 20 && deleteCount >= threshold) {
+    return `Blocked mass delete of ${deleteCount}/${existingCount} ${collection} records.`;
+  }
+  return "";
+}
+
+function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch, revision = 0): { state: JsonRecord; denied: DeniedMutation[]; changed: number } {
   const next = clone(current);
   next.moduleSettings = normalizeModuleSettings(next.moduleSettings);
   const denied: DeniedMutation[] = [];
   let changed = purgeRetiredAssignmentTasks(next);
+
+  console.log("kpi-sync mutation audit", JSON.stringify({
+    revision,
+    actorId: String(actor.id || ""),
+    actorUsername: String(actor.username || ""),
+    actorRole: accountRole(actor),
+    summary: mutationAuditSummary(current, patch),
+  }));
 
   collections.forEach((collection) => {
     const changes = patch.collections?.[collection];
@@ -1431,21 +1566,29 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       let candidate = value;
       const taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
-      if (
+      const sanitizedTaskProgress = collection === "tasks" && previous && taskBaseValue
+        ? sanitizeTaskProgressMutation(next, actor, previous, taskBaseValue, candidate)
+        : null;
+
+      if (sanitizedTaskProgress) {
+        candidate = sanitizedTaskProgress;
+      } else if (
         collection === "tasks"
         && previous
         && taskBaseValue
         && shouldNormalizeTaskProgressUpdate(next, actor, previous, taskBaseValue, candidate)
       ) {
-        // Progress reporters may only change progress data. Clear stale review data before authorization.
         candidate = normalizeTaskProgressLifecycle(candidate);
       }
+
       if (previous && !sameJson(operation.baseValue, serverValue)) {
-        const rebased = collection === "tasks" && isRecord(operation.baseValue)
-          ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
-          : collection === "supportRequests" && supportRequestBaseValue
-            ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
-          : null;
+        const rebased = sanitizedTaskProgress
+          ? candidate
+          : collection === "tasks" && isRecord(operation.baseValue)
+            ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
+            : collection === "supportRequests" && supportRequestBaseValue
+              ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
+              : null;
         if (!rebased) {
           denied.push({ scope: collection, id, reason: "Record changed by another user." });
           return;
@@ -1460,7 +1603,22 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       values.set(id, saved);
       changed += 1;
     });
-    (changes.deletes || []).forEach((operation) => {
+    const requestedDeleteIds = (changes.deletes || []).map((operation) => String(operation?.id || "").trim()).filter(Boolean);
+    const deleteGuardReason = protectedDeleteReason(next, collection, requestedDeleteIds);
+    if (deleteGuardReason) {
+      requestedDeleteIds.forEach((id) => denied.push({ scope: collection, id, reason: deleteGuardReason }));
+      console.error("kpi-sync destructive mutation blocked", JSON.stringify({
+        revision,
+        actorId: String(actor.id || ""),
+        actorUsername: String(actor.username || ""),
+        collection,
+        reason: deleteGuardReason,
+        requestedDeletes: requestedDeleteIds.length,
+        existing: records(next, collection).length,
+      }));
+    }
+
+    (deleteGuardReason ? [] : (changes.deletes || [])).forEach((operation) => {
       const id = String(operation?.id || "").trim();
       const previous = values.get(id);
       if (!id || !previous) return;
@@ -1842,7 +2000,7 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
     const current = await snapshot();
     const actor = accountForId(current.state, actorId);
     if (!actor) throw new Error("Authentication required.");
-    const result = applyPatch(current.state, actor, patch);
+    const result = applyPatch(current.state, actor, patch, current.revision);
     lastDenied = result.denied;
     if (!result.changed) return { snapshot: current, denied: lastDenied, changed: 0 };
     const { data, error } = await admin.rpc("kpi_update_shared_state", {
