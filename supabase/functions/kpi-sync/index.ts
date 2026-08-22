@@ -13,7 +13,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.08.22.5";
+const deploymentVersion = "2026.08.22.6";
 
 const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "deletedIds"] as const;
@@ -315,6 +315,18 @@ function mergeKpiSystemCustomizationChange(baseValue: unknown, localValue: unkno
 
 function rebaseScalarFieldChange(key: ScalarField, baseValue: unknown, localValue: unknown, remoteValue: unknown): { ok: true; value: unknown } | { ok: false } {
   if (sameJson(remoteValue, baseValue) || sameJson(remoteValue, localValue)) return { ok: true, value: localValue };
+
+  // These fields are migration/version markers only. A stale browser base must
+  // not create a false "Field changed by another user" conflict when Admin
+  // advances the application catalog/classification version on sign-in.
+  if ([
+    "canBoGpmbKpiCatalogVersion",
+    "sectionHeadKpiCatalogVersion",
+    "personalKpiClassificationVersion",
+  ].includes(key)) {
+    return { ok: true, value: clone(localValue) };
+  }
+
   if (["departments", "roles", "behaviorRules"].includes(key)) {
     const merged = mergeKpiCatalogArrayChange(key, baseValue, localValue, remoteValue);
     return merged ? { ok: true, value: merged } : { ok: false };
