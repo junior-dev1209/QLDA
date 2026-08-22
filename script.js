@@ -1,10 +1,7 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.0.34";
+const APP_VERSION = "3.0.35";
 const LOGIN_GUARD_KEY = "phuc-thinh-login-guard-v1";
-const LOGIN_GUARD_MAX_FAILURES = 5;
-const LOGIN_GUARD_WINDOW_MS = 15 * 60 * 1000;
-const LOGIN_GUARD_LOCK_MS = 15 * 60 * 1000;
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -13834,38 +13831,10 @@ function loginGuardEntryKey(username) {
   return String(username || "").trim().toLowerCase().slice(0, 96) || "anonymous";
 }
 
-function loginGuardRemainingSeconds(username) {
-  const entry = readLoginGuard()[loginGuardEntryKey(username)];
-  const lockedUntil = Number(entry?.lockedUntil || 0);
-  return lockedUntil > Date.now() ? Math.ceil((lockedUntil - Date.now()) / 1000) : 0;
-}
-
-function recordLocalLoginFailure(username) {
-  const now = Date.now();
-  const guard = readLoginGuard();
-  const key = loginGuardEntryKey(username);
-  const previous = guard[key];
-  const entry = !previous || Number(previous.windowStartedAt || 0) < now - LOGIN_GUARD_WINDOW_MS
-    ? { count: 0, windowStartedAt: now, lockedUntil: 0 }
-    : previous;
-  entry.count = Number(entry.count || 0) + 1;
-  if (entry.count >= LOGIN_GUARD_MAX_FAILURES) entry.lockedUntil = now + LOGIN_GUARD_LOCK_MS;
-  guard[key] = entry;
-  Object.keys(guard).forEach((entryKey) => {
-    const value = guard[entryKey];
-    if (Number(value?.lockedUntil || 0) <= now && Number(value?.windowStartedAt || 0) < now - LOGIN_GUARD_WINDOW_MS) delete guard[entryKey];
-  });
-  writeLoginGuard(guard);
-}
-
 function clearLocalLoginFailures(username) {
   const guard = readLoginGuard();
   delete guard[loginGuardEntryKey(username)];
   writeLoginGuard(guard);
-}
-
-function isCredentialError(message) {
-  return /invalid username or password|sai tài khoản hoặc mật khẩu/i.test(String(message || ""));
 }
 
 function renderApplicationIdentity() {
@@ -13980,14 +13949,12 @@ byId("loginForm").addEventListener("submit", async (event) => {
   const username = byId("loginUsername").value.trim();
   const password = byId("loginPassword").value;
   byId("loginError").textContent = "";
-  const localRetryAfter = loginGuardRemainingSeconds(username);
-  if (localRetryAfter > 0) {
-    byId("loginError").textContent = `Đăng nhập tạm khóa trên thiết bị này. Vui lòng thử lại sau ${localRetryAfter} giây.`;
-    return;
-  }
+  // Browser-level lockouts caused valid users to be rejected after a few
+  // mistyped attempts. Authentication and its light throttle are centralised
+  // on the server; clear only the obsolete local marker from older versions.
+  clearLocalLoginFailures(username);
   const sharedLogin = await loginSharedSession(username, password);
   if (sharedLogin.error) {
-    if (isCredentialError(sharedLogin.error)) recordLocalLoginFailure(username);
     byId("loginError").textContent = sharedLogin.error;
     return;
   }
@@ -13999,8 +13966,7 @@ byId("loginForm").addEventListener("submit", async (event) => {
     ? state.accounts.find((item) => String(item.id || "") === String(sharedLogin.offlineAccountId || ""))
     : state.accounts.find((item) => String(item.username || "").toLowerCase() === normalizedUsername && (remoteSupabaseLogin || item.password === password));
   if (!account) {
-    recordLocalLoginFailure(username);
-    byId("loginError").textContent = "Sai tài khoản hoặc mật khẩu.";
+    byId("loginError").textContent = "Máy chủ đã xác thực nhưng chưa tải được hồ sơ tài khoản. Vui lòng thử lại; lần thử này không bị tính là nhập sai mật khẩu.";
     return;
   }
   if (account.disabled) {
