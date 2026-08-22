@@ -2254,6 +2254,25 @@ async function restoreSharedSyncCheckpoint() {
   return sharedSync.checkpointRestorePromise;
 }
 
+function staleRestoredDirtyCheckpoint() {
+  return Boolean(sharedSync.dirty)
+    && Number(sharedSync.localChangeVersion || 0) === 0
+    && !sharedSync.inFlight
+    && !sharedSync.pending;
+}
+
+async function discardStaleRestoredDirtyCheckpoint(remotePayload, { render = true } = {}) {
+  if (!staleRestoredDirtyCheckpoint()) return false;
+  console.warn("Discarding stale shared-sync checkpoint; server state is authoritative for this fresh runtime.");
+  sharedSync.baseState = null;
+  sharedSync.serverBaseState = null;
+  sharedSync.conflict = false;
+  sharedSync.conflictNotified = false;
+  await clearSharedStateDirty();
+  await adoptSharedState(remotePayload, { render });
+  return true;
+}
+
 function markSharedStateDirty() {
   sharedSync.dirty = true;
   sharedSync.dirtyAccountId = sharedSync.accountId || currentAccount()?.id || sharedSync.dirtyAccountId || "";
@@ -3148,7 +3167,13 @@ async function loginSharedSession(username, password) {
     });
   }
   if (sharedSync.dirty) {
-    await retainUnsyncedLocalChanges(result.payload.state, { render: false });
+    const discardedStaleCheckpoint = await discardStaleRestoredDirtyCheckpoint(
+      result.payload.state,
+      { render: false },
+    );
+    if (!discardedStaleCheckpoint) {
+      await retainUnsyncedLocalChanges(result.payload.state, { render: false });
+    }
   } else {
     await adoptSharedState(result.payload.state, { render: false });
   }
@@ -3868,6 +3893,13 @@ function expireSharedSession() {
 
 function logoutSharedSession() {
   stopAccountPresenceMonitoring();
+  document.documentElement.classList.remove("is-authenticated");
+  document.body?.classList.remove("is-authenticated");
+  const loginElem = document.getElementById("loginScreen");
+  if (loginElem) {
+    loginElem.classList.remove("is-hidden");
+    loginElem.style.display = "";
+  }
   if (!sharedSync.session) return;
   const headers = sharedRequestHeaders();
   const canNotifyServer = sharedSync.available === true;
@@ -3930,7 +3962,10 @@ async function restoreSharedSession() {
     if (!response.ok || !payload?.state) throw new Error("Shared state is unavailable.");
     sharedSync.revision = Number(payload.revision) || 0;
     if (sharedSync.dirty) {
-      await retainUnsyncedLocalChanges(payload.state);
+      const discardedStaleCheckpoint = await discardStaleRestoredDirtyCheckpoint(payload.state);
+      if (!discardedStaleCheckpoint) {
+        await retainUnsyncedLocalChanges(payload.state);
+      }
     } else {
       await adoptSharedState(payload.state);
     }
@@ -12329,6 +12364,9 @@ function syncMobileNavigationAccess(activeViewId = document.querySelector(".view
 function applyAccessControls() {
   const account = currentAccount();
   document.body.classList.toggle("is-authenticated", Boolean(account));
+  // index.html hides the login screen through html.is-authenticated as an
+  // anti-flicker optimization. Keep the root class in sync on logout too.
+  document.documentElement.classList.toggle("is-authenticated", Boolean(account));
 
   // 🌟 KHẮC PHỤC LỖI TRẮNG TRANG: Xóa thuộc tính inline display:none khi đã đăng xuất
   const loginElem = byId("loginScreen");
