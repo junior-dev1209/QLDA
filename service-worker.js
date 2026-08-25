@@ -1,4 +1,4 @@
-const CACHE_NAME = "phuc-thinh-kpi-v329";
+const CACHE_NAME = "phuc-thinh-kpi-v348";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -10,6 +10,20 @@ const APP_SHELL = [
   "./app-icon-phuc-thinh.png",
   "./assets/birthday-cake.png",
   "./assets/birthday-bouquet.png",
+  "./assets/topbar-infrastructure-scene.png",
+  "./assets/topbar-scene-tet.png",
+  "./assets/topbar-scene-national-day.png",
+  "./assets/topbar-scene-anniversary.png",
+  "./assets/topbar-scene-women-day.png",
+  "./assets/topbar-scene-new-year.png",
+  "./assets/topbar-scene-hung-kings.png",
+  "./assets/topbar-scene-reunification-day.png",
+  "./assets/topbar-scene-children-day.png",
+  "./assets/topbar-scene-martyrs-day.png",
+  "./assets/topbar-scene-august-revolution.png",
+  "./assets/topbar-scene-vietnamese-women-day.png",
+  "./assets/topbar-scene-vietnamese-culture-day.png",
+  "./assets/topbar-scene-christmas.png",
 ];
 
 self.addEventListener("install", (event) => {

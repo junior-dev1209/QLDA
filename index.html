@@ -6,7 +6,7 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.0.38">
+  <meta name="application-version" content="3.0.57">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
@@ -45,19 +45,22 @@
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.0.38</strong>
+          <strong data-app-version>Phiên bản 3.0.56</strong>
         </p>
       </form>
     </div>
   </section>
 
   <header class="topbar">
-    <div>
+    <div class="topbar-brand">
       <p class="unit">
         <span>BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG</span>
         <span>XÃ PHÚC THỊNH</span>
       </p>
       <h1>Quản Trị Nhân Sự</h1>
+    </div>
+    <div class="topbar-visual" aria-hidden="true">
+      <img id="topbarVisualScene" class="topbar-visual-scene" src="assets/topbar-infrastructure-scene.png" alt="" decoding="async">
     </div>
     <div class="top-actions">
       <div class="user-chip">
@@ -160,6 +163,16 @@
           </article>
         </div>
 
+        <section class="block chart-block dashboard-department-block dashboard-department-effectiveness-full">
+          <div class="chart-heading">
+            <div>
+              <h3>Hiệu quả theo phòng</h3>
+              <p id="departmentChartSummary" class="muted">Chưa có dữ liệu KPI phòng.</p>
+            </div>
+          </div>
+          <div id="departmentSummary" class="department-grid"></div>
+        </section>
+
         <div class="dashboard-card-columns">
           <div class="dashboard-card-column">
             <section class="block chart-block dashboard-grade-block">
@@ -179,14 +192,9 @@
           </div>
 
           <div class="dashboard-card-column">
-            <section class="block chart-block dashboard-department-block">
-              <div class="chart-heading">
-                <div>
-                  <h3>Hiệu quả theo phòng</h3>
-                  <p id="departmentChartSummary" class="muted">Chưa có dữ liệu KPI phòng.</p>
-                </div>
-              </div>
-              <div id="departmentSummary" class="department-grid"></div>
+            <section class="block dashboard-department-status-block" aria-labelledby="dashboardDepartmentStatusTitle">
+              <h3 id="dashboardDepartmentStatusTitle">Tình hình các phòng</h3>
+              <div id="dashboardDepartmentStatus" class="dashboard-department-status empty-state">Chưa có dữ liệu công việc.</div>
             </section>
 
             <section class="block dashboard-alert-block">
@@ -548,6 +556,16 @@
           </div>
           <button id="openTaskProjectCatalog" class="ghost" type="button">Quản lý dự án</button>
         </section>
+        <section id="taskCompletionPendingPanel" class="task-completion-pending-panel" aria-labelledby="taskCompletionPendingTitle">
+          <div class="task-completion-pending-head">
+            <button id="openTaskCompletionPendingList" class="task-completion-pending-heading" type="button" aria-label="Mở danh sách công việc chờ phê duyệt hoàn thành">
+              <p class="eyebrow">Theo dõi phê duyệt</p>
+              <h3 id="taskCompletionPendingTitle">Chờ phê duyệt hoàn thành</h3>
+            </button>
+            <strong id="taskCompletionPendingCount" class="task-completion-pending-count">0</strong>
+          </div>
+          <div id="taskCompletionPendingList" class="task-completion-pending-list empty-state">Không có công việc chờ phê duyệt.</div>
+        </section>
         <section id="taskFormDialog" class="modal-backdrop is-hidden" aria-hidden="true">
           <div class="modal-card task-form-modal" role="dialog" aria-modal="true" aria-labelledby="taskFormDialogTitle">
             <div class="section-head task-form-dialog-head">
@@ -709,7 +727,6 @@
             <option value="">Tất cả trạng thái</option>
             <option>Chuẩn bị thực hiện</option>
             <option>Đang thực hiện</option>
-            <option>Chờ đánh giá</option>
             <option>Hoàn thành</option>
             <option>Quá hạn</option>
           </select>
@@ -1054,6 +1071,19 @@
             </div>
             <div id="accountTaskCreationList" class="account-task-creation-list"></div>
           </section>
+          <section class="account-usage-history account-task-overdue-stats" aria-labelledby="accountTaskOverdueTitle">
+            <div class="account-usage-history-head">
+              <div>
+                <p class="eyebrow">Công việc quá hạn</p>
+                <h4 id="accountTaskOverdueTitle">Công việc quá hạn liên quan theo tài khoản</h4>
+              </div>
+              <div class="account-task-overdue-actions">
+                <strong id="accountTaskOverdueTotal" class="account-task-creation-total">-</strong>
+                <button id="exportAllOverdueTasks" class="ghost compact account-overdue-export" type="button" disabled>Xuất tất cả</button>
+              </div>
+            </div>
+            <div id="accountTaskOverdueList" class="account-task-creation-list account-task-overdue-list"></div>
+          </section>
           <div class="account-usage-monitor-grid">
             <section class="account-usage-card" aria-labelledby="accountInactiveDayTitle">
               <div class="account-usage-card-head">
@@ -1332,7 +1362,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.0.38</strong>
+    <strong data-app-version>Phiên bản 3.0.56</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">

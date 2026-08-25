@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.0.38";
+const APP_VERSION = "3.0.57";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -20,8 +20,10 @@ const SHARED_SYNC_DIRTY_KEY = "phuc-thinh-shared-sync-dirty-v1";
 const STATE_SAVED_AT_KEY = "phuc-thinh-state-saved-at-v1";
 // Poll less often while a tab is idle. Focus/online events still refresh at
 // once, and the server returns only a revision check when nothing changed.
-const SHARED_SYNC_REFRESH_MS = 20000;
-const SHARED_SYNC_REFRESH_JITTER_MS = 5000;
+// A revoked single-device session is detected quickly without turning every
+// client into a continuous polling load on the Edge Function.
+const SHARED_SYNC_REFRESH_MS = 12000;
+const SHARED_SYNC_REFRESH_JITTER_MS = 2000;
 const SHARED_SYNC_RETRY_INITIAL_MS = 2500;
 const SHARED_SYNC_RETRY_MAX_MS = 60000;
 const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
@@ -30,6 +32,7 @@ const ACCOUNT_USAGE_AUTO_REFRESH_MS = 60000;
 const MAX_DELETED_ID_HISTORY = 2000;
 const ACCOUNT_PRESENCE_HEARTBEAT_MS = 60000;
 const SHARED_SYNC_COLLECTIONS = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"];
+const SHARED_PROTECTED_COLLECTIONS = ["people", "tasks", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
 const SHARED_SYNC_SCALAR_FIELDS = [
   "moduleSettings",
   "systemCustomization",
@@ -38,6 +41,7 @@ const SHARED_SYNC_SCALAR_FIELDS = [
   "behaviorRules",
   "importedPeopleVersion",
   "canBoGpmbKpiCatalogVersion",
+  "nhanVienTongHopGpmbKpiCatalogVersion",
   "sectionHeadKpiCatalogVersion",
   "personalKpiClassificationVersion",
   "deletedIds",
@@ -52,6 +56,7 @@ function debounce(fn, delay = 200) {
 
 const IMPORTED_PEOPLE_VERSION = "excel-2026-05-07-v1";
 const CAN_BO_GPMB_KPI_CATALOG_VERSION = "2026-08-12-v2";
+const NHAN_VIEN_TONG_HOP_GPMB_KPI_CATALOG_VERSION = "2026-08-24-v1";
 const SECTION_HEAD_KPI_CATALOG_VERSION = "2026-08-21-v2";
 const PERSONAL_KPI_CLASSIFICATION_VERSION = "2026-08-21-v5";
 const SECTION_HEAD_PERSONAL_CRITERION = "Hoàn thành kế hoạch công việc";
@@ -63,6 +68,16 @@ const sectionHeadKpiCriteria = [
 
 function standardSectionHeadKpiCriteria() {
   return sectionHeadKpiCriteria.map(([name, weight]) => [name, weight]);
+}
+
+const nhanVienTongHopGpmbKpiCriteria = [
+  ["Tổng hợp số liệu/Tiến độ dự án", 40],
+  ["Nhập liệu hồ sơ dự án", 30],
+  ["Hỗ trợ dự án", 30],
+];
+
+function standardNhanVienTongHopGpmbKpiCriteria() {
+  return nhanVienTongHopGpmbKpiCriteria.map(([name, weight]) => [name, weight]);
 }
 // ... Toàn bộ logic hệ thống phía dưới giữ nguyên vẹn ...
 const legacyCanBoGpmbTaskCategories = {
@@ -487,10 +502,7 @@ const defaultRoles = [
     id: "nhan-vien-tong-hop-gpmb",
     departmentId: "gpmb",
     name: "Nhân viên tổng hợp",
-    criteria: [
-      ["Tổng hợp số liệu/Tiến độ dự án", 50],
-      ["Nhập liệu hồ sơ dự án", 50],
-    ],
+    criteria: standardNhanVienTongHopGpmbKpiCriteria(),
   },
   {
     id: "truong-phong-ha-tang",
@@ -682,6 +694,14 @@ function applySectionHeadKpiCatalog(rolesCatalog) {
   ));
 }
 
+function applyNhanVienTongHopGpmbKpiCatalog(rolesCatalog) {
+  return (rolesCatalog || []).map((role) => (
+    role?.id === "nhan-vien-tong-hop-gpmb"
+      ? { ...role, criteria: standardNhanVienTongHopGpmbKpiCriteria() }
+      : role
+  ));
+}
+
 function normalizeBehaviorRulesCatalog(value) {
   const source = Array.isArray(value) && value.length ? value : defaultBehaviorRules;
   const names = new Set();
@@ -707,9 +727,12 @@ function applyRuntimeKpiCatalogs(payload) {
   // Before an Admin saves the migration, every device still uses the new
   // two-criterion calculation without silently writing catalog changes from
   // a lower-permission account.
-  roles = payload?.sectionHeadKpiCatalogVersion === SECTION_HEAD_KPI_CATALOG_VERSION
+  const sectionHeadRoles = payload?.sectionHeadKpiCatalogVersion === SECTION_HEAD_KPI_CATALOG_VERSION
     ? normalizedRoles
     : applySectionHeadKpiCatalog(normalizedRoles);
+  roles = payload?.nhanVienTongHopGpmbKpiCatalogVersion === NHAN_VIEN_TONG_HOP_GPMB_KPI_CATALOG_VERSION
+    ? sectionHeadRoles
+    : applyNhanVienTongHopGpmbKpiCatalog(sectionHeadRoles);
   behaviorRules = normalizeBehaviorRulesCatalog(payload?.behaviorRules);
 }
 
@@ -830,8 +853,215 @@ const systemThemeOptions = [
       "--login-end": "#a84262",
     },
   },
+  {
+    id: "new-year",
+    label: "Happy New Year",
+    palette: {
+      "--bg": "#f4f8ff",
+      "--bg-top": "#fbfdff",
+      "--surface": "#ffffff",
+      "--surface-2": "#f8fbff",
+      "--surface-3": "#eaf2ff",
+      "--line": "#d2e0f4",
+      "--line-strong": "#adc6e8",
+      "--text": "#17243a",
+      "--muted": "#5d708c",
+      "--primary": "#1c5fa8",
+      "--primary-dark": "#123d73",
+      "--accent": "#c79625",
+      "--focus": "rgba(28, 95, 168, 0.2)",
+      "--login-start": "#14365f",
+      "--login-end": "#1c5fa8",
+    },
+  },
+  {
+    id: "hung-kings",
+    label: "Ngày Giỗ Tổ Hùng Vương",
+    palette: {
+      "--bg": "#f7f7ef",
+      "--bg-top": "#fdfdf9",
+      "--surface": "#ffffff",
+      "--surface-2": "#fafaf4",
+      "--surface-3": "#edf0e4",
+      "--line": "#dce0d0",
+      "--line-strong": "#bec8ae",
+      "--text": "#26382b",
+      "--muted": "#667461",
+      "--primary": "#4e6b3e",
+      "--primary-dark": "#314827",
+      "--accent": "#a87727",
+      "--focus": "rgba(78, 107, 62, 0.2)",
+      "--login-start": "#314827",
+      "--login-end": "#4e6b3e",
+    },
+  },
+  {
+    id: "reunification-day",
+    label: "Ngày lễ 30/4 - 1/5",
+    palette: {
+      "--bg": "#fff8f4",
+      "--bg-top": "#fffdfb",
+      "--surface": "#ffffff",
+      "--surface-2": "#fffaf7",
+      "--surface-3": "#feeee7",
+      "--line": "#ecd7ca",
+      "--line-strong": "#d7b7a5",
+      "--text": "#402626",
+      "--muted": "#7b625b",
+      "--primary": "#a2332d",
+      "--primary-dark": "#751f1b",
+      "--accent": "#a87924",
+      "--focus": "rgba(162, 51, 45, 0.2)",
+      "--login-start": "#751f1b",
+      "--login-end": "#a2332d",
+    },
+  },
+  {
+    id: "children-day",
+    label: "Ngày Quốc tế Thiếu nhi 1/6",
+    palette: {
+      "--bg": "#f2fbff",
+      "--bg-top": "#fcfeff",
+      "--surface": "#ffffff",
+      "--surface-2": "#f7fcff",
+      "--surface-3": "#e1f5fb",
+      "--line": "#cbe7ef",
+      "--line-strong": "#a8d1df",
+      "--text": "#19344a",
+      "--muted": "#5c798c",
+      "--primary": "#217fa0",
+      "--primary-dark": "#14546f",
+      "--accent": "#d1842e",
+      "--focus": "rgba(33, 127, 160, 0.2)",
+      "--login-start": "#14546f",
+      "--login-end": "#217fa0",
+    },
+  },
+  {
+    id: "martyrs-day",
+    label: "Ngày Thương binh Liệt sĩ 27/7",
+    palette: {
+      "--bg": "#fbf6f2",
+      "--bg-top": "#fffdfb",
+      "--surface": "#ffffff",
+      "--surface-2": "#fdf9f6",
+      "--surface-3": "#f1e6df",
+      "--line": "#e3d3c9",
+      "--line-strong": "#cdb5a7",
+      "--text": "#3e2d2c",
+      "--muted": "#79635f",
+      "--primary": "#7d3532",
+      "--primary-dark": "#572321",
+      "--accent": "#a97735",
+      "--focus": "rgba(125, 53, 50, 0.2)",
+      "--login-start": "#572321",
+      "--login-end": "#7d3532",
+    },
+  },
+  {
+    id: "august-revolution",
+    label: "Ngày Cách mạng Tháng Tám 19/8",
+    palette: {
+      "--bg": "#fff9ef",
+      "--bg-top": "#fffefb",
+      "--surface": "#ffffff",
+      "--surface-2": "#fffaf3",
+      "--surface-3": "#f8ecd7",
+      "--line": "#e8d4b8",
+      "--line-strong": "#d3b689",
+      "--text": "#422522",
+      "--muted": "#7d6259",
+      "--primary": "#a62924",
+      "--primary-dark": "#731b18",
+      "--accent": "#b67e24",
+      "--focus": "rgba(166, 41, 36, 0.2)",
+      "--login-start": "#731b18",
+      "--login-end": "#a62924",
+    },
+  },
+  {
+    id: "vietnamese-women-day",
+    label: "Ngày Phụ nữ Việt Nam 20/10",
+    palette: {
+      "--bg": "#fff6f8",
+      "--bg-top": "#fffdfd",
+      "--surface": "#ffffff",
+      "--surface-2": "#fff9fb",
+      "--surface-3": "#f9e8ee",
+      "--line": "#ead2dc",
+      "--line-strong": "#d7b1c0",
+      "--text": "#422936",
+      "--muted": "#806170",
+      "--primary": "#a34365",
+      "--primary-dark": "#742c47",
+      "--accent": "#b47a2a",
+      "--focus": "rgba(163, 67, 101, 0.2)",
+      "--login-start": "#742c47",
+      "--login-end": "#a34365",
+    },
+  },
+  {
+    id: "vietnamese-culture-day",
+    label: "Ngày Văn hóa Việt Nam 24/11",
+    palette: {
+      "--bg": "#f6f7fb",
+      "--bg-top": "#fdfdff",
+      "--surface": "#ffffff",
+      "--surface-2": "#fafbfe",
+      "--surface-3": "#e8edf7",
+      "--line": "#d4dced",
+      "--line-strong": "#b5c2dd",
+      "--text": "#1d2b49",
+      "--muted": "#5e6d89",
+      "--primary": "#38558c",
+      "--primary-dark": "#26395f",
+      "--accent": "#a85c39",
+      "--focus": "rgba(56, 85, 140, 0.2)",
+      "--login-start": "#26395f",
+      "--login-end": "#38558c",
+    },
+  },
+  {
+    id: "christmas",
+    label: "Ngày Giáng sinh 25/12",
+    palette: {
+      "--bg": "#f3faf7",
+      "--bg-top": "#fcfefd",
+      "--surface": "#ffffff",
+      "--surface-2": "#f8fcfa",
+      "--surface-3": "#e1f0e8",
+      "--line": "#cce0d6",
+      "--line-strong": "#a9cbbb",
+      "--text": "#1d3b31",
+      "--muted": "#5d786b",
+      "--primary": "#237054",
+      "--primary-dark": "#164b39",
+      "--accent": "#b63838",
+      "--focus": "rgba(35, 112, 84, 0.2)",
+      "--login-start": "#164b39",
+      "--login-end": "#237054",
+    },
+  },
   { id: "custom", label: "Dịp kỷ niệm tùy chỉnh" },
 ];
+
+const topbarThemeVisuals = {
+  default: "assets/topbar-infrastructure-scene.png",
+  tet: "assets/topbar-scene-tet.png",
+  "national-day": "assets/topbar-scene-national-day.png",
+  anniversary: "assets/topbar-scene-anniversary.png",
+  "women-day": "assets/topbar-scene-women-day.png",
+  "new-year": "assets/topbar-scene-new-year.png",
+  "hung-kings": "assets/topbar-scene-hung-kings.png",
+  "reunification-day": "assets/topbar-scene-reunification-day.png",
+  "children-day": "assets/topbar-scene-children-day.png",
+  "martyrs-day": "assets/topbar-scene-martyrs-day.png",
+  "august-revolution": "assets/topbar-scene-august-revolution.png",
+  "vietnamese-women-day": "assets/topbar-scene-vietnamese-women-day.png",
+  "vietnamese-culture-day": "assets/topbar-scene-vietnamese-culture-day.png",
+  christmas: "assets/topbar-scene-christmas.png",
+  custom: "assets/topbar-scene-anniversary.png",
+};
 
 const printableSections = [
   { id: "dashboard", label: "Tổng quan" },
@@ -1264,6 +1494,17 @@ let taskDetailInlineEditor = null;
 let personDetailInlineEditor = null;
 let dashboardRefreshQueued = false;
 let dashboardChartAnimationFrame = 0;
+let statePersistenceTimer = 0;
+let statePersistenceIdleHandle = 0;
+let statePersistenceQueued = false;
+let derivedStateRevision = 0;
+let recurringTasksEnsuredRevision = -1;
+let recurringTasksEnsuredPeriod = "";
+let taskBoardRenderSignature = "";
+const taskBoardVisibleLimits = new Map();
+const dashboardKpiContextCache = new Map();
+const TASK_BOARD_INITIAL_RENDER_LIMIT = 40;
+const TASK_BOARD_RENDER_STEP = 40;
 
 function runWhenDocumentReady(callback) {
   if (document.readyState === "loading") {
@@ -1295,6 +1536,7 @@ const sharedSync = {
   sessionToken: localStorage.getItem(SHARED_SYNC_SESSION_TOKEN_KEY) || "",
   revision: null,
   timer: 0,
+  idleTimer: 0,
   pending: false,
   inFlight: false,
   retryTimer: 0,
@@ -1308,7 +1550,9 @@ const sharedSync = {
   accountId: "",
   dirtyAccountId: "",
   localChangeVersion: 0,
-  dirty: localStorage.getItem(SHARED_SYNC_DIRTY_KEY) === "1",
+  // A dirty marker without its verified baseline must never be replayed.
+  // It can otherwise turn an empty local cache into a server-side deletion.
+  dirty: false,
   checkpointRestorePromise: null,
   checkpointWritePromise: Promise.resolve(),
   fileWarnings: [],
@@ -1333,6 +1577,7 @@ const TASK_STATUS_OLD_PREPARING = "Chưa bắt đầu";
 const TASK_STATUS_COMPLETED = "Hoàn thành";
 const TASK_STATUS_CLOSED = "Đã kết thúc";
 const TASK_STATUS_PENDING_REVIEW = "Chờ đánh giá";
+const DASHBOARD_VISIBLE_LIST_ROWS = 10;
 const taskStatuses = [TASK_STATUS_PREPARING, "Đang thực hiện", "Hoàn thành", "Quá hạn"];
 const TASK_KIND_ASSIGNED = "assigned";
 const TASK_KIND_REGULAR = "regular";
@@ -2003,6 +2248,7 @@ function defaultStatePayload() {
     activityLog: [],
     importedPeopleVersion: "",
     canBoGpmbKpiCatalogVersion: "",
+    nhanVienTongHopGpmbKpiCatalogVersion: "",
     sectionHeadKpiCatalogVersion: "",
     personalKpiClassificationVersion: "",
     deletedIds: [], // 🌟 KHÓA CHỐNG HỒI SINH: Lưu danh sách ID đã bị xóa
@@ -2127,6 +2373,7 @@ function normalizeStatePayload(parsed) {
       : [],
     importedPeopleVersion: parsed.importedPeopleVersion || "",
     canBoGpmbKpiCatalogVersion: parsed.canBoGpmbKpiCatalogVersion || "",
+    nhanVienTongHopGpmbKpiCatalogVersion: parsed.nhanVienTongHopGpmbKpiCatalogVersion || "",
     sectionHeadKpiCatalogVersion: parsed.sectionHeadKpiCatalogVersion || "",
     personalKpiClassificationVersion: parsed.personalKpiClassificationVersion || "",
     deletedIds: Array.isArray(parsed.deletedIds)
@@ -2147,6 +2394,8 @@ function loadState() {
 }
 
 function persistState() {
+  cancelScheduledStatePersistence();
+  invalidateDerivedState();
   const serialized = JSON.stringify(state);
   try {
     localStorage.setItem(STORAGE_KEY, serialized);
@@ -2165,8 +2414,56 @@ function persistState() {
   return durableStateWritePromise;
 }
 
+function invalidateDerivedState() {
+  derivedStateRevision += 1;
+  dashboardKpiContextCache.clear();
+}
+
+function cancelScheduledStatePersistence() {
+  if (statePersistenceTimer) {
+    window.clearTimeout(statePersistenceTimer);
+    statePersistenceTimer = 0;
+  }
+  if (statePersistenceIdleHandle && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(statePersistenceIdleHandle);
+  }
+  statePersistenceIdleHandle = 0;
+  statePersistenceQueued = false;
+}
+
+function scheduleStatePersistence() {
+  if (statePersistenceQueued) return;
+  statePersistenceQueued = true;
+  const run = () => {
+    statePersistenceTimer = 0;
+    statePersistenceIdleHandle = 0;
+    statePersistenceQueued = false;
+    const serialized = JSON.stringify(state);
+    try {
+      localStorage.setItem(STORAGE_KEY, serialized);
+      if (durableStateRestoreComplete) localStorage.setItem(STATE_SAVED_AT_KEY, String(Date.now()));
+    } catch (error) {
+      console.warn("Local state cache is full; using durable browser storage:", error);
+    }
+    if (durableStateRestoreComplete) {
+      durableStateWritePromise = durableStateWritePromise
+        .catch(() => {})
+        .then(() => writeBinaryMetadata(DURABLE_APP_STATE_ID, { serialized }))
+        .catch((error) => {
+          console.warn("Durable state save failed:", error);
+        });
+    }
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    statePersistenceIdleHandle = window.requestIdleCallback(run, { timeout: 350 });
+  } else {
+    statePersistenceTimer = window.setTimeout(run, 120);
+  }
+}
+
 function saveState() {
-  persistState();
+  invalidateDerivedState();
+  scheduleStatePersistence();
   if (sharedSync.session && !isOfflineFileRuntime()) {
     sharedSync.localChangeVersion += 1;
     markSharedStateDirty();
@@ -2189,6 +2486,7 @@ async function restoreDurableState() {
     if (localSerialized === serialized) return false;
     if (localSavedAt > durableSavedAt) return false;
     Object.assign(state, normalizeStatePayload(JSON.parse(serialized)));
+    invalidateDerivedState();
     applyRuntimeKpiCatalogs(state);
     try {
       localStorage.setItem(STORAGE_KEY, serialized);
@@ -2240,37 +2538,38 @@ async function restoreSharedSyncCheckpoint() {
     .then((record) => {
       const checkpoint = record?.value;
       if (!checkpoint || typeof checkpoint !== "object") return false;
-      sharedSync.dirty = Boolean(checkpoint.dirty) || localStorage.getItem(SHARED_SYNC_DIRTY_KEY) === "1";
-      sharedSync.dirtyAccountId = String(checkpoint.dirtyAccountId || "");
-      sharedSync.revision = Number.isFinite(Number(checkpoint.revision)) ? Number(checkpoint.revision) : sharedSync.revision;
-      sharedSync.baseState = checkpoint.baseState ? cloneStatePayload(normalizeStatePayload(checkpoint.baseState)) : sharedSync.baseState;
-      sharedSync.serverBaseState = checkpoint.serverBaseState ? sharedServerBasePayload(checkpoint.serverBaseState) : sharedSync.serverBaseState;
-      return true;
+      const checkpointRevision = Number(checkpoint.revision);
+      const checkpointAccountId = String(checkpoint.dirtyAccountId || "").trim();
+      const checkpointBaseState = checkpoint.baseState ? cloneStatePayload(normalizeStatePayload(checkpoint.baseState)) : null;
+      const checkpointServerBaseState = checkpoint.serverBaseState ? sharedServerBasePayload(checkpoint.serverBaseState) : null;
+      const trustedDirtyCheckpoint = Boolean(
+        checkpoint.dirty
+        && checkpointAccountId
+        && Number.isFinite(checkpointRevision)
+        && checkpointRevision > 0
+        && checkpointBaseState
+        && checkpointServerBaseState,
+      );
+
+      sharedSync.dirty = trustedDirtyCheckpoint;
+      sharedSync.dirtyAccountId = trustedDirtyCheckpoint ? checkpointAccountId : "";
+      sharedSync.revision = Number.isFinite(checkpointRevision) ? checkpointRevision : sharedSync.revision;
+      sharedSync.baseState = checkpointBaseState;
+      sharedSync.serverBaseState = checkpointServerBaseState;
+      if (!trustedDirtyCheckpoint) {
+        try {
+          localStorage.removeItem(SHARED_SYNC_DIRTY_KEY);
+        } catch {
+          // The checkpoint itself is treated as the source of truth.
+        }
+      }
+      return trustedDirtyCheckpoint;
     })
     .catch((error) => {
       console.warn("Shared sync checkpoint restore failed:", error);
       return false;
     });
   return sharedSync.checkpointRestorePromise;
-}
-
-function staleRestoredDirtyCheckpoint() {
-  return Boolean(sharedSync.dirty)
-    && Number(sharedSync.localChangeVersion || 0) === 0
-    && !sharedSync.inFlight
-    && !sharedSync.pending;
-}
-
-async function discardStaleRestoredDirtyCheckpoint(remotePayload, { render = true } = {}) {
-  if (!staleRestoredDirtyCheckpoint()) return false;
-  console.warn("Discarding stale shared-sync checkpoint; server state is authoritative for this fresh runtime.");
-  sharedSync.baseState = null;
-  sharedSync.serverBaseState = null;
-  sharedSync.conflict = false;
-  sharedSync.conflictNotified = false;
-  await clearSharedStateDirty();
-  await adoptSharedState(remotePayload, { render });
-  return true;
 }
 
 function markSharedStateDirty() {
@@ -2351,14 +2650,65 @@ function localStateHasBusinessData(payload = state) {
   );
 }
 
-function canBootstrapCloudFromLocalState(payload = state) {
-  const source = normalizeStatePayload(payload);
-  const accounts = Array.isArray(source.accounts) ? source.accounts : [];
-  return (
-    localStateHasBusinessData(source) &&
-    accounts.length >= defaultAccounts().length &&
-    accounts.every((account) => String(account?.password || "").trim())
+function sharedCollectionCount(payload, collection) {
+  return Array.isArray(payload?.[collection]) ? payload[collection].length : 0;
+}
+
+function sharedSnapshotDropsCriticalData(basePayload, nextPayload) {
+  const base = normalizeStatePayload(basePayload);
+  const next = normalizeStatePayload(nextPayload);
+  const criticalCollections = ["people", "tasks", "accounts"];
+  if (criticalCollections.some((collection) => sharedCollectionCount(base, collection) > 0 && sharedCollectionCount(next, collection) === 0)) {
+    return true;
+  }
+
+  // Keep the v3.0.57 cross-collection guard, but preserve the stricter
+  // protection proven in the stable build for large critical collections.
+  if (criticalCollections.some((collection) => {
+    const before = sharedCollectionCount(base, collection);
+    const after = sharedCollectionCount(next, collection);
+    const removed = Math.max(0, before - after);
+    const threshold = Math.max(10, Math.ceil(before * 0.25));
+    return before >= 20 && removed >= threshold;
+  })) {
+    return true;
+  }
+
+  const baseTotal = SHARED_PROTECTED_COLLECTIONS.reduce((total, collection) => total + sharedCollectionCount(base, collection), 0);
+  const nextTotal = SHARED_PROTECTED_COLLECTIONS.reduce((total, collection) => total + sharedCollectionCount(next, collection), 0);
+  if (baseTotal >= 5 && nextTotal < baseTotal * 0.65) return true;
+  return SHARED_PROTECTED_COLLECTIONS.some((collection) => {
+    const before = sharedCollectionCount(base, collection);
+    const after = sharedCollectionCount(next, collection);
+    return before >= 5 && after < before * 0.65;
+  });
+}
+
+function sharedPatchDeletesCriticalData(basePayload, nextPayload, patch) {
+  if (!patch || !sharedSnapshotDropsCriticalData(basePayload, nextPayload)) return false;
+  return SHARED_PROTECTED_COLLECTIONS.some((collection) => (patch.collections?.[collection]?.deletes || []).length > 0);
+}
+
+function hasTrustedSharedChangeCheckpoint(accountId) {
+  return Boolean(
+    sharedSync.dirty
+    && sharedSync.dirtyAccountId
+    && String(sharedSync.dirtyAccountId) === String(accountId || "")
+    && Number.isFinite(Number(sharedSync.revision))
+    && Number(sharedSync.revision) > 0
+    && sharedSync.baseState
+    && sharedSync.serverBaseState,
   );
+}
+
+async function discardUntrustedSharedChanges(reason) {
+  if (sharedSync.dirty || localStateHasBusinessData()) {
+    persistSharedConflictBackup(cloneStatePayload(state), { download: false, reason });
+  }
+  sharedSync.pending = false;
+  sharedSync.baseState = null;
+  sharedSync.serverBaseState = null;
+  await clearSharedStateDirty();
 }
 
 function isOfflineFileRuntime() {
@@ -2600,6 +2950,227 @@ function renderAccountTaskCreationStatistics() {
   list.innerHTML = rows.join("");
 }
 
+function taskAccountRelationLabels(task, account, lookup = taskCreatorAccountLookup()) {
+  if (!task || !account) return [];
+  const labels = [];
+  const creator = taskCreatorAccount(task, lookup);
+  const personId = String(account.personId || "").trim();
+  if (creator?.id === account.id) labels.push("Người tạo");
+  if (personId && taskParticipantPersonId(task.ownerId) === personId) labels.push("Người thực hiện");
+  if (personId && taskCollaboratorIds(task).includes(personId)) labels.push("Người phối hợp");
+  return labels;
+}
+
+function accountRelatedOverdueTasks(account, lookup = taskCreatorAccountLookup()) {
+  if (!account?.id) return [];
+  return (state.tasks || [])
+    .map((task) => ({ task, relationLabels: taskAccountRelationLabels(task, account, lookup) }))
+    .filter(({ task, relationLabels }) => getDueStatus(task) === "Quá hạn" && relationLabels.length)
+    .sort((left, right) => {
+      const dueCompare = String(left.task.due || "").localeCompare(String(right.task.due || ""));
+      return dueCompare || String(left.task.title || "").localeCompare(String(right.task.title || ""), "vi");
+    });
+}
+
+function accountOverdueTaskStatistics(departmentId = "") {
+  const lookup = taskCreatorAccountLookup();
+  const rows = state.accounts
+    .filter((account) => !departmentId || accountDepartmentIdForStatistics(account) === departmentId)
+    .map((account) => ({
+      account,
+      tasks: accountRelatedOverdueTasks(account, lookup),
+    }))
+    .map((row) => ({ ...row, overdueCount: row.tasks.length }))
+    .sort((left, right) => right.overdueCount - left.overdueCount || String(left.account.displayName || left.account.username).localeCompare(String(right.account.displayName || right.account.username), "vi"));
+  return {
+    totalRelated: rows.reduce((total, row) => total + row.overdueCount, 0),
+    rows,
+  };
+}
+
+function spreadsheetSafeText(value) {
+  const text = String(value ?? "").replace(/\r\n/g, "\n");
+  return /^[=+\-@]/.test(text.trimStart()) ? `'${text}` : text;
+}
+
+function escapeSpreadsheetXml(value) {
+  return spreadsheetSafeText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function spreadsheetXmlRow(values, styleId = "Cell") {
+  return `<Row>${values.map((value) => `<Cell ss:StyleID="${styleId}"><Data ss:Type="String">${escapeSpreadsheetXml(value)}</Data></Cell>`).join("")}</Row>`;
+}
+
+function reportFileNamePart(value) {
+  return String(value || "tai-khoan")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[đĐ]/g, "d")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase() || "tai-khoan";
+}
+
+function accountOverdueTaskReportEntries(departmentId = "") {
+  return accountOverdueTaskStatistics(departmentId).rows.flatMap(({ account, tasks }) => tasks.map(({ task, relationLabels }) => ({
+    account,
+    task,
+    relationLabels,
+  })));
+}
+
+function overdueTaskReportWorkbook({ reportTitle, entries, includeAccount = false }) {
+  const lookup = taskCreatorAccountLookup();
+  const headers = [
+    "STT",
+    ...(includeAccount ? ["Tài khoản thống kê", "Phòng"] : []),
+    "Tên công việc",
+    "Danh mục dự án",
+    "Danh mục KPI cá nhân",
+    "Vai trò liên quan",
+    "Người thực hiện",
+    "Người phối hợp",
+    "Ngày bắt đầu",
+    "Ngày hoàn thành",
+    "Trạng thái",
+    "Tiến độ (%)",
+    "Nội dung công việc / Báo cáo tiến độ",
+    "Người tạo",
+    "Ngày tạo",
+    "Cập nhật gần nhất",
+  ];
+  const rows = entries.map(({ account, task, relationLabels }, index) => {
+    const creator = taskCreatorAccount(task, lookup);
+    return [
+      index + 1,
+      ...(includeAccount ? [
+        account.displayName || account.username || "Tài khoản",
+        accountUsageDepartmentName(accountDepartmentIdForStatistics(account)),
+      ] : []),
+      task.title || "",
+      projectNameForTask(task) || "Chưa phân loại",
+      task.category || "Chưa phân loại",
+      relationLabels.join(", "),
+      taskOwnerName(task, "Chưa xác định"),
+      taskCollaboratorNames(task).join(", ") || "Không có",
+      formatDate(task.startDate) || "",
+      formatDate(task.due) || "",
+      getDueStatus(task),
+      `${Number(task.progress || 0)}%`,
+      task.note || "",
+      creator?.displayName || creator?.username || task.createdBy || task.createdByName || "Chưa xác định",
+      formatDateTime(task.createdAt) || "",
+      formatDateTime(task.updatedAt) || "",
+    ];
+  });
+  const columns = [
+    "42",
+    ...(includeAccount ? ["160", "150"] : []),
+    "260", "230", "210", "145", "160", "180", "86", "96", "85", "75", "300", "145", "130", "145",
+  ].map((width) => `<Column ss:Width="${width}"/>`).join("");
+  const generatedAt = `Xuất lúc: ${formatDateTime(new Date())}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="Cell"><Alignment ss:Vertical="Top" ss:WrapText="1"/><Font ss:FontName="Arial" ss:Size="10"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="Title"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:FontName="Arial" ss:Size="14" ss:Bold="1"/></Style>
+    <Style ss:ID="Meta"><Font ss:FontName="Arial" ss:Size="10" ss:Italic="1"/></Style>
+    <Style ss:ID="Header"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:FontName="Arial" ss:Size="10" ss:Bold="1"/><Interior ss:Color="#DDEBF7" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+  </Styles>
+  <Worksheet ss:Name="Công việc quá hạn">
+    <Table>
+      ${columns}
+      <Row ss:Height="28"><Cell ss:StyleID="Title" ss:MergeAcross="${headers.length - 1}"><Data ss:Type="String">${escapeSpreadsheetXml(reportTitle)}</Data></Cell></Row>
+      <Row><Cell ss:StyleID="Meta" ss:MergeAcross="${headers.length - 1}"><Data ss:Type="String">${escapeSpreadsheetXml(generatedAt)}</Data></Cell></Row>
+      ${spreadsheetXmlRow(headers, "Header")}
+      ${rows.map((row) => spreadsheetXmlRow(row)).join("")}
+    </Table>
+  </Worksheet>
+</Workbook>`;
+}
+
+function downloadOverdueTaskReport({ reportTitle, fileName, entries, emptyMessage }) {
+  if (!entries.length) {
+    alert(emptyMessage || "Không có công việc quá hạn để xuất báo cáo.");
+    return;
+  }
+  const includeAccount = entries.some((entry) => entry.account);
+  const workbook = overdueTaskReportWorkbook({ reportTitle, entries, includeAccount });
+  downloadBlobFile(new Blob([workbook], { type: "application/vnd.ms-excel;charset=utf-8" }), fileName);
+}
+
+function downloadAccountOverdueTaskReport(accountId) {
+  if (!isAdmin()) return;
+  const account = accountById(accountId);
+  if (!account) return;
+  const accountName = account.displayName || account.username || "Tài khoản";
+  const entries = accountRelatedOverdueTasks(account).map(({ task, relationLabels }) => ({ account: null, task, relationLabels }));
+  downloadOverdueTaskReport({
+    reportTitle: `BÁO CÁO CÔNG VIỆC QUÁ HẠN LIÊN QUAN - ${accountName}`,
+    fileName: `bao-cao-cong-viec-qua-han-${reportFileNamePart(accountName)}.xls`,
+    entries,
+    emptyMessage: "Tài khoản này không có công việc quá hạn để xuất báo cáo.",
+  });
+}
+
+function downloadAllOverdueTaskReport() {
+  if (!isAdmin()) return;
+  const departmentId = accountUsageSelectedDepartmentId();
+  const entries = accountOverdueTaskReportEntries(departmentId);
+  const departmentName = departmentId ? accountUsageDepartmentName(departmentId) : "Tất cả phòng";
+  downloadOverdueTaskReport({
+    reportTitle: `BÁO CÁO TỔNG HỢP CÔNG VIỆC QUÁ HẠN - ${departmentName}`,
+    fileName: `bao-cao-tong-hop-cong-viec-qua-han-${reportFileNamePart(departmentName)}.xls`,
+    entries,
+    emptyMessage: "Không có công việc quá hạn theo phạm vi đang thống kê.",
+  });
+}
+
+function renderAccountOverdueTaskStatistics() {
+  const total = byId("accountTaskOverdueTotal");
+  const list = byId("accountTaskOverdueList");
+  const exportAll = byId("exportAllOverdueTasks");
+  if (!total || !list) return;
+  const departmentId = accountUsageSelectedDepartmentId();
+  const statistics = accountOverdueTaskStatistics(departmentId);
+  total.textContent = `${statistics.totalRelated} liên quan`;
+  total.title = "Mỗi công việc được tính một lần cho mỗi tài khoản có liên quan.";
+  if (exportAll) {
+    exportAll.disabled = !statistics.totalRelated;
+    exportAll.title = departmentId
+      ? `Xuất báo cáo tổng công việc quá hạn của ${accountUsageDepartmentName(departmentId)}`
+      : "Xuất báo cáo tổng công việc quá hạn của tất cả phòng";
+  }
+  if (!statistics.rows.length) {
+    list.innerHTML = `<p class="muted">${escapeHtml(departmentId ? "Không có tài khoản thuộc phòng đã chọn." : "Chưa có tài khoản để thống kê.")}</p>`;
+    return;
+  }
+  list.innerHTML = statistics.rows.map(({ account, overdueCount }) => {
+    const department = accountUsageDepartmentName(accountDepartmentIdForStatistics(account));
+    const role = accountRoleLabels[account.role] || account.role || "Tài khoản";
+    const status = account.disabled ? " · Đã khóa" : "";
+    return `
+      <article class="account-task-creation-row account-task-overdue-row">
+        <div>
+          <strong>${escapeHtml(account.displayName || account.username || "Tài khoản")}</strong>
+          <span>${escapeHtml(`${role} · ${department}${status}`)}</span>
+        </div>
+        <div class="account-task-creation-metric">
+          <strong>${overdueCount}</strong>
+          <span>Công việc quá hạn</span>
+          <button class="ghost compact account-overdue-export" data-export-overdue-account="${escapeHtml(account.id)}" type="button" ${overdueCount ? "" : "disabled"}>Xuất Excel</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
 function accountUsageCounts(period, departmentId) {
   if (!departmentId) {
     return {
@@ -2814,6 +3385,7 @@ function renderAccountPresence() {
 
   renderAccountUsageDepartmentFilter();
   renderAccountTaskCreationStatistics();
+  renderAccountOverdueTaskStatistics();
 
   const status = byId("accountPresenceStatus");
   const onlineCount = byId("accountPresenceOnlineCount");
@@ -3020,6 +3592,11 @@ function sharedSyncSupportsSectionHeadKpiCatalog() {
   return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.21.2");
 }
 
+function sharedSyncSupportsNhanVienTongHopGpmbKpiCatalog() {
+  if (!usingSupabaseSync()) return true;
+  return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.24.1");
+}
+
 async function adoptSharedState(payload, { render = true } = {}) {
   const localActivePeriod = state.activePeriod;
   const normalized = normalizeStatePayload(payload);
@@ -3048,28 +3625,6 @@ async function adoptSharedState(payload, { render = true } = {}) {
 async function retainUnsyncedLocalChanges(remotePayload, { render = true } = {}) {
   const remote = normalizeStatePayload(remotePayload);
   const local = cloneStatePayload(state);
-
-  // Fail-safe: một checkpoint dirty cũ/rỗng không được phép biến dữ liệu server
-  // thành hàng loạt lệnh xóa. Giữ bản local để điều tra rồi lấy server làm chuẩn.
-  const destructiveRisks = localStateLooksDestructivelyStale(remote, local);
-  if (destructiveRisks) {
-    persistSharedConflictBackup(local, {
-      download: false,
-      reason: `Đã chặn state cục bộ bất thường: ${destructiveRisks.map((risk) => `${risk.collection} ${risk.beforeCount}->${risk.afterCount}`).join(", ")}.`,
-    });
-    console.error("Blocked destructive stale local state during checkpoint restore:", destructiveRisks);
-    sharedSync.baseState = null;
-    sharedSync.serverBaseState = null;
-    await clearSharedStateDirty();
-    await adoptSharedState(remotePayload, { render });
-    showSystemToast(
-      "Đã chặn đồng bộ dữ liệu bất thường",
-      "Dữ liệu cục bộ có dấu hiệu cũ/rỗng nên hệ thống đã giữ dữ liệu mới nhất từ máy chủ.",
-      { tone: "warning", duration: 10000 },
-    );
-    return;
-  }
-
   const base = sharedSync.baseState ? cloneStatePayload(sharedSync.baseState) : cloneStatePayload(remote);
   const merged = mergeRemoteStateWithUnsyncedChanges(base, local, remote);
   Object.assign(state, merged);
@@ -3123,14 +3678,8 @@ async function loginSharedSession(username, password) {
   const remoteAccounts = Array.isArray(result.payload.state?.accounts) ? result.payload.state.accounts : [];
   const remoteAccount = remoteAccounts.find((account) => String(account?.username || "").toLowerCase() === String(username || "").toLowerCase());
   const remoteAccountId = String(remoteAccount?.id || "");
-  if (sharedSync.dirty && sharedSync.dirtyAccountId && remoteAccountId && sharedSync.dirtyAccountId !== remoteAccountId) {
-    persistSharedConflictBackup(cloneStatePayload(state), {
-      download: false,
-      reason: "Thay doi chua dong bo thuoc tai khoan truoc do.",
-    });
-    sharedSync.baseState = null;
-    sharedSync.serverBaseState = null;
-    await clearSharedStateDirty();
+  if (sharedSync.dirty && !hasTrustedSharedChangeCheckpoint(remoteAccountId)) {
+    await discardUntrustedSharedChanges("Thay doi dang cho dong bo khong co anh goc tin cay cua dung tai khoan.");
   }
   sharedSync.session = true;
   sharedSync.accountId = remoteAccountId;
@@ -3147,33 +3696,29 @@ async function loginSharedSession(username, password) {
   sharedSync.conflictNotified = false;
   localStorage.setItem(SHARED_SYNC_REQUIRED_KEY, "1");
   const serverUninitialized = sharedSync.revision === 0;
-  if (serverUninitialized && remoteAccount?.role === "admin" && canBootstrapCloudFromLocalState()) {
-    sharedSync.baseState = cloneStatePayload(normalizeStatePayload(result.payload.state));
-    sharedSync.serverBaseState = sharedServerBasePayload(result.payload.state);
-    sharedSync.localChangeVersion += 1;
-    sharedSync.pending = true;
-    await markSharedStateDirty();
-    queueSharedStateSync();
+  if (serverUninitialized) {
+    if (localStateHasBusinessData()) {
+      persistSharedConflictBackup(cloneStatePayload(state), {
+        download: false,
+        reason: "May chu trung tam chua duoc khoi tao. Du lieu cuc bo da duoc giu lai, nhung khong bao gio tu dong tai len may chu.",
+      });
+    }
+    sharedSync.pending = false;
+    sharedSync.baseState = null;
+    sharedSync.serverBaseState = null;
+    await clearSharedStateDirty();
+    await adoptSharedState(result.payload.state, { render: false });
     scheduleSharedStateRefresh({ immediate: true });
     return {
       mode: "remote",
-      warning: "May chu trung tam dang rong. He thong dang khoi tao tu ban du lieu Admin hien co; giu ket noi mang den khi dong bo hoan tat.",
+      warning: "May chu trung tam chua co du lieu. He thong da khoa khoi tao tu dong; chi Admin duoc phep khoi phuc tu tep JSON da kiem tra trong muc Tai khoan.",
     };
   }
-  if (serverUninitialized && localStateHasBusinessData()) {
-    persistSharedConflictBackup(cloneStatePayload(state), {
-      download: false,
-      reason: "May chu trung tam chua duoc khoi tao; can Nhap JSON day du bang tai khoan Admin.",
-    });
+  if (sharedSync.dirty && sharedSnapshotDropsCriticalData(sharedSync.baseState, state)) {
+    await discardUntrustedSharedChanges("Ban sao cuc bo co nguy co xoa hang loat du lieu may chu.");
   }
   if (sharedSync.dirty) {
-    const discardedStaleCheckpoint = await discardStaleRestoredDirtyCheckpoint(
-      result.payload.state,
-      { render: false },
-    );
-    if (!discardedStaleCheckpoint) {
-      await retainUnsyncedLocalChanges(result.payload.state, { render: false });
-    }
+    await retainUnsyncedLocalChanges(result.payload.state, { render: false });
   } else {
     await adoptSharedState(result.payload.state, { render: false });
   }
@@ -3303,6 +3848,40 @@ async function createSharedStateSnapshot() {
   return snapshot;
 }
 
+function canInitializeEmptySharedServer() {
+  return Boolean(
+    usingSupabaseSync()
+    && sharedSync.session
+    && sharedSync.available === true
+    && Number(sharedSync.revision) === 0
+    && isAdmin()
+    && localStateHasBusinessData(),
+  );
+}
+
+async function initializeEmptySharedServerFromImportedBackup() {
+  if (!canInitializeEmptySharedServer()) {
+    return { ok: false, reason: "initialization-not-allowed" };
+  }
+  const snapshot = await createSharedStateSnapshot();
+  const { response, payload } = await sharedJsonRequest("initialize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state: snapshot }),
+  });
+  if (!response.ok || !payload?.state) {
+    return { ok: false, reason: payload?.error || "Khong the khoi phuc du lieu trung tam." };
+  }
+  sharedSync.revision = Number(payload.revision) || 0;
+  sharedSync.initialized = sharedSync.revision > 0;
+  sharedSync.pending = false;
+  sharedSync.baseState = null;
+  sharedSync.serverBaseState = null;
+  await clearSharedStateDirty();
+  await adoptSharedState(payload.state, { render: false });
+  return { ok: true, initialized: true, fileWarnings: [...sharedSync.fileWarnings] };
+}
+
 function sharedSyncRetryDelay() {
   const exponent = Math.min(sharedSync.retryAttempt, 5);
   const baseDelay = Math.min(SHARED_SYNC_RETRY_MAX_MS, SHARED_SYNC_RETRY_INITIAL_MS * 2 ** exponent);
@@ -3337,9 +3916,13 @@ function scheduleSharedStateRefresh({ immediate = false } = {}) {
 
 function stopSharedStateRefresh() {
   if (sharedSync.timer) window.clearTimeout(sharedSync.timer);
+  if (sharedSync.idleTimer && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(sharedSync.idleTimer);
+  }
   if (sharedSync.refreshTimer) window.clearTimeout(sharedSync.refreshTimer);
   if (sharedSync.retryTimer) window.clearTimeout(sharedSync.retryTimer);
   sharedSync.timer = 0;
+  sharedSync.idleTimer = 0;
   sharedSync.refreshTimer = 0;
   sharedSync.retryTimer = 0;
   sharedSync.retryAttempt = 0;
@@ -3352,10 +3935,18 @@ function queueSharedStateSync() {
     scheduleSharedStateRetry();
     return;
   }
-  if (sharedSync.timer) return;
+  if (sharedSync.timer || sharedSync.idleTimer) return;
   sharedSync.timer = window.setTimeout(() => {
     sharedSync.timer = 0;
-    flushSharedStateSync();
+    const run = () => {
+      sharedSync.idleTimer = 0;
+      if (sharedSync.pending || sharedSync.dirty) flushSharedStateSync();
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      sharedSync.idleTimer = window.requestIdleCallback(run, { timeout: 1200 });
+    } else {
+      run();
+    }
   }, 500);
 }
 
@@ -3408,6 +3999,78 @@ function kpiCatalogEntryMap(field, entries) {
   return map;
 }
 
+function kpiCatalogCriterionKey(criterion) {
+  return catalogText(Array.isArray(criterion) ? criterion[0] : criterion?.name).toLocaleLowerCase("vi");
+}
+
+function kpiCatalogCriteriaMap(criteria) {
+  const map = new Map();
+  if (!Array.isArray(criteria)) return null;
+  for (const criterion of criteria) {
+    const key = kpiCatalogCriterionKey(criterion);
+    if (!key || map.has(key)) return null;
+    map.set(key, criterion);
+  }
+  return map;
+}
+
+function mergeKpiCriteriaArrayChange(baseValue, localValue, remoteValue) {
+  const base = kpiCatalogCriteriaMap(baseValue);
+  const local = kpiCatalogCriteriaMap(localValue);
+  const remote = kpiCatalogCriteriaMap(remoteValue);
+  if (!base || !local || !remote) return null;
+
+  const output = new Map(remote);
+  const changedKeys = new Set([...base.keys(), ...local.keys()]);
+  for (const key of changedKeys) {
+    const before = base.get(key);
+    const requested = local.get(key);
+    const onServer = remote.get(key);
+    if (sharedValuesEqual(before, requested)) continue;
+    if (!before) {
+      if (!onServer) output.set(key, requested);
+      else if (!sharedValuesEqual(onServer, requested)) return null;
+      continue;
+    }
+    if (!requested) {
+      if (!onServer) continue;
+      if (!sharedValuesEqual(onServer, before)) return null;
+      output.delete(key);
+      continue;
+    }
+    if (!onServer || (!sharedValuesEqual(onServer, before) && !sharedValuesEqual(onServer, requested))) return null;
+    output.set(key, requested);
+  }
+
+  const orderedKeys = [...remote.keys(), ...local.keys()]
+    .filter((key, index, values) => output.has(key) && values.indexOf(key) === index);
+  return orderedKeys.map((key) => output.get(key));
+}
+
+function mergeKpiCatalogRecordChange(baseValue, localValue, remoteValue) {
+  if (!baseValue || typeof baseValue !== "object" || Array.isArray(baseValue)
+    || !localValue || typeof localValue !== "object" || Array.isArray(localValue)
+    || !remoteValue || typeof remoteValue !== "object" || Array.isArray(remoteValue)) return null;
+  const output = { ...remoteValue };
+  const keys = new Set([...Object.keys(baseValue), ...Object.keys(localValue)]);
+  for (const key of keys) {
+    const before = baseValue[key];
+    const requested = localValue[key];
+    const onServer = remoteValue[key];
+    if (sharedValuesEqual(before, requested)) continue;
+    if (key === "criteria") {
+      const mergedCriteria = mergeKpiCriteriaArrayChange(before, requested, onServer);
+      if (!mergedCriteria) return null;
+      output[key] = mergedCriteria;
+      continue;
+    }
+    if (!sharedValuesEqual(onServer, before) && !sharedValuesEqual(onServer, requested)) return null;
+    if (Object.prototype.hasOwnProperty.call(localValue, key)) output[key] = requested;
+    else delete output[key];
+  }
+  return output;
+}
+
 function mergeKpiCatalogArrayChange(field, baseValue, localValue, remoteValue) {
   if (!["departments", "roles", "behaviorRules"].includes(field)) return null;
   const base = kpiCatalogEntryMap(field, baseValue);
@@ -3435,6 +4098,12 @@ function mergeKpiCatalogArrayChange(field, baseValue, localValue, remoteValue) {
       continue;
     }
     if (!onServer) return null;
+    if (field !== "behaviorRules" && !Array.isArray(before) && !Array.isArray(requested) && !Array.isArray(onServer)) {
+      const mergedRecord = mergeKpiCatalogRecordChange(before, requested, onServer);
+      if (!mergedRecord) return null;
+      output.set(key, mergedRecord);
+      continue;
+    }
     if (sharedValuesEqual(onServer, before) || sharedValuesEqual(onServer, requested)) {
       output.set(key, requested);
       continue;
@@ -3600,40 +4269,6 @@ function showSystemToast(title, message, { tone = "warning", duration = 7000 } =
   window.setTimeout(dismiss, Math.max(3500, Number(duration) || 7000));
 }
 
-const SHARED_SYNC_PROTECTED_COLLECTIONS = ["people", "tasks", "accounts"];
-const SHARED_SYNC_MASS_DELETE_RATIO = 0.25;
-const SHARED_SYNC_MASS_DELETE_MINIMUM = 10;
-
-function sharedCollectionDeleteRisk(basePayload, nextPayload, collection) {
-  const base = normalizeStatePayload(basePayload);
-  const next = normalizeStatePayload(nextPayload);
-  const before = sharedRecordMap(base[collection]);
-  const after = sharedRecordMap(next[collection]);
-  const deletedIds = [...before.keys()].filter((id) => !after.has(id));
-  const beforeCount = before.size;
-  const afterCount = after.size;
-  const deleteCount = deletedIds.length;
-  const threshold = Math.max(
-    SHARED_SYNC_MASS_DELETE_MINIMUM,
-    Math.ceil(beforeCount * SHARED_SYNC_MASS_DELETE_RATIO),
-  );
-  const fullWipe = beforeCount > 0 && afterCount === 0;
-  const massDelete = beforeCount >= 20 && deleteCount >= threshold;
-  return { collection, beforeCount, afterCount, deleteCount, fullWipe, massDelete, threshold };
-}
-
-function destructiveLocalStateRisks(basePayload, nextPayload) {
-  return SHARED_SYNC_PROTECTED_COLLECTIONS
-    .map((collection) => sharedCollectionDeleteRisk(basePayload, nextPayload, collection))
-    .filter((risk) => risk.fullWipe || risk.massDelete);
-}
-
-function localStateLooksDestructivelyStale(remotePayload, localPayload) {
-  const risks = destructiveLocalStateRisks(remotePayload, localPayload);
-  if (!risks.length) return null;
-  return risks;
-}
-
 function buildSharedStatePatch(basePayload, nextPayload, serverBasePayload = basePayload) {
   const base = normalizeStatePayload(basePayload);
   const next = normalizeStatePayload(nextPayload);
@@ -3730,35 +4365,24 @@ async function flushSharedStateSync() {
       : cloneStatePayload(baseSnapshot);
     const patch = buildSharedStatePatch(baseSnapshot, snapshot, serverBaseSnapshot);
     const requestedChangeVersion = sharedSync.localChangeVersion;
-
-    // Last client-side barrier before PUT /mutate.
-    const destructiveRisks = destructiveLocalStateRisks(baseSnapshot, snapshot);
-    if (destructiveRisks.length) {
-      persistSharedConflictBackup(snapshot, {
-        download: false,
-        reason: `Đã chặn yêu cầu xóa hàng loạt: ${destructiveRisks.map((risk) => `${risk.collection} ${risk.beforeCount}->${risk.afterCount}`).join(", ")}.`,
-      });
-      console.error("Blocked destructive shared-state mutation:", destructiveRisks);
-      sharedSync.pending = false;
-      const latest = await sharedJsonRequest("state");
-      if (latest.response.ok && latest.payload?.state) {
-        sharedSync.revision = Number(latest.payload.revision) || sharedSync.revision;
-        await adoptSharedState(latest.payload.state);
-      } else {
-        await clearSharedStateDirty();
-      }
-      showSystemToast(
-        "Đã chặn thao tác có nguy cơ mất dữ liệu",
-        "Một thay đổi cục bộ có thể xóa hàng loạt Nhân sự/Công việc/Tài khoản. Hệ thống đã hủy đồng bộ và tải lại dữ liệu máy chủ.",
-        { tone: "warning", duration: 11000 },
-      );
-      return { ok: false, blocked: true, reason: "mass-delete-guard", risks: destructiveRisks };
-    }
-
     if (!sharedPatchOperationCount(patch)) {
       persistState();
       await clearSharedStateDirty();
       return { ok: true, synced: false };
+    }
+    if (sharedPatchDeletesCriticalData(baseSnapshot, snapshot, patch)) {
+      await discardUntrustedSharedChanges("Dong bo da bi chan vi ban sao cuc bo co the xoa hang loat du lieu tren may chu.");
+      const latest = await sharedJsonRequest("state");
+      if (latest.response.ok && latest.payload?.state) {
+        sharedSync.revision = Number(latest.payload.revision) || sharedSync.revision;
+        await adoptSharedState(latest.payload.state);
+      }
+      showSystemToast(
+        "Đồng bộ đã được bảo vệ",
+        "Thiết bị này không được phép gửi bản sao có nguy cơ xóa hàng loạt dữ liệu máy chủ.",
+        { tone: "warning", duration: 9000 },
+      );
+      return { ok: false, blocked: true, reason: "unsafe-local-delete" };
     }
     const useRecordMutations = usingSupabaseSync();
     const { response, payload } = await sharedJsonRequest(useRecordMutations ? "mutate" : "state", {
@@ -3813,12 +4437,7 @@ async function flushSharedStateSync() {
     if (Array.isArray(payload?.denied) && payload.denied.length) {
       const message = sharedDeniedChangeMessage(payload.denied, snapshot);
       persistSharedConflictBackup(snapshot, { download: false, reason: message });
-      console.warn(
-        "Shared state changes were rejected:",
-        payload.denied,
-        "details=",
-        (payload.denied || []).map((item) => `${item.scope}:${item.id}:${item.reason}`).join(" | "),
-      );
+      console.warn("Shared state changes were rejected:", payload.denied);
       showSystemToast("Thay đổi chưa được lưu", message, { tone: "warning", duration: 9000 });
     }
     persistState();
@@ -3883,7 +4502,7 @@ async function refreshSharedState() {
   }
 }
 
-function expireSharedSession() {
+function expireSharedSession(message = "Phiên đăng nhập đã kết thúc vì tài khoản này vừa đăng nhập trên thiết bị khác. Vui lòng đăng nhập lại nếu cần.") {
   stopAccountPresenceMonitoring();
   stopSharedStateRefresh();
   sharedSync.session = false;
@@ -3893,18 +4512,22 @@ function expireSharedSession() {
   sharedSync.available = null;
   localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
   localStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(LOGIN_SESSION_CREDENTIAL_KEY);
+  document.documentElement.classList.remove("is-authenticated");
+  document.body?.classList.remove("is-authenticated");
+  const loginScreen = byId("loginScreen");
+  if (loginScreen) {
+    loginScreen.classList.remove("is-hidden");
+    loginScreen.style.display = "";
+  }
+  const loginError = byId("loginError");
+  if (loginError) loginError.textContent = message;
   renderAll();
+  window.setTimeout(() => byId("loginUsername")?.focus(), 0);
 }
 
 function logoutSharedSession() {
   stopAccountPresenceMonitoring();
-  document.documentElement.classList.remove("is-authenticated");
-  document.body?.classList.remove("is-authenticated");
-  const loginElem = document.getElementById("loginScreen");
-  if (loginElem) {
-    loginElem.classList.remove("is-hidden");
-    loginElem.style.display = "";
-  }
   if (!sharedSync.session) return;
   const headers = sharedRequestHeaders();
   const canNotifyServer = sharedSync.available === true;
@@ -3914,6 +4537,8 @@ function logoutSharedSession() {
   sharedSync.accountId = "";
   stopSharedStateRefresh();
   localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
+  document.documentElement.classList.remove("is-authenticated");
+  document.body?.classList.remove("is-authenticated");
   if (!canNotifyServer) return;
   fetch(sharedEndpoint("logout"), {
     method: "POST",
@@ -3966,17 +4591,34 @@ async function restoreSharedSession() {
     if (response.status === 401) throw new Error("Session expired.");
     if (!response.ok || !payload?.state) throw new Error("Shared state is unavailable.");
     sharedSync.revision = Number(payload.revision) || 0;
-    if (sharedSync.dirty) {
-      const discardedStaleCheckpoint = await discardStaleRestoredDirtyCheckpoint(payload.state);
-      if (!discardedStaleCheckpoint) {
-        await retainUnsyncedLocalChanges(payload.state);
+    const restoredAccountId = String(localStorage.getItem(SESSION_KEY) || "");
+    if (sharedSync.revision === 0) {
+      if (localStateHasBusinessData()) {
+        persistSharedConflictBackup(cloneStatePayload(state), {
+          download: false,
+          reason: "May chu trung tam chua duoc khoi tao. He thong da chan dong bo tu dong tu ban sao cuc bo.",
+        });
       }
+      sharedSync.pending = false;
+      sharedSync.baseState = null;
+      sharedSync.serverBaseState = null;
+      await clearSharedStateDirty();
+      await adoptSharedState(payload.state);
+    } else if (sharedSync.dirty && !hasTrustedSharedChangeCheckpoint(restoredAccountId)) {
+      await discardUntrustedSharedChanges("Thay doi dang cho dong bo khong co anh goc tin cay cua dung tai khoan.");
+      await adoptSharedState(payload.state);
+    } else if (sharedSync.dirty && sharedSnapshotDropsCriticalData(sharedSync.baseState, state)) {
+      await discardUntrustedSharedChanges("Ban sao cuc bo co nguy co xoa hang loat du lieu may chu.");
+      await adoptSharedState(payload.state);
+    } else if (sharedSync.dirty) {
+      await retainUnsyncedLocalChanges(payload.state);
     } else {
       await adoptSharedState(payload.state);
     }
+    const nhanVienTongHopGpmbCatalogMigrated = migrateNhanVienTongHopGpmbKpiCatalog();
     const sectionHeadCatalogMigrated = migrateSectionHeadKpiCatalog();
     const personalKpiMigrated = migratePersonalKpiClassification();
-    if (sectionHeadCatalogMigrated || personalKpiMigrated) {
+    if (nhanVienTongHopGpmbCatalogMigrated || sectionHeadCatalogMigrated || personalKpiMigrated) {
       saveState();
       await flushSharedStateSync();
     }
@@ -4059,6 +4701,7 @@ function scheduleVisibleViewWork(viewId, callback, delay = 80) {
 
 function reloadStateFromStorage() {
   Object.assign(state, loadState());
+  invalidateDerivedState();
   applyRuntimeKpiCatalogs(state);
   if (byId("activePeriod")) byId("activePeriod").value = state.activePeriod;
   scheduleDashboardRefresh();
@@ -4289,6 +4932,32 @@ function migrateSectionHeadKpiCatalog() {
   return catalogChanged;
 }
 
+function migrateNhanVienTongHopGpmbKpiCatalog() {
+  const normalizedRoles = normalizeRolesCatalog(state.roles);
+  const nextRoles = applyNhanVienTongHopGpmbKpiCatalog(normalizedRoles);
+  const catalogChanged = JSON.stringify(normalizedRoles) !== JSON.stringify(nextRoles);
+  const needsVersionUpdate = state.nhanVienTongHopGpmbKpiCatalogVersion !== NHAN_VIEN_TONG_HOP_GPMB_KPI_CATALOG_VERSION;
+  if (!catalogChanged && !needsVersionUpdate) return false;
+  // Every account uses the new catalog at runtime, but only Admin may persist
+  // the central migration and recalculate saved KPI scores.
+  if (!isAdmin()) return false;
+  const canPersistVersion = !usingSupabaseSync()
+    || isOfflineFileRuntime()
+    || sharedSyncSupportsNhanVienTongHopGpmbKpiCatalog();
+  if (catalogChanged) {
+    state.roles = nextRoles;
+    applyRuntimeKpiCatalogs(state);
+  }
+  if (catalogChanged || (needsVersionUpdate && canPersistVersion)) {
+    recalculateSavedPersonalEvaluationScores();
+  }
+  if (canPersistVersion) {
+    state.nhanVienTongHopGpmbKpiCatalogVersion = NHAN_VIEN_TONG_HOP_GPMB_KPI_CATALOG_VERSION;
+    return true;
+  }
+  return catalogChanged;
+}
+
 function clearMandatoryPasswordChangeFlags() {
   if (!Array.isArray(state.accounts)) return false;
   let changed = false;
@@ -4304,10 +4973,11 @@ migrateDepartmentTermLabels();
 migrateLegacyProjectDepartments();
 mergeImportedPeopleIntoState();
 migrateCanBoGpmbKpiCatalog();
+const nhanVienTongHopGpmbKpiCatalogUpdated = migrateNhanVienTongHopGpmbKpiCatalog();
 const sectionHeadKpiCatalogUpdated = migrateSectionHeadKpiCatalog();
 const passwordPolicyUpdated = clearMandatoryPasswordChangeFlags();
 const sectionHeadManagementUpdated = normalizeSectionHeadManagementLinks();
-if (syncPersonnelAccounts() || sectionHeadKpiCatalogUpdated || passwordPolicyUpdated || sectionHeadManagementUpdated) saveState();
+if (syncPersonnelAccounts() || nhanVienTongHopGpmbKpiCatalogUpdated || sectionHeadKpiCatalogUpdated || passwordPolicyUpdated || sectionHeadManagementUpdated) saveState();
 
 function departmentById(id) {
   return departments.find((item) => item.id === id);
@@ -5040,6 +5710,11 @@ function logActivity(entry) {
 }
 
 function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) {
+  if (recurringTasksEnsuredPeriod === targetPeriod && recurringTasksEnsuredRevision === derivedStateRevision) {
+    return false;
+  }
+  recurringTasksEnsuredPeriod = targetPeriod;
+  recurringTasksEnsuredRevision = derivedStateRevision;
   const targetIndex = periodIndex(targetPeriod);
   if (targetIndex < 0) return false;
   const targetEnd = `${targetPeriod}-${padDatePart(daysInMonth(Number(targetPeriod.slice(0, 4)), Number(targetPeriod.slice(5, 7)) - 1))}`;
@@ -5127,7 +5802,7 @@ function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) 
     });
   if (!additions.length) return false;
   state.tasks = [...state.tasks, ...additions];
-  persistState();
+  saveState();
   return true;
 }
 
@@ -7110,6 +7785,7 @@ function taskMatchesProjectFilter(task, projectFilter = currentTaskProjectFilter
 function taskMatchesStatusFilter(task, status = "") {
   if (!status) return true;
   if (status === TASK_STATUS_PENDING_REVIEW) return taskCompletionNeedsReview(task);
+  if (status === TASK_STATUS_COMPLETED) return task.computedStatus === TASK_STATUS_COMPLETED && taskCompletionIsApproved(task);
   return task.computedStatus === status;
 }
 
@@ -7140,22 +7816,81 @@ function compareTaskRecords(a, b) {
   return (a.title || "").localeCompare(b.title || "", "vi");
 }
 
+function pendingTaskCompletionRecords() {
+  return state.tasks
+    .filter((task) => taskPeriod(task) === state.activePeriod)
+    .filter((task) => canViewTaskRecord(task))
+    .filter(taskCompletionNeedsReview)
+    .map((task) => ({ ...task, computedStatus: getDueStatus(task) }))
+    .sort(compareTaskRecords);
+}
+
+function renderTaskCompletionPendingList() {
+  const list = byId("taskCompletionPendingList");
+  if (!list) return;
+  const tasks = pendingTaskCompletionRecords();
+  byId("taskCompletionPendingCount").textContent = String(tasks.length);
+  list.classList.toggle("empty-state", !tasks.length);
+  list.innerHTML = tasks.length
+    ? tasks.map((task) => {
+        const owner = taskOwnerName(task, "Chưa cập nhật");
+        const collaborators = taskCollaboratorNames(task);
+        const canReview = canReviewTaskCompletion(task);
+        return `
+          <article class="task-completion-pending-item">
+            <div class="task-completion-pending-main">
+              <button class="task-completion-pending-title" type="button" data-open-pending-task="${escapeHtml(task.id)}">${escapeHtml(task.title || "Công việc")}</button>
+              <div class="task-completion-pending-meta">
+                <span>${escapeHtml(projectNameForTask(task) || "Chưa gắn dự án")}</span>
+                <span>Hoàn thành ${escapeHtml(formatTaskDeadline(task) || "chưa cập nhật")}</span>
+                <span>Tiến độ ${formatScore(task.progress || 0)}%</span>
+              </div>
+              <p>${escapeHtml(owner)}${collaborators.length ? ` · ${escapeHtml(collaborators.join(", "))}` : ""}</p>
+            </div>
+            <div class="task-completion-pending-actions">
+              ${canReview ? `<button type="button" data-review-pending-task="${escapeHtml(task.id)}">Đánh giá</button>` : ""}
+              <button class="ghost" type="button" data-open-pending-task="${escapeHtml(task.id)}">Mở</button>
+            </div>
+          </article>
+        `;
+      }).join("")
+    : "Không có công việc chờ phê duyệt.";
+}
+
+function openTaskCompletionPendingDetailDialog() {
+  const tasks = pendingTaskCompletionRecords();
+  openTaskStatusDetailDialog(TASK_STATUS_PENDING_REVIEW, {
+    tasks,
+    title: "Chờ phê duyệt hoàn thành",
+    subtitle: `Danh sách công việc hoàn thành đang chờ đánh giá trong ${formatMonthPeriod(state.activePeriod)}.`,
+  });
+}
+
 function renderTaskBoard(options = {}) {
   byId("openTaskForm")?.classList.toggle("is-hidden", !canCreateRegularTasks());
   byId("openTaskBulkImport")?.classList.toggle("is-hidden", !isAdmin());
+  renderTaskCompletionPendingList();
   renderTaskProjectFilterOptions();
   const search = byId("taskSearch").value.trim().toLowerCase();
   const filter = byId("taskStatusFilter").value;
   const timeFilter = currentTaskTimeFilter();
   const projectFilter = currentTaskProjectFilter();
+  const nextRenderSignature = [search, filter, timeFilter.from, timeFilter.to, projectFilter].join("|");
+  if (taskBoardRenderSignature !== nextRenderSignature) {
+    taskBoardRenderSignature = nextRenderSignature;
+    taskBoardVisibleLimits.clear();
+  }
   const tasks = visibleTaskRecords(search, filter, timeFilter, projectFilter);
 
   const renderTaskColumns = () => {
     const boardStatuses = filter === TASK_STATUS_PENDING_REVIEW ? [TASK_STATUS_PENDING_REVIEW] : taskStatuses;
     return boardStatuses
       .map((status) => {
-        const cards = tasks
-          .filter((task) => taskMatchesStatusFilter(task, status))
+        const statusTasks = tasks.filter((task) => taskMatchesStatusFilter(task, status));
+        const count = statusTasks.length;
+        const displayLimit = taskBoardVisibleLimits.get(status) || TASK_BOARD_INITIAL_RENDER_LIMIT;
+        const renderedTasks = statusTasks.slice(0, displayLimit);
+        const cards = renderedTasks
           .map((task) => {
             const collaboratorNames = taskCollaboratorNames(task);
             const assigned = isAssignedTask(task);
@@ -7211,7 +7946,7 @@ function renderTaskBoard(options = {}) {
             `;
           })
           .join("");
-        const count = tasks.filter((task) => taskMatchesStatusFilter(task, status)).length;
+        const remaining = Math.max(0, count - renderedTasks.length);
         return `
           <section class="task-column">
             <button class="task-column-head" data-open-task-status="${escapeHtml(status)}" type="button" aria-label="Xem tất cả công việc trạng thái ${escapeHtml(status)}">
@@ -7219,6 +7954,7 @@ function renderTaskBoard(options = {}) {
               <strong>${count}</strong>
             </button>
             ${cards || "<div class=\"empty-state\">Không có công việc.</div>"}
+            ${remaining ? `<button class="ghost task-column-load-more" data-load-more-task-status="${escapeHtml(status)}" type="button">Hiển thị thêm ${Math.min(TASK_BOARD_RENDER_STEP, remaining)} công việc (${remaining} còn lại)</button>` : ""}
           </section>
         `;
       })
@@ -7272,18 +8008,20 @@ function renderTaskStatusDetailItem(task) {
   `;
 }
 
-function openTaskStatusDetailDialog(status) {
+function openTaskStatusDetailDialog(status, options = {}) {
   const search = byId("taskSearch").value.trim();
   const timeFilter = currentTaskTimeFilter();
-  const tasks = visibleTaskRecords(search, status, timeFilter).sort(compareTaskRecords);
+  const tasks = Array.isArray(options.tasks)
+    ? [...options.tasks].sort(compareTaskRecords)
+    : visibleTaskRecords(search, status, timeFilter).sort(compareTaskRecords);
   const averageProgress = tasks.length ? tasks.reduce((sum, task) => sum + Number(task.progress || 0), 0) / tasks.length : 0;
   const nextDeadlineTask = tasks.find((task) => taskDeadlineDate(task));
   const rangeLabel = [
     timeFilter.from && `từ ${formatDate(timeFilter.from)}`,
     timeFilter.to && `đến ${formatDate(timeFilter.to)}`,
   ].filter(Boolean).join(" ");
-  byId("taskStatusDetailTitle").textContent = `${status || "Tất cả trạng thái"} (${tasks.length})`;
-  byId("taskStatusDetailSubtitle").textContent = [
+  byId("taskStatusDetailTitle").textContent = `${options.title || status || "Tất cả trạng thái"} (${tasks.length})`;
+  byId("taskStatusDetailSubtitle").textContent = options.subtitle || [
     "Danh sách công việc",
     search && `đang lọc theo "${search}"`,
     rangeLabel && `ngày hoàn thành ${rangeLabel}`,
@@ -8136,6 +8874,16 @@ function buildDashboardKpiContext(period = state.activePeriod) {
   return context;
 }
 
+function cachedDashboardKpiContext(period = state.activePeriod) {
+  const key = `${derivedStateRevision}:${period}`;
+  const cached = dashboardKpiContextCache.get(key);
+  if (cached) return cached;
+  const context = buildDashboardKpiContext(period);
+  if (dashboardKpiContextCache.size >= 3) dashboardKpiContextCache.clear();
+  dashboardKpiContextCache.set(key, context);
+  return context;
+}
+
 function personalCriteriaScoresFromTasks(personId, period, preparedTasks = null) {
   const person = personById(personId);
   const role = person ? roleById(person.roleId) : null;
@@ -8949,9 +9697,13 @@ function historyItemSortValue(item) {
 
 function activityMatchesHistory(activity, type, targetId) {
   if (!activity || !targetId) return false;
+  const relatedTask = activity.targetType === "task"
+    ? (state.tasks || []).find((task) => String(task.id || "") === String(activity.targetId || ""))
+    : null;
   if (type === "department") {
     if (activity.targetType === "bulletin") return true;
     if (activity.departmentId === targetId) return true;
+    if (relatedTask && taskHasParticipantInDepartment(relatedTask, targetId)) return true;
     if (activity.personId && personById(activity.personId)?.departmentId === targetId) return true;
     if (activity.targetType === "department" && activity.targetId === targetId) return true;
     return false;
@@ -8959,6 +9711,7 @@ function activityMatchesHistory(activity, type, targetId) {
   const person = personById(targetId);
   return (
     activity.personId === targetId ||
+    (relatedTask && taskParticipantIds(relatedTask).includes(targetId)) ||
     (activity.targetType === "person" && activity.targetId === targetId) ||
     (activity.targetType === "departmentEvaluation" && activity.departmentId && activity.departmentId === person?.departmentId)
   );
@@ -8971,7 +9724,7 @@ function activityToTimelineItem(activity) {
   const targetType = linkableTypes.includes(activity.targetType) ? activity.targetType : "";
   const details = [
     `Thời gian: ${formatDateTime(activity.timestamp)}`,
-    `Người chỉnh sửa: ${activity.actorName || "Chưa rõ"}${activity.actorRole ? ` (${activity.actorRole})` : ""}`,
+    `Người chỉnh sửa: ${activity.actorName || activity.createdBy || activity.updatedBy || "Chưa rõ"}${activity.actorRole ? ` (${activity.actorRole})` : ""}`,
     activity.details || "",
   ].filter(Boolean);
   return {
@@ -8979,7 +9732,7 @@ function activityToTimelineItem(activity) {
     timestamp: activity.timestamp,
     type: `${action} ${module}`,
     title: activity.title || module,
-    actorName: activity.actorName || "",
+    actorName: activity.actorName || activity.createdBy || activity.updatedBy || "",
     actorRole: activity.actorRole || "",
     meta: details.join(" · "),
     score: activity.score || "",
@@ -9358,13 +10111,12 @@ function renderHistory() {
   if (type === "department") {
     const department = departmentById(targetId);
     const people = state.people.filter((person) => person.departmentId === targetId);
-    const peopleIds = people.map((person) => person.id);
     const eligiblePeopleIds = people.filter(isKpiEligiblePerson).map((person) => person.id);
     const departmentEvals = isKpiExemptDepartment(targetId)
       ? []
       : state.departmentEvaluations.filter((item) => item.departmentId === targetId && isPeriodInRange(item.period, from, to));
     const personalEvals = state.evaluations.filter((item) => eligiblePeopleIds.includes(item.personId) && isPeriodInRange(item.period, from, to));
-    const tasks = state.tasks.filter((task) => peopleIds.includes(task.ownerId) && isPeriodInRange(taskPeriod(task), from, to));
+    const tasks = state.tasks.filter((task) => taskHasParticipantInDepartment(task, targetId) && isPeriodInRange(taskPeriod(task), from, to));
     const overdue = tasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
     const activityItems = activitiesForHistory(type, targetId, from, to);
     const recordItems = historyTimelineItemsForRecords(
@@ -9393,7 +10145,7 @@ function renderHistory() {
   const departmentEvals = isKpiEligiblePerson(person)
     ? state.departmentEvaluations.filter((item) => item.departmentId === person.departmentId && isPeriodInRange(item.period, from, to))
     : [];
-  const tasks = state.tasks.filter((task) => task.ownerId === targetId && isPeriodInRange(taskPeriod(task), from, to));
+  const tasks = state.tasks.filter((task) => taskParticipantIds(task).includes(targetId) && isPeriodInRange(taskPeriod(task), from, to));
   const overdue = tasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
   const latest = [...evaluations].sort((a, b) => b.period.localeCompare(a.period))[0];
   const activityItems = activitiesForHistory(type, targetId, from, to);
@@ -9415,9 +10167,40 @@ function renderHistory() {
   renderHistoryTimeline(uniqueTimelineItems([...activityItems, ...recordItems]));
 }
 
+function dashboardDepartmentSituationRows(period = state.activePeriod) {
+  return visibleDepartmentsForDepartmentEvaluations().map((department) => {
+    const tasks = departmentTasksForKpi(department.id, period).filter((task) => canViewTaskRecord(task));
+    return {
+      department,
+      total: tasks.length,
+      approved: tasks.filter(taskCompletionIsApproved).length,
+      pending: tasks.filter(taskCompletionNeedsReview).length,
+      overdue: tasks.filter((task) => getDueStatus(task) === "Quá hạn").length,
+    };
+  });
+}
+
+function renderDashboardDepartmentStatus(period = state.activePeriod) {
+  const container = byId("dashboardDepartmentStatus");
+  if (!container) return;
+  const rows = dashboardDepartmentSituationRows(period);
+  container.classList.toggle("empty-state", !rows.length);
+  container.innerHTML = rows.length
+    ? rows.map((row) => `
+        <div class="dashboard-department-status-row">
+          <strong>${escapeHtml(row.department.name)}</strong>
+          <span>${row.total} việc</span>
+          <span class="is-success">${row.approved} đạt</span>
+          <span class="is-warning">${row.pending} chờ duyệt</span>
+          <span class="is-danger">${row.overdue} quá hạn</span>
+        </div>
+      `).join("")
+    : "Chưa có phòng áp dụng KPI để thống kê.";
+}
+
 function renderDashboard(options = {}) {
   byId("dashboardPeriodLabel").textContent = formatMonthPeriod(state.activePeriod || currentMonth());
-  const kpiContext = buildDashboardKpiContext(state.activePeriod);
+  const kpiContext = cachedDashboardKpiContext(state.activePeriod);
   const visiblePeople = visiblePeopleForEvaluation();
   const visiblePersonIds = new Set(visiblePeople.map((person) => person.id));
   const periodEvaluations = personalEvaluationsForDashboard(state.activePeriod, kpiContext).filter(
@@ -9432,8 +10215,11 @@ function renderDashboard(options = {}) {
   byId("metricAvg").textContent = formatScore(avg);
   byId("metricReward").textContent = reward;
   renderGradeDistribution(periodEvaluations, visiblePeople);
+  renderDashboardDepartmentStatus(state.activePeriod);
 
-  const ranking = [...periodEvaluations].sort((a, b) => kpiResultScore(b) - kpiResultScore(a)).slice(0, 10);
+  const ranking = [...periodEvaluations]
+    .sort((a, b) => kpiResultScore(b) - kpiResultScore(a))
+    .slice(0, DASHBOARD_VISIBLE_LIST_ROWS);
   byId("rankingList").classList.toggle("empty-state", !ranking.length);
   byId("rankingList").innerHTML = ranking.length
     ? ranking
@@ -9881,22 +10667,28 @@ function createKpiCatalogDraft() {
   };
 }
 
+async function refreshKpiCatalogBeforeEditing() {
+  if (!sharedSync.session || isOfflineFileRuntime()) return;
+  if ((sharedSync.dirty || sharedSync.pending) && !sharedSync.inFlight) {
+    await flushSharedStateSync();
+  }
+  if (sharedSync.inFlight || sharedSync.available !== true) return;
+  try {
+    // Always read a full authoritative catalog before starting an Admin edit.
+    // This keeps the catalog baseline independent from the periodic sync timer.
+    const { response, payload } = await sharedJsonRequest("state");
+    if (!response.ok || !payload?.state) return;
+    sharedSync.revision = Number(payload.revision) || sharedSync.revision;
+    sharedSync.initialized = sharedSync.revision > 0;
+    await adoptSharedState(payload.state, { render: false });
+  } catch {
+    // The current local catalog remains available if the server is temporarily unreachable.
+  }
+}
+
 async function openKpiCatalogManager() {
   if (!isAdmin()) return;
-  if (sharedSync.session && sharedSync.available === true && !sharedSync.dirty && !sharedSync.inFlight) {
-    try {
-      const { response, payload } = await sharedJsonRequest("state", {
-        query: sharedSync.revision === null ? {} : { revision: String(sharedSync.revision) },
-      });
-      if (response.ok && payload?.state && Number(payload.revision) !== sharedSync.revision) {
-        sharedSync.revision = Number(payload.revision) || sharedSync.revision;
-        sharedSync.initialized = sharedSync.revision > 0;
-        await adoptSharedState(payload.state, { render: false });
-      }
-    } catch {
-      // The current local catalog remains usable while the connection is unavailable.
-    }
-  }
+  await refreshKpiCatalogBeforeEditing();
   kpiCatalogDraft = createKpiCatalogDraft();
   setKpiCatalogNotice();
   renderKpiCatalogManager();
@@ -9908,6 +10700,47 @@ function resetKpiCatalogManager() {
   kpiCatalogDraft = createKpiCatalogDraft();
   setKpiCatalogNotice("Đã khôi phục bản danh mục đang áp dụng.");
   renderKpiCatalogManager();
+}
+
+function applyKpiCatalogDraft(draft) {
+  const nextConfig = {
+    departments: normalizeDepartmentsCatalog(draft.departments),
+    roles: normalizeRolesCatalog(draft.roles),
+    behaviorRules: normalizeBehaviorRulesCatalog(draft.behaviorRules),
+  };
+  const previousConfig = {
+    departments: cloneKpiCatalog(state.departments),
+    roles: cloneKpiCatalog(state.roles),
+    behaviorRules: cloneKpiCatalog(state.behaviorRules),
+  };
+  migrateKpiCatalogHistory(previousConfig, nextConfig);
+  state.departments = nextConfig.departments;
+  state.roles = nextConfig.roles;
+  state.behaviorRules = nextConfig.behaviorRules;
+  state.systemCustomization = normalizeSystemCustomization({
+    ...state.systemCustomization,
+    kpiParameters: draft.kpiParameters,
+  });
+  applyRuntimeKpiCatalogs(state);
+  recalculateSavedPersonalEvaluationScores();
+  logActivity({
+    action: "Cập nhật",
+    module: "Quy chế",
+    targetType: "kpi-catalog",
+    targetId: "kpi-catalog",
+    title: "Danh mục KPI và Nhân sự",
+    details: `Phòng: ${state.departments.length}; vị trí: ${state.roles.length}; danh mục khen thưởng/kỷ luật: ${state.behaviorRules.length}; đã cập nhật các hệ số công thức KPI.`,
+  });
+}
+
+function kpiCatalogSyncNeedsRetry(syncResult) {
+  if (syncResult?.conflict) return true;
+  const denied = Array.isArray(syncResult?.denied) ? syncResult.denied : [];
+  return denied.some((change) => (
+    change?.scope === "field"
+    && ["departments", "roles", "behaviorRules", "systemCustomization"].includes(String(change?.id || ""))
+    && String(change?.reason || "").includes("changed by another user")
+  ));
 }
 
 async function saveKpiCatalogManager() {
@@ -9927,41 +10760,26 @@ async function saveKpiCatalogManager() {
     setKpiCatalogNotice(referenceError, true);
     return;
   }
-  const previousConfig = {
-    departments: cloneKpiCatalog(state.departments),
-    roles: cloneKpiCatalog(state.roles),
-    behaviorRules: cloneKpiCatalog(state.behaviorRules),
-  };
-  migrateKpiCatalogHistory(previousConfig, nextConfig);
-  state.departments = nextConfig.departments;
-  state.roles = nextConfig.roles;
-  state.behaviorRules = nextConfig.behaviorRules;
-  state.systemCustomization = normalizeSystemCustomization({
-    ...state.systemCustomization,
-    kpiParameters: kpiCatalogDraft.kpiParameters,
-  });
-  applyRuntimeKpiCatalogs(state);
-  recalculateSavedPersonalEvaluationScores();
-  logActivity({
-    action: "Cập nhật",
-    module: "Quy chế",
-    targetType: "kpi-catalog",
-    targetId: "kpi-catalog",
-    title: "Danh mục KPI và Nhân sự",
-    details: `Phòng: ${state.departments.length}; vị trí: ${state.roles.length}; danh mục khen thưởng/kỷ luật: ${state.behaviorRules.length}; đã cập nhật các hệ số công thức KPI.`,
-  });
+  const submittedDraft = cloneKpiCatalog(kpiCatalogDraft);
+  applyKpiCatalogDraft(submittedDraft);
   saveState();
   const saveButton = byId("saveKpiCatalogManager");
   if (saveButton) saveButton.disabled = true;
   setKpiCatalogNotice("Đang lưu danh mục và kiểm tra dữ liệu đồng bộ...");
   try {
     if (sharedSync.session && !isOfflineFileRuntime()) {
-      const syncResult = await flushSharedStateSync();
+      let syncResult = await flushSharedStateSync();
+      if (kpiCatalogSyncNeedsRetry(syncResult)) {
+        setKpiCatalogNotice("Danh mục vừa có thay đổi trên máy chủ. Hệ thống đang gộp dữ liệu và lưu lại thay đổi của bạn...");
+        applyKpiCatalogDraft(submittedDraft);
+        saveState();
+        syncResult = await flushSharedStateSync();
+      }
       if (syncResult?.denied?.length || syncResult?.conflict) {
         kpiCatalogDraft = createKpiCatalogDraft();
         renderAll();
         renderKpiCatalogManager();
-        setKpiCatalogNotice("Một số mục vừa được thay đổi đồng thời trên thiết bị khác. Hệ thống đã giữ dữ liệu hợp lệ mới nhất; hãy kiểm tra lại mục đang chỉnh sửa trước khi lưu.", true);
+        setKpiCatalogNotice("Máy chủ chưa thể hợp nhất thay đổi cùng lúc ở đúng tiêu chí này. Danh mục hợp lệ mới nhất đã được giữ lại; hãy tải lại mục và lưu lại tiêu chí cần điều chỉnh.", true);
         return;
       }
       if (!syncResult?.ok && syncResult?.reason === "offline") {
@@ -11472,8 +12290,23 @@ function applySystemCustomization() {
   const theme = state.systemCustomization.theme;
   Object.entries(themePalette(theme)).forEach(([name, value]) => root.style.setProperty(name, value));
   document.body.dataset.systemTheme = theme.preset;
+  renderTopbarThemeVisual(theme);
   const themeMeta = document.querySelector('meta[name="theme-color"]');
   if (themeMeta) themeMeta.setAttribute("content", themePalette(theme)["--primary"]);
+}
+
+function renderTopbarThemeVisual(theme) {
+  const scene = byId("topbarVisualScene");
+  if (!scene) return;
+  const normalized = normalizeSystemTheme(theme);
+  const preset = normalized.preset;
+  const source = topbarThemeVisuals[preset] || topbarThemeVisuals.default;
+  if (scene.dataset.theme === preset && scene.getAttribute("src") === source) return;
+  scene.dataset.theme = preset;
+  scene.src = source;
+  scene.classList.remove("is-theme-changing");
+  void scene.offsetWidth;
+  scene.classList.add("is-theme-changing");
 }
 
 function customFieldScopeLabel(scopeId) {
@@ -12369,8 +13202,6 @@ function syncMobileNavigationAccess(activeViewId = document.querySelector(".view
 function applyAccessControls() {
   const account = currentAccount();
   document.body.classList.toggle("is-authenticated", Boolean(account));
-  // index.html hides the login screen through html.is-authenticated as an
-  // anti-flicker optimization. Keep the root class in sync on logout too.
   document.documentElement.classList.toggle("is-authenticated", Boolean(account));
 
   // 🌟 KHẮC PHỤC LỖI TRẮNG TRANG: Xóa thuộc tính inline display:none khi đã đăng xuất
@@ -13660,9 +14491,10 @@ byId("loginForm").addEventListener("submit", async (event) => {
   rememberSessionLoginCredential(account, password);
   localStorage.setItem(SESSION_KEY, account.id);
   birthdayCelebrationDisplayKey = "";
+  const nhanVienTongHopGpmbCatalogMigrated = migrateNhanVienTongHopGpmbKpiCatalog();
   const sectionHeadCatalogMigrated = migrateSectionHeadKpiCatalog();
   const personalKpiMigrated = migratePersonalKpiClassification();
-  if (sectionHeadCatalogMigrated || personalKpiMigrated) {
+  if (nhanVienTongHopGpmbCatalogMigrated || sectionHeadCatalogMigrated || personalKpiMigrated) {
     saveState();
     if (sharedSync.session && !isOfflineFileRuntime()) await flushSharedStateSync();
   }
@@ -14116,7 +14948,8 @@ byId("sidebarToggle").addEventListener("click", () => {
 byId("activePeriod").addEventListener("change", (event) => {
   const shouldAnimateDashboard = document.querySelector(".view.is-active")?.id === "dashboard";
   state.activePeriod = event.target.value || currentMonth();
-  persistState();
+  invalidateDerivedState();
+  scheduleStatePersistence();
   renderAll({ animateDashboard: shouldAnimateDashboard });
 });
 
@@ -14782,8 +15615,14 @@ byId("accountUsageDepartmentFilter").addEventListener("change", (event) => {
   if (!isAdmin()) return;
   accountPresence.usageDepartmentId = String(event.target.value || "");
   renderAccountTaskCreationStatistics();
+  renderAccountOverdueTaskStatistics();
   renderAccountUsageDetails();
 });
+byId("accountTaskOverdueList").addEventListener("click", (event) => {
+  const accountId = event.target.closest("[data-export-overdue-account]")?.dataset.exportOverdueAccount;
+  if (accountId) downloadAccountOverdueTaskReport(accountId);
+});
+byId("exportAllOverdueTasks").addEventListener("click", downloadAllOverdueTaskReport);
 
 byId("moduleAccessList").addEventListener("change", (event) => {
   const moduleId = event.target.dataset.moduleToggle || event.target.dataset.moduleId;
@@ -15598,6 +16437,7 @@ byId("assignmentTaskAttachmentList")?.addEventListener("click", (event) => {
 });
 
 byId("taskBoard").addEventListener("click", (event) => {
+  const loadMoreStatus = event.target.closest("[data-load-more-task-status]")?.dataset.loadMoreTaskStatus;
   const statusButton = event.target.closest("[data-open-task-status]");
   const detailId = event.target.closest("[data-open-task-detail]")?.dataset.openTaskDetail;
   const editId = event.target.closest("[data-edit-task]")?.dataset.editTask;
@@ -15605,6 +16445,12 @@ byId("taskBoard").addEventListener("click", (event) => {
   const respondId = event.target.closest("[data-respond-task]")?.dataset.respondTask;
   const reviewId = event.target.closest("[data-review-task]")?.dataset.reviewTask;
   const deleteId = event.target.closest("[data-delete-task]")?.dataset.deleteTask;
+  if (loadMoreStatus) {
+    const currentLimit = taskBoardVisibleLimits.get(loadMoreStatus) || TASK_BOARD_INITIAL_RENDER_LIMIT;
+    taskBoardVisibleLimits.set(loadMoreStatus, currentLimit + TASK_BOARD_RENDER_STEP);
+    renderTaskBoard();
+    return;
+  }
   if (statusButton) {
     openTaskStatusDetailDialog(statusButton.dataset.openTaskStatus);
     return;
@@ -15653,6 +16499,18 @@ byId("taskBoard").addEventListener("click", (event) => {
   }
   if (deleteId) deleteTaskRecord(deleteId);
 });
+
+byId("taskCompletionPendingList").addEventListener("click", (event) => {
+  const taskId = event.target.closest("[data-open-pending-task]")?.dataset.openPendingTask;
+  if (taskId) {
+    openTaskDetailDialog(taskId);
+    return;
+  }
+  const reviewTaskId = event.target.closest("[data-review-pending-task]")?.dataset.reviewPendingTask;
+  if (reviewTaskId) openTaskCompletionReviewDialog(reviewTaskId);
+});
+
+byId("openTaskCompletionPendingList").addEventListener("click", openTaskCompletionPendingDetailDialog);
 
 byId("deptEvalPeriod").addEventListener("change", loadDepartmentEvaluationForSelection);
 byId("deptEvalDepartment").addEventListener("change", loadDepartmentEvaluationForSelection);
@@ -16065,6 +16923,7 @@ function splitStateForExport(exported) {
         supportRequests: exported.supportRequests || [],
         activityLog: exported.activityLog || [],
         canBoGpmbKpiCatalogVersion: exported.canBoGpmbKpiCatalogVersion || "",
+        nhanVienTongHopGpmbKpiCatalogVersion: exported.nhanVienTongHopGpmbKpiCatalogVersion || "",
         sectionHeadKpiCatalogVersion: exported.sectionHeadKpiCatalogVersion || "",
         personalKpiClassificationVersion: exported.personalKpiClassificationVersion || "",
         deletedIds: exported.deletedIds || [],
@@ -16221,6 +17080,7 @@ function mergeOperations(target, data, timestamp, allowMissing = false) {
   if (Array.isArray(data.supportRequests)) target.supportRequests = mergeImportedRecords(target.supportRequests, data.supportRequests, timestamp);
   if (Array.isArray(data.activityLog)) target.activityLog = data.activityLog;
   if (data.canBoGpmbKpiCatalogVersion) target.canBoGpmbKpiCatalogVersion = data.canBoGpmbKpiCatalogVersion;
+  if (data.nhanVienTongHopGpmbKpiCatalogVersion) target.nhanVienTongHopGpmbKpiCatalogVersion = data.nhanVienTongHopGpmbKpiCatalogVersion;
   if (data.sectionHeadKpiCatalogVersion) target.sectionHeadKpiCatalogVersion = data.sectionHeadKpiCatalogVersion;
   if (data.personalKpiClassificationVersion) target.personalKpiClassificationVersion = data.personalKpiClassificationVersion;
   if (Array.isArray(data.deletedIds)) target.deletedIds = data.deletedIds;
@@ -16267,6 +17127,18 @@ async function importSeparatedJsonData(files) {
     if (groups.has(bundle.group)) throw new Error(`Da chon trung nhom du lieu ${bundle.group}.`);
     groups.add(bundle.group);
   });
+  const initializeEmptyServer = Boolean(
+    usingSupabaseSync()
+    && sharedSync.session
+    && sharedSync.available === true
+    && Number(sharedSync.revision) === 0,
+  );
+  if (initializeEmptyServer && legacyBundle === undefined && (!groups.has("people-accounts") || !groups.has("operations"))) {
+    throw new Error("May chu trung tam dang rong. Chi khoi phuc tu tep JSON day du, bao gom nhom Nhan su - Tai khoan va Van hanh.");
+  }
+  if (initializeEmptyServer && !confirm("Máy chủ trung tâm đang rỗng. Chỉ khôi phục từ bản JSON đã kiểm tra. Hệ thống sẽ không tự động tải dữ liệu của thiết bị lên. Tiếp tục khôi phục?")) {
+    return;
+  }
 
   const nextState = cloneStatePayload(state);
   const timestamp = new Date().toISOString();
@@ -16277,7 +17149,7 @@ async function importSeparatedJsonData(files) {
   syncPersonnelAccounts();
   const localPersist = persistState();
   sharedSync.localChangeVersion += 1;
-  await markSharedStateDirty();
+  if (!initializeEmptyServer) await markSharedStateDirty();
   // Show imported records immediately. Media is moved to IndexedDB afterwards
   // so a large JSON backup does not block the whole interface.
   renderAll();
@@ -16292,9 +17164,11 @@ async function importSeparatedJsonData(files) {
   ]);
   await localPersist;
   await persistState();
-  queueSharedStateSync();
+  if (!initializeEmptyServer) queueSharedStateSync();
   let syncResult = { ok: false, pending: true, reason: "offline" };
-  if (sharedSync.session && (sharedSync.available === true || (await probeSharedSync({ force: true })))) {
+  if (initializeEmptyServer) {
+    syncResult = await initializeEmptySharedServerFromImportedBackup();
+  } else if (sharedSync.session && (sharedSync.available === true || (await probeSharedSync({ force: true })))) {
     syncResult = await flushSharedStateSync();
   }
   renderAll();
@@ -16482,6 +17356,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
 }
 // 🌟 TỰ ĐỘNG GHI NHỚ VỊ TRÍ CUỘN CHUỘT TRƯỚC KHI F5
 window.addEventListener("beforeunload", () => {
+  if (statePersistenceQueued) persistState();
   localStorage.setItem("phuc-thinh-scroll-y", window.scrollY);
 });
 
@@ -16748,6 +17623,21 @@ runWhenDocumentReady(() => {
     dialog.setAttribute("aria-hidden", "true");
     delete dialog.dataset.personId;
   };
+  const synchronizePersonDetailInlineEditor = () => {
+    const editor = personDetailInlineEditor;
+    if (!editor || !detailContent.contains(editor.form)) return;
+    const person = personById(editor.personId);
+    if (!person) return;
+    const formPersonId = String(byId("personId")?.value || "");
+    if (formPersonId !== person.id) {
+      // The main personnel form is shared with the list view. Rehydrate it
+      // whenever another action has replaced its record while the popup is open.
+      populatePersonForm(person);
+    }
+    dialog.dataset.personId = person.id;
+    detailName.textContent = person.name || "Hồ sơ nhân sự";
+    editor.form.dataset.personDetailPersonId = person.id;
+  };
   const populatePersonForm = (person) => {
     byId("personId").value = person.id;
     byId("personName").value = person.name || "";
@@ -16778,6 +17668,7 @@ runWhenDocumentReady(() => {
       anchor.remove();
     }
     form.classList.remove("person-detail-inline-form");
+    delete form.dataset.personDetailPersonId;
     personDetailInlineEditor = null;
     if (reset) resetPersonForm();
     editButton.textContent = "Sửa hồ sơ";
@@ -16794,6 +17685,8 @@ runWhenDocumentReady(() => {
     anchor.className = "person-detail-form-anchor";
     form.parentNode.insertBefore(anchor, form);
     personDetailInlineEditor = { personId: person.id, form, anchor };
+    form.dataset.personDetailPersonId = person.id;
+    dialog.dataset.personId = person.id;
     detailName.textContent = person.name || "Hồ sơ nhân sự";
     detailMeta.textContent = "Chỉnh sửa trực tiếp trong màn hình hồ sơ chi tiết.";
     detailContent.className = "person-detail-editor";
@@ -16807,6 +17700,8 @@ runWhenDocumentReady(() => {
     closeButton.title = "Hủy chỉnh sửa";
     closeButton.setAttribute("aria-label", "Hủy chỉnh sửa hồ sơ");
     populatePersonForm(person);
+    requestAnimationFrame(synchronizePersonDetailInlineEditor);
+    window.setTimeout(synchronizePersonDetailInlineEditor, 0);
   };
   const deletePerson = (person) => {
     if (!canEditPeople()) return;
@@ -16904,6 +17799,8 @@ runWhenDocumentReady(() => {
     if (!person || !canEditPeople()) return;
     openPersonDetailInlineEditor(person);
   });
+  byId("personForm").addEventListener("focusin", synchronizePersonDetailInlineEditor);
+  byId("personForm").addEventListener("submit", synchronizePersonDetailInlineEditor, true);
   deleteButton.addEventListener("click", () => {
     const person = personById(dialog.dataset.personId);
     if (person) deletePerson(person);
