@@ -1,4 +1,4 @@
-﻿param(
+param(
   [switch]$Login,
   [switch]$CheckOnly,
   [switch]$SkipDatabaseMigrations
@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = "Stop"
 $projectRef = "hqquobfaccxnydeyvioe"
-$expectedDeploymentVersion = "2026.08.21.3"
+$expectedDeploymentVersion = "2026.08.25.2"
 $cli = Join-Path $PSScriptRoot "tools\supabase-cli\supabase.exe"
 
 if (-not (Test-Path -LiteralPath $cli)) {
@@ -38,8 +38,17 @@ if ($Login) {
 }
 
 if (-not $SkipDatabaseMigrations) {
+  $linkedProjectRefFile = Join-Path $PSScriptRoot "supabase\\.temp\\project-ref"
+  $linkedProjectRef = if (Test-Path -LiteralPath $linkedProjectRefFile) { (Get-Content -LiteralPath $linkedProjectRefFile -Raw).Trim() } else { "" }
+  if ($linkedProjectRef -ne $projectRef) {
+    Write-Host "Dang lien ket du an Supabase..."
+    & $cli link --project-ref $projectRef
+    if ($LASTEXITCODE -ne 0) {
+      throw "Khong the lien ket du an Supabase. Kiem tra dang nhap, quyen truy cap va mat khau database khi duoc hoi."
+    }
+  }
   Write-Host "Dang ap dung cac migration co trong supabase\\migrations..."
-  & $cli db push --project-ref $projectRef
+  & $cli db push
   if ($LASTEXITCODE -ne 0) {
     throw "Khong the ap dung migration Supabase. Kiem tra quyen truy cap database, lien ket du an va ket noi Internet. Co the chay lai voi -SkipDatabaseMigrations khi migration da duoc ap dung thu cong."
   }
