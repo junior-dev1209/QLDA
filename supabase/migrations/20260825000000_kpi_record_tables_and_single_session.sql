@@ -236,7 +236,7 @@ with source as (
   from public.kpi_shared_state
   where id = 'primary'
 ), all_evaluations as (
-  select 'personal:' || item.value->>'id' as id,
+  select 'personal:' || (item.value->>'id') as id,
          item.value as item,
          source.revision,
          source.updated_at
@@ -246,7 +246,7 @@ with source as (
 
   union all
 
-  select 'department:' || item.value->>'id' as id,
+  select 'department:' || (item.value->>'id') as id,
          item.value as item,
          source.revision,
          source.updated_at
@@ -302,7 +302,7 @@ with source as (
   from source
 
   union all
-  select 'project:' || item.value->>'id',
+  select 'project:' || (item.value->>'id'),
          item.value,
          source.revision,
          source.updated_at
