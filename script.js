@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.0.57";
+const APP_VERSION = "3.0.75";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -44,6 +44,7 @@ const SHARED_SYNC_SCALAR_FIELDS = [
   "nhanVienTongHopGpmbKpiCatalogVersion",
   "sectionHeadKpiCatalogVersion",
   "personalKpiClassificationVersion",
+  "kpiPeriodLocks",
   "deletedIds",
 ];
 function debounce(fn, delay = 200) {
@@ -1458,6 +1459,34 @@ function normalizeSystemCustomization(customization = {}) {
   };
 }
 
+function normalizeKpiPeriodLocks(value = []) {
+  const seen = new Set();
+  return (Array.isArray(value) ? value : [])
+    .map((item) => ({
+      period: String(item?.period || "").trim(),
+      lockedAt: String(item?.lockedAt || ""),
+      lockedById: String(item?.lockedById || ""),
+      lockedBy: String(item?.lockedBy || ""),
+      note: String(item?.note || "").trim(),
+    }))
+    .filter((item) => /^\d{4}-\d{2}$/.test(item.period) && !seen.has(item.period) && seen.add(item.period))
+    .sort((a, b) => b.period.localeCompare(a.period));
+}
+
+function kpiPeriodLock(period) {
+  const value = String(period || "").trim();
+  return normalizeKpiPeriodLocks(state?.kpiPeriodLocks).find((item) => item.period === value) || null;
+}
+
+function isKpiPeriodLocked(period) {
+  return Boolean(kpiPeriodLock(period));
+}
+
+function canAdjustLockedKpiPeriod(period, reason = "") {
+  if (!isKpiPeriodLocked(period)) return true;
+  return isAdmin() && String(reason || "").trim().length >= 3;
+}
+
 const state = loadState();
 applyRuntimeKpiCatalogs(state);
 restoreCustomizationLayoutDefaults(state);
@@ -1498,10 +1527,16 @@ let statePersistenceTimer = 0;
 let statePersistenceIdleHandle = 0;
 let statePersistenceQueued = false;
 let derivedStateRevision = 0;
+let taskCompletionLifecycleCheckedRevision = -1;
 let recurringTasksEnsuredRevision = -1;
 let recurringTasksEnsuredPeriod = "";
 let taskBoardRenderSignature = "";
+let taskDashboardPersonFilterId = "";
 const taskBoardVisibleLimits = new Map();
+let taskStatusDetailExport = null;
+let dashboardDetailExport = null;
+let dashboardWorkloadDepartmentFilter = "";
+let dashboardKpiSummaryGradeFilter = "";
 const dashboardKpiContextCache = new Map();
 const TASK_BOARD_INITIAL_RENDER_LIMIT = 40;
 const TASK_BOARD_RENDER_STEP = 40;
@@ -1542,6 +1577,9 @@ const sharedSync = {
   retryTimer: 0,
   retryAttempt: 0,
   refreshTimer: 0,
+  authCheckTimer: 0,
+  authCheckInFlight: false,
+  authCheckAttempt: 0,
   conflict: false,
   conflictNotified: false,
   baseState: null,
@@ -1571,6 +1609,9 @@ const accountPresence = {
   usageRetryAttempts: 0,
 };
 let pwaRegistrationPromise = null;
+let pwaControllerChangeHandlerBound = false;
+let pwaControllerChangeCanReload = false;
+const PWA_RELEASE_RELOAD_KEY = `phuc-thinh-pwa-release-reload-${APP_VERSION}`;
 
 const TASK_STATUS_PREPARING = "Chuẩn bị thực hiện";
 const TASK_STATUS_OLD_PREPARING = "Chưa bắt đầu";
@@ -1578,6 +1619,20 @@ const TASK_STATUS_COMPLETED = "Hoàn thành";
 const TASK_STATUS_CLOSED = "Đã kết thúc";
 const TASK_STATUS_PENDING_REVIEW = "Chờ đánh giá";
 const DASHBOARD_VISIBLE_LIST_ROWS = 10;
+const TASK_PRIORITY_NORMAL = "normal";
+const TASK_PRIORITY_HIGH = "high";
+const TASK_PRIORITY_URGENT = "urgent";
+const taskPriorityLabels = {
+  [TASK_PRIORITY_NORMAL]: "Bình thường",
+  [TASK_PRIORITY_HIGH]: "Cao",
+  [TASK_PRIORITY_URGENT]: "Khẩn",
+};
+const taskBlockerLabels = {
+  none: "Không có trở ngại",
+  "needs-support": "Cần hỗ trợ",
+  "in-progress": "Đang xử lý trở ngại",
+  resolved: "Đã gỡ trở ngại",
+};
 const taskStatuses = [TASK_STATUS_PREPARING, "Đang thực hiện", "Hoàn thành", "Quá hạn"];
 const TASK_KIND_ASSIGNED = "assigned";
 const TASK_KIND_REGULAR = "regular";
@@ -1716,6 +1771,47 @@ function normalizeTaskStatus(status) {
   return status === TASK_STATUS_OLD_PREPARING ? TASK_STATUS_PREPARING : status || TASK_STATUS_PREPARING;
 }
 
+function normalizeTaskPriority(value) {
+  return Object.hasOwn(taskPriorityLabels, value) ? value : TASK_PRIORITY_NORMAL;
+}
+
+function normalizeTaskBlockerStatus(value) {
+  return Object.hasOwn(taskBlockerLabels, value) ? value : "none";
+}
+
+function taskDependencyIds(task) {
+  return [...new Set((Array.isArray(task?.dependencyIds) ? task.dependencyIds : [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean))];
+}
+
+function taskDependencyNames(task) {
+  return taskDependencyIds(task)
+    .map((id) => state.tasks.find((item) => item.id === id)?.title)
+    .filter(Boolean);
+}
+
+function taskHasOpenBlocker(task) {
+  return ["needs-support", "in-progress"].includes(normalizeTaskBlockerStatus(task?.blockerStatus));
+}
+
+function taskFollowUpIsLate(task, today = new Date()) {
+  const value = String(task?.followUpDate || "");
+  if (!value || taskCompletionIsApproved(task)) return false;
+  const endOfDay = new Date(`${value}T23:59:59`);
+  return !Number.isNaN(endOfDay.getTime()) && endOfDay < today;
+}
+
+function taskDueSoon(task, days = 3, today = new Date()) {
+  if (taskCompletionIsApproved(task) || taskCompletionNeedsReview(task) || getDueStatus(task) === "Quá hạn") return false;
+  const due = String(task?.due || "");
+  if (!due) return false;
+  const dueDate = new Date(`${due}T23:59:59`);
+  if (Number.isNaN(dueDate.getTime())) return false;
+  const diff = dueDate.getTime() - today.getTime();
+  return diff >= 0 && diff <= days * 24 * 60 * 60 * 1000;
+}
+
 function isTaskFinishedStatus(status) {
   const normalized = normalizeTaskStatus(status);
   return normalized === TASK_STATUS_COMPLETED || normalized === TASK_STATUS_CLOSED;
@@ -1727,11 +1823,93 @@ function normalizeTaskQualityInput(value) {
   return clamp(normalizeNumberInput(text), 0, 120);
 }
 
+function normalizeTaskCompletionLifecycleState(task) {
+  if (!task || typeof task !== "object") return task;
+  const isCompleted = normalizeTaskStatus(task.status) === TASK_STATUS_COMPLETED;
+  const reviewStatus = String(task.completionReviewStatus || "").trim();
+  const hasQuality = taskHasQualityPercent(task);
+  const clearCompletionDecision = {
+    completionReviewStatus: "",
+    completionReviewedAt: "",
+    completionReviewedById: "",
+    completionReviewedByName: "",
+    completionReviewNote: "",
+    completedAt: "",
+    completedById: "",
+    completedByName: "",
+    qualityPercent: "",
+    qualityAssessedAt: "",
+    qualityAssessedById: "",
+    qualityAssessedByName: "",
+    lateCompletion: false,
+  };
+  if (isCompleted) {
+    if (reviewStatus === "passed" && hasQuality) return task;
+    if (reviewStatus === "pending" && !hasQuality && !task.completionReviewedAt && !task.completionReviewedById && !task.completionReviewedByName && !task.completionReviewNote && !task.lateCompletion) {
+      return task;
+    }
+    return {
+      ...task,
+      completionReviewStatus: "pending",
+      completionReviewedAt: "",
+      completionReviewedById: "",
+      completionReviewedByName: "",
+      completionReviewNote: "",
+      qualityPercent: "",
+      qualityAssessedAt: "",
+      qualityAssessedById: "",
+      qualityAssessedByName: "",
+      lateCompletion: false,
+    };
+  }
+  if (reviewStatus === "failed") {
+    if (!hasQuality && !task.lateCompletion && !task.completedAt && !task.completedById && !task.completedByName) return task;
+    return {
+      ...task,
+      completedAt: "",
+      completedById: "",
+      completedByName: "",
+      qualityPercent: "",
+      qualityAssessedAt: "",
+      qualityAssessedById: "",
+      qualityAssessedByName: "",
+      lateCompletion: false,
+    };
+  }
+  const hasStaleCompletionData = reviewStatus
+    || task.completionReviewedAt
+    || task.completionReviewedById
+    || task.completionReviewedByName
+    || task.completionReviewNote
+    || task.completedAt
+    || task.completedById
+    || task.completedByName
+    || hasQuality
+    || task.lateCompletion;
+  return hasStaleCompletionData ? { ...task, ...clearCompletionDecision } : task;
+}
+
+function repairInvalidTaskCompletionStates() {
+  if (!isAdmin() || taskCompletionLifecycleCheckedRevision === derivedStateRevision) return false;
+  taskCompletionLifecycleCheckedRevision = derivedStateRevision;
+  let changed = false;
+  const normalizedTasks = (state.tasks || []).map((task) => {
+    const normalized = normalizeTaskCompletionLifecycleState(task);
+    if (normalized !== task) changed = true;
+    return normalized;
+  });
+  if (changed) state.tasks = normalizedTasks;
+  return changed;
+}
+
 function taskCompletionReviewStatus(task) {
+  const isCompleted = normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED;
   const status = String(task?.completionReviewStatus || "").trim();
-  if (["pending", "passed", "failed"].includes(status)) return status;
+  if (!isCompleted) return status === "failed" ? "failed" : "";
+  if (status === "passed" && taskHasQualityPercent(task)) return "passed";
+  if (status === "pending") return "pending";
   if (taskHasQualityPercent(task)) return "passed";
-  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED ? "pending" : "";
+  return "pending";
 }
 
 function taskCompletionIsApproved(task) {
@@ -1739,7 +1917,7 @@ function taskCompletionIsApproved(task) {
 }
 
 function taskCompletionNeedsReview(task) {
-  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED && !taskCompletionIsApproved(task);
+  return normalizeTaskStatus(task?.status) === TASK_STATUS_COMPLETED && taskCompletionReviewStatus(task) === "pending";
 }
 
 function taskCompletionReviewLabel(task) {
@@ -1927,7 +2105,7 @@ async function readSharedBinaryFile(file) {
       signal: controller.signal,
     });
     if (!response.ok) {
-      if (response.status === 401) expireSharedSession();
+      if (response.status === 401) handleSharedSessionUnauthorized();
       return "";
     }
     const blob = await response.blob();
@@ -2251,6 +2429,7 @@ function defaultStatePayload() {
     nhanVienTongHopGpmbKpiCatalogVersion: "",
     sectionHeadKpiCatalogVersion: "",
     personalKpiClassificationVersion: "",
+    kpiPeriodLocks: [],
     deletedIds: [], // 🌟 KHÓA CHỐNG HỒI SINH: Lưu danh sách ID đã bị xóa
   };
 }
@@ -2376,6 +2555,7 @@ function normalizeStatePayload(parsed) {
     nhanVienTongHopGpmbKpiCatalogVersion: parsed.nhanVienTongHopGpmbKpiCatalogVersion || "",
     sectionHeadKpiCatalogVersion: parsed.sectionHeadKpiCatalogVersion || "",
     personalKpiClassificationVersion: parsed.personalKpiClassificationVersion || "",
+    kpiPeriodLocks: normalizeKpiPeriodLocks(parsed.kpiPeriodLocks),
     deletedIds: Array.isArray(parsed.deletedIds)
       ? [...new Set(parsed.deletedIds.map((id) => String(id || "").trim()).filter(Boolean))].slice(-MAX_DELETED_ID_HISTORY)
       : [],
@@ -2661,19 +2841,6 @@ function sharedSnapshotDropsCriticalData(basePayload, nextPayload) {
   if (criticalCollections.some((collection) => sharedCollectionCount(base, collection) > 0 && sharedCollectionCount(next, collection) === 0)) {
     return true;
   }
-
-  // Keep the v3.0.57 cross-collection guard, but preserve the stricter
-  // protection proven in the stable build for large critical collections.
-  if (criticalCollections.some((collection) => {
-    const before = sharedCollectionCount(base, collection);
-    const after = sharedCollectionCount(next, collection);
-    const removed = Math.max(0, before - after);
-    const threshold = Math.max(10, Math.ceil(before * 0.25));
-    return before >= 20 && removed >= threshold;
-  })) {
-    return true;
-  }
-
   const baseTotal = SHARED_PROTECTED_COLLECTIONS.reduce((total, collection) => total + sharedCollectionCount(base, collection), 0);
   const nextTotal = SHARED_PROTECTED_COLLECTIONS.reduce((total, collection) => total + sharedCollectionCount(next, collection), 0);
   if (baseTotal >= 5 && nextTotal < baseTotal * 0.65) return true;
@@ -3014,6 +3181,100 @@ function reportFileNamePart(value) {
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .toLowerCase() || "tai-khoan";
+}
+
+function dashboardWorksheetName(value) {
+  return String(value || "Tong quan")
+    .replace(/[\\/*?:[\]]/g, " ")
+    .trim()
+    .slice(0, 31) || "Tong quan";
+}
+
+function dashboardSpreadsheetWorkbook({ title, subtitle = "", headers = [], rows = [], sheetName = "Tong quan", columnWidths = [] }) {
+  const safeHeaders = headers.map((header) => String(header || ""));
+  const safeRows = rows.map((row) => Array.isArray(row) ? row : []);
+  const widths = safeHeaders
+    .map((header, index) => Number(columnWidths[index]) || Math.max(90, Math.min(260, String(header).length * 11 + 68)))
+    .map((width) => `<Column ss:Width="${width}"/>`)
+    .join("");
+  const titleSpan = Math.max(0, safeHeaders.length - 1);
+  const generatedAt = `Xuất lúc: ${formatDateTime(new Date())}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="Cell"><Alignment ss:Vertical="Top" ss:WrapText="1"/><Font ss:FontName="Arial" ss:Size="10"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+    <Style ss:ID="Title"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:FontName="Arial" ss:Size="14" ss:Bold="1"/></Style>
+    <Style ss:ID="Meta"><Font ss:FontName="Arial" ss:Size="10" ss:Italic="1"/></Style>
+    <Style ss:ID="Header"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:FontName="Arial" ss:Size="10" ss:Bold="1"/><Interior ss:Color="#DDEBF7" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>
+  </Styles>
+  <Worksheet ss:Name="${escapeSpreadsheetXml(dashboardWorksheetName(sheetName))}">
+    <Table>
+      ${widths}
+      <Row ss:Height="28"><Cell ss:StyleID="Title" ss:MergeAcross="${titleSpan}"><Data ss:Type="String">${escapeSpreadsheetXml(title)}</Data></Cell></Row>
+      ${subtitle ? `<Row><Cell ss:StyleID="Meta" ss:MergeAcross="${titleSpan}"><Data ss:Type="String">${escapeSpreadsheetXml(subtitle)}</Data></Cell></Row>` : ""}
+      <Row><Cell ss:StyleID="Meta" ss:MergeAcross="${titleSpan}"><Data ss:Type="String">${escapeSpreadsheetXml(generatedAt)}</Data></Cell></Row>
+      ${spreadsheetXmlRow(safeHeaders, "Header")}
+      ${safeRows.map((row) => spreadsheetXmlRow(row)).join("")}
+    </Table>
+  </Worksheet>
+</Workbook>`;
+}
+
+function taskStatusDetailExportData({ title, subtitle = "", tasks = [] }) {
+  const headers = [
+    "STT",
+    "Tên công việc",
+    "Dự án",
+    "Danh mục KPI cá nhân",
+    "Người thực hiện",
+    "Người phối hợp",
+    "Trạng thái",
+    "Tiến độ (%)",
+    "Mức ưu tiên",
+    "Trở ngại",
+    "Ngày bắt đầu",
+    "Ngày hoàn thành",
+    "Mốc cập nhật",
+    "Người tạo",
+    "Cập nhật gần nhất",
+    "Nội dung / báo cáo",
+  ];
+  return {
+    title,
+    subtitle,
+    sheetName: "Cong viec",
+    fileName: `${reportFileNamePart(title)}-${state.activePeriod || currentMonth()}.xls`,
+    columnWidths: [42, 280, 230, 185, 165, 190, 110, 78, 95, 170, 92, 108, 108, 150, 145, 320],
+    headers,
+    rows: tasks.map((task, index) => [
+      index + 1,
+      task.title || "",
+      projectNameForTask(task) || "Chưa phân loại",
+      task.category || "Chưa phân loại",
+      taskOwnerName(task, "Chưa xác định"),
+      taskCollaboratorNames(task).join(", ") || "Không có",
+      task.computedStatus || getDueStatus(task),
+      `${formatScore(task.progress || 0)}%`,
+      taskPriorityLabels[normalizeTaskPriority(task.priority)] || "Bình thường",
+      taskBlockerLabels[normalizeTaskBlockerStatus(task.blockerStatus)] || "Không có",
+      formatTaskStartDate(task) || "",
+      formatTaskDeadline(task) || "",
+      formatDate(task.followUpDate) || "",
+      task.createdByName || task.createdBy || "Chưa xác định",
+      formatDateTime(task.updatedAt || task.createdAt) || "",
+      task.note || "",
+    ]),
+  };
+}
+
+function downloadDashboardPopupExcel(report) {
+  if (!report?.rows?.length) {
+    alert("Không có dữ liệu để xuất Excel.");
+    return;
+  }
+  const workbook = dashboardSpreadsheetWorkbook(report);
+  downloadBlobFile(new Blob([workbook], { type: "application/vnd.ms-excel;charset=utf-8" }), report.fileName || "bao-cao-tong-quan.xls");
 }
 
 function accountOverdueTaskReportEntries(departmentId = "") {
@@ -3447,7 +3708,7 @@ async function requestAccountPresence() {
   try {
     const { response, payload } = await sharedJsonRequest("presence");
     if (response.status === 401) {
-      expireSharedSession();
+      handleSharedSessionUnauthorized();
       return;
     }
     if (!response.ok) throw new Error(payload?.error || "Presence request failed.");
@@ -3492,7 +3753,7 @@ async function requestAccountUsageHistory({ force = false } = {}) {
   try {
     const { response, payload } = await sharedJsonRequest("usage-history", { timeoutMs: ACCOUNT_USAGE_REQUEST_TIMEOUT_MS });
     if (response.status === 401) {
-      expireSharedSession();
+      handleSharedSessionUnauthorized();
       return;
     }
     if (!response.ok) throw new Error(payload?.error || "Usage history request failed.");
@@ -3595,6 +3856,11 @@ function sharedSyncSupportsSectionHeadKpiCatalog() {
 function sharedSyncSupportsNhanVienTongHopGpmbKpiCatalog() {
   if (!usingSupabaseSync()) return true;
   return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.24.1");
+}
+
+function sharedSyncSupportsKpiCatalogCommand() {
+  if (!usingSupabaseSync()) return true;
+  return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.26.1");
 }
 
 async function adoptSharedState(payload, { render = true } = {}) {
@@ -3921,15 +4187,90 @@ function stopSharedStateRefresh() {
   }
   if (sharedSync.refreshTimer) window.clearTimeout(sharedSync.refreshTimer);
   if (sharedSync.retryTimer) window.clearTimeout(sharedSync.retryTimer);
+  if (sharedSync.authCheckTimer) window.clearTimeout(sharedSync.authCheckTimer);
   sharedSync.timer = 0;
   sharedSync.idleTimer = 0;
   sharedSync.refreshTimer = 0;
   sharedSync.retryTimer = 0;
+  sharedSync.authCheckTimer = 0;
+  sharedSync.authCheckInFlight = false;
+  sharedSync.authCheckAttempt = 0;
   sharedSync.retryAttempt = 0;
 }
 
+function resetSharedSessionValidation() {
+  if (sharedSync.authCheckTimer) window.clearTimeout(sharedSync.authCheckTimer);
+  sharedSync.authCheckTimer = 0;
+  sharedSync.authCheckAttempt = 0;
+}
+
+function sharedSessionValidationDelay() {
+  const exponent = Math.min(sharedSync.authCheckAttempt, 4);
+  return Math.min(30000, 2500 * 2 ** exponent) + Math.round(Math.random() * 800);
+}
+
+function scheduleSharedSessionValidation() {
+  if (
+    isOfflineFileRuntime()
+    || !sharedSync.session
+    || (usingSupabaseSync() && !sharedSync.sessionToken)
+    || sharedSync.authCheckTimer
+    || sharedSync.authCheckInFlight
+  ) return;
+  const delay = sharedSessionValidationDelay();
+  sharedSync.authCheckTimer = window.setTimeout(async () => {
+    sharedSync.authCheckTimer = 0;
+    if (!sharedSync.session || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+    sharedSync.authCheckInFlight = true;
+    let validationSucceeded = false;
+    try {
+      const { response } = await sharedJsonRequest("state", {
+        query: sharedSync.revision === null ? {} : { revision: String(sharedSync.revision) },
+        timeoutMs: Math.min(SHARED_SYNC_REQUEST_TIMEOUT_MS, 12000),
+      });
+      if (response.status === 401) {
+        expireSharedSession("Phiên đăng nhập trên máy chủ đã hết hạn hoặc tài khoản này vừa đăng nhập trên thiết bị khác. Dữ liệu chưa đồng bộ đã được giữ lại trên thiết bị này.");
+        return;
+      }
+      if (response.ok) {
+        sharedSync.available = true;
+        resetSharedSessionValidation();
+        validationSucceeded = true;
+        return;
+      }
+      sharedSync.available = null;
+    } catch {
+      // A failed confirmation is still a network condition, never a reason to
+      // erase the local session or force the user back to the login screen.
+      sharedSync.available = null;
+    } finally {
+      sharedSync.authCheckInFlight = false;
+      if (validationSucceeded && sharedSync.pending) queueSharedStateSync();
+    }
+    if (sharedSync.session) {
+      sharedSync.authCheckAttempt += 1;
+      scheduleSharedSessionValidation();
+    }
+  }, delay);
+}
+
+function handleSharedSessionUnauthorized() {
+  if (!sharedSync.session) return;
+  // The first 401 can be produced while an upstream request is recovering.
+  // Keep the durable local state and require one separate authenticated check
+  // before deciding that this device has genuinely lost its single session.
+  sharedSync.available = true;
+  scheduleSharedSessionValidation();
+}
+
 function queueSharedStateSync() {
-  if (isOfflineFileRuntime() || !sharedSync.session || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  if (
+    isOfflineFileRuntime()
+    || !sharedSync.session
+    || (usingSupabaseSync() && !sharedSync.sessionToken)
+    || sharedSync.authCheckTimer
+    || sharedSync.authCheckInFlight
+  ) return;
   sharedSync.pending = true;
   if (sharedSync.available !== true) {
     scheduleSharedStateRetry();
@@ -4411,9 +4752,11 @@ async function flushSharedStateSync() {
       return { ok: false, conflict: true, reason: "conflict" };
     }
     if (response.status === 401) {
-      persistSharedConflictBackup(snapshot, { download: false, reason: "Phiên đồng bộ đã hết hạn trước khi thay đổi được gửi." });
-      expireSharedSession();
-      return { ok: false, pending: true, reason: "session-expired" };
+      persistSharedConflictBackup(snapshot, { download: false, reason: "Máy chủ đang xác nhận lại phiên đồng bộ trước khi quyết định đăng xuất." });
+      handleSharedSessionUnauthorized();
+      sharedSync.pending = true;
+      await markSharedStateDirty();
+      return { ok: false, pending: true, reason: "session-verification" };
     }
     if (!response.ok) throw new Error(payload?.error || "Khong the dong bo du lieu.");
     sharedSync.retryAttempt = 0;
@@ -4455,9 +4798,11 @@ async function flushSharedStateSync() {
     };
   } catch (error) {
     if (Number(error?.status) === 401) {
-      persistSharedConflictBackup(snapshot, { download: false, reason: "Phien dong bo da het han truoc khi tep duoc gui." });
-      expireSharedSession();
-      return { ok: false, pending: true, reason: "session-expired" };
+      persistSharedConflictBackup(snapshot, { download: false, reason: "Máy chủ đang xác nhận lại phiên đồng bộ trước khi quyết định đăng xuất." });
+      handleSharedSessionUnauthorized();
+      sharedSync.pending = true;
+      await markSharedStateDirty();
+      return { ok: false, pending: true, reason: "session-verification" };
     }
     sharedSync.pending = true;
     console.warn("Shared state sync failed:", error);
@@ -4490,7 +4835,7 @@ async function refreshSharedState() {
       query: sharedSync.revision === null ? {} : { revision: String(sharedSync.revision) },
     });
     if (response.status === 401) {
-      expireSharedSession();
+      handleSharedSessionUnauthorized();
       return;
     }
     if (!response.ok || !payload?.state || Number(payload.revision) === sharedSync.revision) return;
@@ -4558,6 +4903,7 @@ async function restoreSharedSession() {
       migrateTaskAttachmentsToIndexedDb({ persist: false }),
     ]);
     await persistState();
+    selectLatestEvaluationPeriod();
     renderAll();
   }
   if (!localStorage.getItem(SESSION_KEY) || !sharedSyncSupported()) return;
@@ -4588,7 +4934,11 @@ async function restoreSharedSession() {
   }
   try {
     const { response, payload } = await sharedJsonRequest("state");
-    if (response.status === 401) throw new Error("Session expired.");
+    if (response.status === 401) {
+      handleSharedSessionUnauthorized();
+      scheduleSharedStateRefresh({ immediate: true });
+      return;
+    }
     if (!response.ok || !payload?.state) throw new Error("Shared state is unavailable.");
     sharedSync.revision = Number(payload.revision) || 0;
     const restoredAccountId = String(localStorage.getItem(SESSION_KEY) || "");
@@ -4622,15 +4972,13 @@ async function restoreSharedSession() {
       saveState();
       await flushSharedStateSync();
     }
+    if (selectLatestEvaluationPeriod()) renderAll();
     startAccountPresenceMonitoring();
     scheduleSharedStateRefresh({ immediate: true });
-  } catch (error) {
-    if (String(error?.message || "") !== "Session expired.") {
-      // Keep the last locally persisted state when a request fails midway.
-      sharedSync.available = null;
-      return;
-    }
-    expireSharedSession();
+  } catch {
+    // Keep the last locally persisted state when a request fails midway.
+    sharedSync.available = null;
+    scheduleSharedStateRefresh({ immediate: true });
   }
 }
 
@@ -4659,7 +5007,7 @@ function restoreCustomizationLayoutDefaults(stateObject) {
 }
 
 function dashboardElementsReady() {
-  return ["metricPeople", "metricOverdue", "metricAvg", "metricReward", "rankingList", "alertList", "departmentSummary", "departmentChartSummary"].every((id) => byId(id));
+  return ["metricPeople", "metricOverdue", "metricAvg", "metricReward", "rankingList", "alertList", "departmentSummary", "departmentChartSummary", "dashboardOperations", "dashboardWorkload"].every((id) => byId(id));
 }
 
 function refreshDashboardLiveData() {
@@ -5057,6 +5405,18 @@ function activeViewStorageKey(account = currentAccount()) {
   return account?.id ? `${ACTIVE_VIEW_KEY_PREFIX}:${account.id}` : ACTIVE_VIEW_KEY_PREFIX;
 }
 
+function loginLandingView(account) {
+  return ["employee", "section_head", "manager", "deputy_manager"].includes(account?.role)
+    ? "tasks"
+    : "dashboard";
+}
+
+function setLoginLandingView(account) {
+  const viewId = loginLandingView(account);
+  localStorage.setItem(activeViewStorageKey(account), viewId);
+  return viewId;
+}
+
 function currentPerson() {
   const account = currentAccount();
   return account?.personId ? personById(account.personId) : null;
@@ -5270,6 +5630,7 @@ function isCurrentPeriod(period) {
 }
 
 function canEditPeriod(period) {
+  if (isKpiPeriodLocked(period)) return isAdmin();
   return isDirector() || isAdmin() || isCurrentPeriod(period);
 }
 
@@ -5756,6 +6117,12 @@ function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) 
             completedAt: "",
             completedById: "",
             completedByName: "",
+            completionReviewStatus: "",
+            completionReviewedAt: "",
+            completionReviewedById: "",
+            completionReviewedByName: "",
+            completionReviewNote: "",
+            lateCompletion: false,
             recurrence,
             recurrenceSourceId: sourceTask.id,
             recurrenceSeriesId: seriesId,
@@ -6150,6 +6517,7 @@ function taskUpdateChangeLabels(previousTask, nextTask) {
   if (!samePersonIdList(taskCollaboratorIds(previousTask), taskCollaboratorIds(nextTask))) changes.push("Người phối hợp");
   if ((previousTask.category || "") !== (nextTask.category || "")) changes.push("Danh mục KPI cá nhân");
   if (normalizeTaskWorkType(previousTask) !== normalizeTaskWorkType(nextTask)) changes.push("Loại công việc");
+  if (normalizeTaskPriority(previousTask.priority) !== normalizeTaskPriority(nextTask.priority)) changes.push("Mức độ ưu tiên");
   if (normalizeTaskRecurrence(previousTask) !== normalizeTaskRecurrence(nextTask)) changes.push("Định kỳ");
   if ((previousTask.startDate || "") !== (nextTask.startDate || "")) changes.push("Ngày bắt đầu");
   if ((previousTask.due || "") !== (nextTask.due || "")) changes.push("Ngày hoàn thành");
@@ -6158,6 +6526,10 @@ function taskUpdateChangeLabels(previousTask, nextTask) {
   if (Number(previousTask.progress || 0) !== Number(nextTask.progress || 0)) changes.push("Tiến độ");
   if (String(normalizeTaskQualityInput(previousTask.qualityPercent)) !== String(normalizeTaskQualityInput(nextTask.qualityPercent))) changes.push("Đánh giá chất lượng");
   if ((previousTask.note || "") !== (nextTask.note || "")) changes.push("Nội dung công việc/Báo cáo tiến độ");
+  if ((previousTask.followUpDate || "") !== (nextTask.followUpDate || "")) changes.push("Mốc cập nhật tiếp theo");
+  if (normalizeTaskBlockerStatus(previousTask.blockerStatus) !== normalizeTaskBlockerStatus(nextTask.blockerStatus)) changes.push("Trạng thái trở ngại");
+  if ((previousTask.blockerNote || "") !== (nextTask.blockerNote || "")) changes.push("Nội dung trở ngại");
+  if (!samePersonIdList(taskDependencyIds(previousTask), taskDependencyIds(nextTask))) changes.push("Công việc phụ thuộc");
   if (taskAttachmentSignature(previousTask.attachments) !== taskAttachmentSignature(nextTask.attachments)) changes.push("Hồ sơ liên quan");
   if (taskCustomFieldsSignature(previousTask.customFields) !== taskCustomFieldsSignature(nextTask.customFields)) changes.push("Thông tin tùy biến");
   return changes;
@@ -6201,6 +6573,26 @@ function periodIndex(period) {
 
 function latestPeriod(periodA, periodB) {
   return periodIndex(periodA) >= periodIndex(periodB) ? periodA : periodB;
+}
+
+function latestEvaluationPeriod() {
+  const currentPeriod = currentMonth();
+  const currentPeriodIndex = periodIndex(currentPeriod);
+  const periods = [
+    ...(state.evaluations || []).map((record) => record?.period),
+    ...(state.departmentEvaluations || []).map((record) => record?.period),
+    ...(state.tasks || []).map((task) => taskPeriod(task)),
+  ].filter((period) => periodIndex(period) >= 0 && periodIndex(period) <= currentPeriodIndex);
+  return periods.reduce((latest, period) => (!latest || periodIndex(period) > periodIndex(latest) ? period : latest), "") || currentPeriod;
+}
+
+function selectLatestEvaluationPeriod() {
+  const latest = latestEvaluationPeriod();
+  if (!latest || state.activePeriod === latest) return false;
+  state.activePeriod = latest;
+  invalidateDerivedState();
+  if (byId("activePeriod")) byId("activePeriod").value = latest;
+  return true;
 }
 
 function daysInMonth(year, monthIndex) {
@@ -7043,6 +7435,17 @@ function currentTaskProjectFilter() {
   return byId("taskProjectFilter")?.value.trim() || "";
 }
 
+function currentTaskDepartmentFilter() {
+  if (!canViewAllData()) return "";
+  const department = departmentById(byId("taskDepartmentFilter")?.value);
+  return department ? department.id : "";
+}
+
+function currentTaskPersonFilter() {
+  const person = personById(taskDashboardPersonFilterId);
+  return person ? person.id : "";
+}
+
 function taskProjectOptions() {
   return (state.projectCatalog || [])
     .slice()
@@ -7058,6 +7461,32 @@ function renderTaskProjectOptions() {
     const selected = select.value;
     fillSelect(select, options, selected);
   });
+}
+
+function renderTaskDependencyOptions(selectedIds = [], currentTaskId = byId("taskId")?.value || "") {
+  const list = byId("taskDependencies");
+  if (!list) return;
+  const selected = new Set((Array.isArray(selectedIds) ? selectedIds : []).map((id) => String(id || "")));
+  const currentId = String(currentTaskId || "");
+  const disabled = list.classList.contains("is-disabled");
+  const options = state.tasks
+    .filter((task) => String(task.id || "") !== currentId && canViewTaskRecord(task))
+    .slice()
+    .sort((left, right) => String(left.due || "9999-12-31").localeCompare(String(right.due || "9999-12-31")) || String(left.title || "").localeCompare(String(right.title || ""), "vi"));
+  list.innerHTML = options.length
+    ? options.map((task) => {
+      const taskId = String(task.id || "");
+      const checked = selected.has(taskId) ? " checked" : "";
+      const inputDisabled = disabled ? " disabled" : "";
+      const label = `${task.title || "Công việc chưa đặt tên"} · ${formatTaskDeadline(task) || "chưa có hạn"}`;
+      return `<label class="task-dependency-option"><input type="checkbox" value="${escapeHtml(taskId)}"${checked}${inputDisabled}><span>${escapeHtml(label)}</span></label>`;
+    }).join("")
+    : '<p class="task-dependency-empty">Chưa có công việc phù hợp để liên kết.</p>';
+}
+
+function selectedTaskDependencyIds() {
+  const list = byId("taskDependencies");
+  return list ? [...list.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value).filter(Boolean) : [];
 }
 
 function resetTaskProjectCatalogForm() {
@@ -7126,6 +7555,7 @@ function openProjectTaskList(projectId) {
   switchView("tasks");
   byId("taskSearch").value = "";
   byId("taskStatusFilter").value = "";
+  byId("taskDepartmentFilter").value = "";
   clearTaskTimeFilter();
   renderTaskProjectFilterOptions();
   byId("taskProjectFilter").value = project.name;
@@ -7243,6 +7673,32 @@ function renderTaskProjectFilterOptions() {
     ...projects.map((project) => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`),
   ].join("");
   select.value = projects.includes(selected) ? selected : "";
+}
+
+function renderTaskDepartmentFilterOptions() {
+  const select = byId("taskDepartmentFilter");
+  if (!select) return;
+  const canUseFilter = canViewAllData();
+  select.classList.toggle("is-hidden", !canUseFilter);
+  select.disabled = !canUseFilter;
+  if (!canUseFilter) {
+    select.value = "";
+    return;
+  }
+  const selected = currentTaskDepartmentFilter();
+  const departmentIds = new Set(
+    state.tasks
+      .filter((task) => canViewTaskRecord(task))
+      .flatMap((task) => taskParticipantIds(task))
+      .map((personId) => personById(personId)?.departmentId || "")
+      .filter(Boolean),
+  );
+  const options = departments
+    .filter((department) => departmentIds.has(department.id))
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, "vi"))
+    .map((department) => ({ value: department.id, label: department.name }));
+  fillSelect(select, [{ value: "", label: "Tất cả phòng" }, ...options], selected);
 }
 
 function resetTaskBulkImport() {
@@ -7782,6 +8238,11 @@ function taskMatchesProjectFilter(task, projectFilter = currentTaskProjectFilter
   return normalizeSearchText(projectNameForTask(task)) === normalizeSearchText(projectFilter);
 }
 
+function taskMatchesDepartmentFilter(task, departmentId = currentTaskDepartmentFilter()) {
+  if (!canViewAllData()) return true;
+  return !departmentId || taskHasParticipantInDepartment(task, departmentId);
+}
+
 function taskMatchesStatusFilter(task, status = "") {
   if (!status) return true;
   if (status === TASK_STATUS_PENDING_REVIEW) return taskCompletionNeedsReview(task);
@@ -7794,14 +8255,17 @@ function clearTaskTimeFilter() {
   byId("taskDateTo").value = "";
 }
 
-function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter(), projectFilter = currentTaskProjectFilter()) {
+function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter(), projectFilter = currentTaskProjectFilter(), departmentId = currentTaskDepartmentFilter()) {
   const keyword = (search || "").trim().toLowerCase();
+  const personId = currentTaskPersonFilter();
   return state.tasks
     .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
     .filter((task) => canViewTaskRecord(task))
     .filter((task) => taskMatchesStatusFilter(task, status))
     .filter((task) => taskMatchesTimeFilter(task, timeFilter))
     .filter((task) => taskMatchesProjectFilter(task, projectFilter))
+    .filter((task) => taskMatchesDepartmentFilter(task, departmentId))
+    .filter((task) => !personId || taskParticipantIds(task).includes(personId))
     .filter((task) => !keyword || indexedTaskBoardSearchText(task).includes(keyword));
 }
 
@@ -7816,19 +8280,48 @@ function compareTaskRecords(a, b) {
   return (a.title || "").localeCompare(b.title || "", "vi");
 }
 
-function pendingTaskCompletionRecords() {
+function pendingTaskCompletionRecords(filterOptions = {}) {
+  const search = String(filterOptions.search ?? byId("taskSearch")?.value ?? "").trim().toLowerCase();
+  const timeFilter = filterOptions.timeFilter || currentTaskTimeFilter();
+  const projectFilter = filterOptions.projectFilter ?? currentTaskProjectFilter();
+  const departmentId = filterOptions.departmentId ?? currentTaskDepartmentFilter();
+  const personId = filterOptions.personId ?? currentTaskPersonFilter();
+  // The panel has its own fixed status: completed work waiting for review.
   return state.tasks
+    .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
     .filter((task) => taskPeriod(task) === state.activePeriod)
     .filter((task) => canViewTaskRecord(task))
     .filter(taskCompletionNeedsReview)
-    .map((task) => ({ ...task, computedStatus: getDueStatus(task) }))
+    .filter((task) => taskMatchesTimeFilter(task, timeFilter))
+    .filter((task) => taskMatchesProjectFilter(task, projectFilter))
+    .filter((task) => taskMatchesDepartmentFilter(task, departmentId))
+    .filter((task) => !personId || taskParticipantIds(task).includes(personId))
+    .filter((task) => !search || indexedTaskBoardSearchText(task).includes(search))
     .sort(compareTaskRecords);
+}
+
+function pendingTaskCompletionFilterSummary() {
+  const search = String(byId("taskSearch")?.value || "").trim();
+  const timeFilter = currentTaskTimeFilter();
+  const project = currentTaskProjectFilter();
+  const department = departmentById(currentTaskDepartmentFilter());
+  const person = personById(currentTaskPersonFilter());
+  const parts = [
+    search && `tìm "${search}"`,
+    project && `dự án ${project}`,
+    department && `phòng ${department.name}`,
+    person && `nhân sự ${person.name}`,
+    timeFilter.from && `từ ${formatDate(timeFilter.from)}`,
+    timeFilter.to && `đến ${formatDate(timeFilter.to)}`,
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
 function renderTaskCompletionPendingList() {
   const list = byId("taskCompletionPendingList");
   if (!list) return;
   const tasks = pendingTaskCompletionRecords();
+  const filterSummary = pendingTaskCompletionFilterSummary();
   byId("taskCompletionPendingCount").textContent = String(tasks.length);
   list.classList.toggle("empty-state", !tasks.length);
   list.innerHTML = tasks.length
@@ -7854,33 +8347,47 @@ function renderTaskCompletionPendingList() {
           </article>
         `;
       }).join("")
-    : "Không có công việc chờ phê duyệt.";
+    : `Không có công việc chờ phê duyệt${filterSummary ? " theo điều kiện đang lọc" : ""}.`;
 }
 
 function openTaskCompletionPendingDetailDialog() {
   const tasks = pendingTaskCompletionRecords();
+  const filterSummary = pendingTaskCompletionFilterSummary();
   openTaskStatusDetailDialog(TASK_STATUS_PENDING_REVIEW, {
     tasks,
     title: "Chờ phê duyệt hoàn thành",
-    subtitle: `Danh sách công việc hoàn thành đang chờ đánh giá trong ${formatMonthPeriod(state.activePeriod)}.`,
+    subtitle: `Danh sách công việc hoàn thành đang chờ đánh giá trong ${formatMonthPeriod(state.activePeriod)}${filterSummary ? ` · ${filterSummary}` : ""}.`,
   });
+}
+
+function renderTaskPersonFilterNote() {
+  const note = byId("taskPersonFilterNote");
+  if (!note) return;
+  const person = personById(currentTaskPersonFilter());
+  note.classList.toggle("is-hidden", !person);
+  note.innerHTML = person
+    ? `<span>Đang xem công việc có liên quan tới <strong>${escapeHtml(person.name)}</strong>.</span><button class="ghost" data-clear-task-person-filter type="button">Bỏ lọc</button>`
+    : "";
 }
 
 function renderTaskBoard(options = {}) {
   byId("openTaskForm")?.classList.toggle("is-hidden", !canCreateRegularTasks());
   byId("openTaskBulkImport")?.classList.toggle("is-hidden", !isAdmin());
-  renderTaskCompletionPendingList();
   renderTaskProjectFilterOptions();
+  renderTaskDepartmentFilterOptions();
+  renderTaskCompletionPendingList();
+  renderTaskPersonFilterNote();
   const search = byId("taskSearch").value.trim().toLowerCase();
   const filter = byId("taskStatusFilter").value;
   const timeFilter = currentTaskTimeFilter();
   const projectFilter = currentTaskProjectFilter();
-  const nextRenderSignature = [search, filter, timeFilter.from, timeFilter.to, projectFilter].join("|");
+  const departmentId = currentTaskDepartmentFilter();
+  const nextRenderSignature = [search, filter, timeFilter.from, timeFilter.to, projectFilter, departmentId, currentTaskPersonFilter()].join("|");
   if (taskBoardRenderSignature !== nextRenderSignature) {
     taskBoardRenderSignature = nextRenderSignature;
     taskBoardVisibleLimits.clear();
   }
-  const tasks = visibleTaskRecords(search, filter, timeFilter, projectFilter);
+  const tasks = visibleTaskRecords(search, filter, timeFilter, projectFilter, departmentId);
 
   const renderTaskColumns = () => {
     const boardStatuses = filter === TASK_STATUS_PENDING_REVIEW ? [TASK_STATUS_PENDING_REVIEW] : taskStatuses;
@@ -8020,13 +8527,15 @@ function openTaskStatusDetailDialog(status, options = {}) {
     timeFilter.from && `từ ${formatDate(timeFilter.from)}`,
     timeFilter.to && `đến ${formatDate(timeFilter.to)}`,
   ].filter(Boolean).join(" ");
-  byId("taskStatusDetailTitle").textContent = `${options.title || status || "Tất cả trạng thái"} (${tasks.length})`;
-  byId("taskStatusDetailSubtitle").textContent = options.subtitle || [
+  const reportTitle = options.title || status || "Tất cả trạng thái";
+  const reportSubtitle = options.subtitle || [
     "Danh sách công việc",
     search && `đang lọc theo "${search}"`,
     rangeLabel && `ngày hoàn thành ${rangeLabel}`,
   ].filter(Boolean).join(" · ");
-  byId("taskStatusDetailContext").innerHTML = `
+  byId("taskStatusDetailTitle").textContent = `${reportTitle} (${tasks.length})`;
+  byId("taskStatusDetailSubtitle").textContent = reportSubtitle;
+  byId("taskStatusDetailContext").innerHTML = options.contextHtml || `
     <span><strong>${tasks.length}</strong> công việc</span>
     <span><strong>${formatScore(averageProgress)}%</strong> tiến độ bình quân</span>
     <span><strong>${nextDeadlineTask ? formatTaskDeadline(nextDeadlineTask) : "Chưa có"}</strong> mốc hoàn thành gần nhất</span>
@@ -8034,6 +8543,8 @@ function openTaskStatusDetailDialog(status, options = {}) {
   byId("taskStatusDetailList").innerHTML = tasks.length
     ? tasks.map(renderTaskStatusDetailItem).join("")
     : `<div class="empty-state">Không có công việc thuộc trạng thái này.</div>`;
+  taskStatusDetailExport = taskStatusDetailExportData({ title: reportTitle, subtitle: reportSubtitle, tasks });
+  byId("exportTaskStatusDetailExcel").disabled = !tasks.length;
   byId("taskStatusDetailDialog").classList.remove("is-hidden");
   byId("taskStatusDetailDialog").setAttribute("aria-hidden", "false");
 }
@@ -8041,6 +8552,22 @@ function openTaskStatusDetailDialog(status, options = {}) {
 function closeTaskStatusDetailDialog() {
   byId("taskStatusDetailDialog").classList.add("is-hidden");
   byId("taskStatusDetailDialog").setAttribute("aria-hidden", "true");
+}
+
+function openDashboardDetailDialog({ title, subtitle = "", contextHtml = "", contentHtml = "", exportData = null }) {
+  byId("dashboardDetailTitle").textContent = title || "Báo cáo chi tiết";
+  byId("dashboardDetailSubtitle").textContent = subtitle || "Tổng quan";
+  byId("dashboardDetailContext").innerHTML = contextHtml;
+  byId("dashboardDetailContent").innerHTML = contentHtml;
+  dashboardDetailExport = exportData;
+  byId("exportDashboardDetailExcel").disabled = !exportData?.rows?.length;
+  byId("dashboardDetailDialog").classList.remove("is-hidden");
+  byId("dashboardDetailDialog").setAttribute("aria-hidden", "false");
+}
+
+function closeDashboardDetailDialog() {
+  byId("dashboardDetailDialog").classList.add("is-hidden");
+  byId("dashboardDetailDialog").setAttribute("aria-hidden", "true");
 }
 
 function closeTaskCompletionReviewDialog() {
@@ -8318,6 +8845,7 @@ function openTaskDetailDialog(taskId) {
         <span><strong>Tên dự án</strong>${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
         <span><strong>Danh mục KPI cá nhân</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
         ${!assigned ? `<span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>` : ""}
+        <span><strong>Mức độ ưu tiên</strong>${escapeHtml(taskPriorityLabels[normalizeTaskPriority(task.priority)])}</span>
         ${!assigned ? `<span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}</span>` : ""}
         <span><strong>Ngày tạo</strong>${escapeHtml(formatDateTime(task.createdAt) || "Chưa ghi nhận")}</span>
         <span><strong>Người tạo</strong>${escapeHtml(task.createdBy || "Chưa ghi nhận")}</span>
@@ -8330,6 +8858,15 @@ function openTaskDetailDialog(taskId) {
     <section class="task-detail-section">
       <h3>${assigned ? "Nội dung giao việc" : "Nội dung công việc"}</h3>
       <p class="task-detail-note">${escapeHtml(task.note || "Chưa cập nhật.")}</p>
+    </section>
+    <section class="task-detail-section">
+      <h3>Theo dõi điều hành</h3>
+      <div class="task-detail-info-grid">
+        <span><strong>Mốc cập nhật tiếp theo</strong>${escapeHtml(formatTaskDeadline({ due: task.followUpDate }) || "Chưa đặt mốc")}</span>
+        <span><strong>Trạng thái trở ngại</strong>${escapeHtml(taskBlockerLabels[normalizeTaskBlockerStatus(task.blockerStatus)])}</span>
+        <span><strong>Công việc phụ thuộc</strong>${escapeHtml(taskDependencyNames(task).join("; ") || "Không có")}</span>
+      </div>
+      <p class="task-detail-note">${escapeHtml(task.blockerNote || "Chưa có nội dung trở ngại hoặc đề nghị hỗ trợ.")}</p>
     </section>
     ${assigned ? `
       <section class="task-detail-section">
@@ -10180,6 +10717,185 @@ function dashboardDepartmentSituationRows(period = state.activePeriod) {
   });
 }
 
+function dashboardTasksForPeriod(period = state.activePeriod) {
+  return state.tasks
+    .filter((task) => taskPeriod(task) === period)
+    .filter((task) => canViewTaskRecord(task))
+    .slice()
+    .sort(compareTaskRecords);
+}
+
+function dashboardApprovedTasksForPeriod(period = state.activePeriod) {
+  return dashboardTasksForPeriod(period).filter(taskCompletionIsApproved);
+}
+
+function dashboardTaskContextHtml(tasks, extra = []) {
+  const averageProgress = tasks.length
+    ? tasks.reduce((sum, task) => sum + Number(task.progress || 0), 0) / tasks.length
+    : 0;
+  return [
+    `<span><strong>${tasks.length}</strong> công việc</span>`,
+    `<span><strong>${formatScore(averageProgress)}%</strong> tiến độ bình quân</span>`,
+    ...extra,
+  ].join("");
+}
+
+function openDashboardPeriodTaskDetail(kind) {
+  if (!canAccessView("tasks")) return;
+  const period = state.activePeriod;
+  const completed = kind === "completed";
+  const tasks = completed ? dashboardApprovedTasksForPeriod(period) : dashboardTasksForPeriod(period);
+  openTaskStatusDetailDialog("", {
+    tasks,
+    title: completed ? "Công việc toàn Ban đã hoàn thành" : "Tổng số công việc",
+    subtitle: completed
+      ? `Công việc đã Hoàn thành và được đánh giá Đạt trong kỳ ${formatMonthPeriod(period)}.`
+      : `Toàn bộ công việc trong kỳ báo cáo ${formatMonthPeriod(period)}.`,
+    contextHtml: dashboardTaskContextHtml(tasks, completed ? [`<span><strong>${tasks.length}</strong> đã đánh giá Đạt</span>`] : [
+      `<span><strong>${tasks.filter(taskCompletionNeedsReview).length}</strong> chờ phê duyệt</span>`,
+      `<span><strong>${tasks.filter((task) => getDueStatus(task) === "Quá hạn").length}</strong> quá hạn</span>`,
+    ]),
+  });
+}
+
+function dashboardKpiSummaryRows(period = state.activePeriod) {
+  const context = cachedDashboardKpiContext(period);
+  const evaluationsByPersonId = new Map(
+    personalEvaluationsForDashboard(period, context).map((evaluation) => [evaluation.personId, evaluation]),
+  );
+  return visiblePeopleForEvaluation()
+    .map((person) => ({ person, evaluation: evaluationsByPersonId.get(person.id) || null }))
+    .sort((left, right) => {
+      const rightScore = hasRecordedKpiResult(right.evaluation) ? kpiResultScore(right.evaluation) : -1;
+      const leftScore = hasRecordedKpiResult(left.evaluation) ? kpiResultScore(left.evaluation) : -1;
+      return rightScore - leftScore || left.person.name.localeCompare(right.person.name, "vi");
+    });
+}
+
+function dashboardDepartmentFilterOptions(people = []) {
+  const departmentIds = new Set(
+    people
+      .map((person) => String(person?.departmentId || "").trim())
+      .filter(Boolean),
+  );
+  return departments
+    .filter((department) => departmentIds.has(department.id))
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, "vi"))
+    .map((department) => ({ value: department.id, label: department.name }));
+}
+
+function dashboardKpiSummaryDepartmentFilterHtml(options, selectedDepartmentId) {
+  return `
+    <div class="dashboard-kpi-summary-filter">
+      <label for="dashboardKpiSummaryDepartmentFilter">Lọc phòng</label>
+      <select id="dashboardKpiSummaryDepartmentFilter" aria-label="Lọc phòng cho tổng hợp điểm KPI nhân viên">
+        <option value="">Tất cả phòng</option>
+        ${options.map((option) => `<option value="${escapeHtml(option.value)}" ${option.value === selectedDepartmentId ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+      </select>
+    </div>
+  `;
+}
+
+function openDashboardKpiSummaryDialog(selectedGrade = "", selectedDepartmentId = "") {
+  const period = state.activePeriod;
+  const grade = personalGradeOrder.includes(selectedGrade) ? selectedGrade : "";
+  const allRows = dashboardKpiSummaryRows(period);
+  const gradeRows = grade
+    ? allRows.filter(({ evaluation }) => (grade === "Chưa chấm"
+      ? !hasRecordedKpiResult(evaluation)
+      : hasRecordedKpiResult(evaluation) && (evaluation.grade || gradePersonal(evaluation.finalScore)) === grade))
+    : allRows;
+  const departmentOptions = dashboardDepartmentFilterOptions(gradeRows.map(({ person }) => person));
+  const departmentId = departmentOptions.some((option) => option.value === selectedDepartmentId)
+    ? selectedDepartmentId
+    : "";
+  const department = departmentId ? departmentById(departmentId) : null;
+  const rows = departmentId
+    ? gradeRows.filter(({ person }) => person.departmentId === departmentId)
+    : gradeRows;
+  const evaluated = rows.filter((row) => hasRecordedKpiResult(row.evaluation));
+  const average = averageScore(evaluated.map((row) => row.evaluation));
+  const reportBaseTitle = grade ? `Tổng hợp KPI nhân viên - ${grade}` : "Tổng hợp điểm KPI nhân viên";
+  const reportTitle = department ? `${reportBaseTitle} - ${department.name}` : reportBaseTitle;
+  const reportSubtitle = grade
+    ? `Nhân viên thuộc phân loại ${grade} trong kỳ ${formatMonthPeriod(period)}.`
+    : `Kỳ báo cáo ${formatMonthPeriod(period)}.`;
+  const reportFullSubtitle = `${reportSubtitle}${department ? ` Phòng ${department.name}.` : ""}`;
+  dashboardKpiSummaryGradeFilter = grade;
+  openDashboardDetailDialog({
+    title: reportTitle,
+    subtitle: reportFullSubtitle,
+    contextHtml: [
+      `<span><strong>${rows.length}</strong> nhân viên${grade ? ` ${escapeHtml(grade)}` : " thuộc diện KPI"}</span>`,
+      `<span><strong>${evaluated.length}</strong> đã có kết quả</span>`,
+      `<span><strong>${formatScore(average)}</strong> điểm KPI bình quân</span>`,
+    ].join(""),
+    contentHtml: rows.length ? `
+      ${dashboardKpiSummaryDepartmentFilterHtml(departmentOptions, departmentId)}
+      <div class="table-wrap dashboard-detail-table">
+        <table>
+          <thead><tr><th>Nhân sự</th><th>Phòng</th><th>KPI cá nhân</th><th>KPI phòng</th><th>Thi đua/Kỷ luật</th><th>Tổng điểm</th><th>Xếp loại</th></tr></thead>
+          <tbody>
+            ${rows.map(({ person, evaluation }) => `
+              <tr>
+                <td><strong>${escapeHtml(person.name)}</strong></td>
+                <td>${escapeHtml(departmentById(person.departmentId)?.name || "Chưa cập nhật")}</td>
+                <td>${hasRecordedKpiResult(evaluation) ? formatScore(evaluation.personalScore) : "-"}</td>
+                <td>${hasRecordedKpiResult(evaluation) ? formatScore(evaluation.departmentScore) : "-"}</td>
+                <td>${hasRecordedKpiResult(evaluation) ? formatScore(evaluation.behaviorScore) : "-"}</td>
+                <td>${hasRecordedKpiResult(evaluation) ? `<span class="badge ${badgeClass(evaluation.finalScore)}">${formatScore(evaluation.finalScore)}</span>` : "-"}</td>
+                <td>${escapeHtml(hasRecordedKpiResult(evaluation) ? evaluation.grade || gradePersonal(evaluation.finalScore) : "Chưa chấm")}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    ` : `
+      ${dashboardKpiSummaryDepartmentFilterHtml(departmentOptions, departmentId)}
+      <div class="empty-state">Chưa có nhân sự thuộc diện đánh giá KPI trong phạm vi được xem.</div>
+    `,
+    exportData: {
+      title: reportTitle,
+      subtitle: reportFullSubtitle,
+      sheetName: "KPI nhan vien",
+      fileName: `${reportFileNamePart(reportTitle)}-${period}.xls`,
+      columnWidths: [190, 150, 108, 108, 130, 105, 110],
+      headers: ["Nhân sự", "Phòng", "KPI cá nhân", "KPI phòng", "Thi đua/Kỷ luật", "Tổng điểm", "Xếp loại"],
+      rows: rows.map(({ person, evaluation }) => [
+        person.name || "",
+        departmentById(person.departmentId)?.name || "Chưa cập nhật",
+        hasRecordedKpiResult(evaluation) ? formatScore(evaluation.personalScore) : "-",
+        hasRecordedKpiResult(evaluation) ? formatScore(evaluation.departmentScore) : "-",
+        hasRecordedKpiResult(evaluation) ? formatScore(evaluation.behaviorScore) : "-",
+        hasRecordedKpiResult(evaluation) ? formatScore(evaluation.finalScore) : "-",
+        hasRecordedKpiResult(evaluation) ? evaluation.grade || gradePersonal(evaluation.finalScore) : "Chưa chấm",
+      ]),
+    },
+  });
+}
+
+function openDashboardDepartmentTaskDetail(departmentId) {
+  if (!departmentId || !canAccessView("tasks")) return;
+  const row = dashboardDepartmentSituationRows(state.activePeriod).find((item) => item.department.id === departmentId);
+  if (!row) return;
+  const tasks = departmentTasksForKpi(departmentId, state.activePeriod)
+    .filter((task) => canViewTaskRecord(task))
+    .slice()
+    .sort(compareTaskRecords);
+  openTaskStatusDetailDialog("", {
+    tasks,
+    title: `Tình hình ${row.department.name}`,
+    subtitle: `Công việc của phòng trong kỳ ${formatMonthPeriod(state.activePeriod)}.`,
+    contextHtml: [
+      `<span><strong>${row.total}</strong> tổng công việc</span>`,
+      `<span><strong>${row.approved}</strong> hoàn thành Đạt</span>`,
+      `<span><strong>${row.pending}</strong> chờ phê duyệt</span>`,
+      `<span><strong>${row.overdue}</strong> quá hạn</span>`,
+    ].join(""),
+  });
+}
+
 function renderDashboardDepartmentStatus(period = state.activePeriod) {
   const container = byId("dashboardDepartmentStatus");
   if (!container) return;
@@ -10187,15 +10903,125 @@ function renderDashboardDepartmentStatus(period = state.activePeriod) {
   container.classList.toggle("empty-state", !rows.length);
   container.innerHTML = rows.length
     ? rows.map((row) => `
-        <div class="dashboard-department-status-row">
+        <button class="dashboard-department-status-row dashboard-link" data-dashboard-department-task-detail="${escapeHtml(row.department.id)}" type="button" aria-label="Xem chi tiết công việc ${escapeHtml(row.department.name)}">
           <strong>${escapeHtml(row.department.name)}</strong>
           <span>${row.total} việc</span>
           <span class="is-success">${row.approved} đạt</span>
           <span class="is-warning">${row.pending} chờ duyệt</span>
           <span class="is-danger">${row.overdue} quá hạn</span>
-        </div>
+        </button>
       `).join("")
     : "Chưa có phòng áp dụng KPI để thống kê.";
+}
+
+function dashboardOperationalTasks() {
+  return state.tasks.filter((task) => personById(task.ownerId) && canViewTaskRecord(task));
+}
+
+function dashboardOperationRows(visibleTasks = dashboardOperationalTasks(), today = new Date()) {
+  const actionable = visibleTasks.filter((task) => !taskCompletionIsApproved(task) && !taskCompletionNeedsReview(task));
+  return {
+    actionable,
+    rows: [
+      {
+        id: "overdue",
+        label: "Quá hạn",
+        tasks: actionable.filter((task) => getDueStatus(task) === "Quá hạn"),
+        tone: "is-danger",
+        description: "Cần cập nhật phương án xử lý ngay",
+      },
+      {
+        id: "blocker",
+        label: "Có trở ngại",
+        tasks: actionable.filter(taskHasOpenBlocker),
+        tone: "is-warning",
+        description: "Đang cần phối hợp hoặc tháo gỡ",
+      },
+      {
+        id: "due-soon",
+        label: "Sắp đến hạn",
+        tasks: actionable.filter((task) => taskDueSoon(task, 3, today)),
+        tone: "is-warning",
+        description: "Đến hạn trong 3 ngày tới",
+      },
+      {
+        id: "late-follow-up",
+        label: "Trễ mốc cập nhật",
+        tasks: actionable.filter((task) => taskFollowUpIsLate(task, today)),
+        tone: "is-danger",
+        description: "Chưa có cập nhật theo mốc đã đặt",
+      },
+    ].map((row) => ({ ...row, value: row.tasks.length })),
+  };
+}
+
+function openDashboardOperationDetail(operationId) {
+  if (!operationId || !canAccessView("tasks")) return;
+  const operation = dashboardOperationRows().rows.find((row) => row.id === operationId);
+  if (!operation) return;
+  openTaskStatusDetailDialog("", {
+    tasks: operation.tasks,
+    title: operation.label,
+    subtitle: `${operation.description}. Phạm vi công việc đang mở được phép xem.`,
+    contextHtml: dashboardTaskContextHtml(operation.tasks, [`<span><strong>${operation.value}</strong> cần theo dõi</span>`]),
+  });
+}
+
+function renderDashboardOperations(visibleTasks) {
+  const operations = byId("dashboardOperations");
+  const workload = byId("dashboardWorkload");
+  const workloadDepartmentFilter = byId("dashboardWorkloadDepartmentFilter");
+  if (!operations || !workload || !workloadDepartmentFilter) return;
+  const { actionable, rows: operationRows } = dashboardOperationRows(visibleTasks);
+  operations.classList.toggle("empty-state", !actionable.length);
+  operations.innerHTML = actionable.length
+    ? operationRows.map((item) => `
+        <button class="dashboard-operation-item dashboard-link ${item.tone}" data-dashboard-operation="${item.id}" type="button" aria-label="Xem ${escapeHtml(item.label)}: ${item.value} công việc">
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${item.value}</strong>
+          <small>${escapeHtml(item.description)}</small>
+        </button>
+      `).join("")
+    : "Không có công việc đang mở trong phạm vi được xem.";
+  const byPerson = new Map();
+  actionable.forEach((task) => {
+    taskParticipantIds(task).forEach((personId) => {
+      const person = personById(personId);
+      if (!person) return;
+      const row = byPerson.get(personId) || { person, total: 0, overdue: 0, blocked: 0 };
+      row.total += 1;
+      if (getDueStatus(task) === "Quá hạn") row.overdue += 1;
+      if (taskHasOpenBlocker(task)) row.blocked += 1;
+      byPerson.set(personId, row);
+    });
+  });
+  const rows = [...byPerson.values()]
+    .sort((left, right) => right.overdue - left.overdue || right.blocked - left.blocked || right.total - left.total || left.person.name.localeCompare(right.person.name, "vi"))
+  const departmentOptions = dashboardDepartmentFilterOptions(rows.map((row) => row.person));
+  fillSelect(workloadDepartmentFilter, [{ value: "", label: "Tất cả phòng" }, ...departmentOptions], dashboardWorkloadDepartmentFilter);
+  dashboardWorkloadDepartmentFilter = workloadDepartmentFilter.value;
+  const selectedDepartment = dashboardWorkloadDepartmentFilter
+    ? departmentById(dashboardWorkloadDepartmentFilter)
+    : null;
+  const filteredRows = selectedDepartment
+    ? rows.filter((row) => row.person.departmentId === selectedDepartment.id)
+    : rows;
+  byId("dashboardWorkloadSummary").textContent = filteredRows.length
+    ? `${filteredRows.length} nhân sự${selectedDepartment ? ` phòng ${selectedDepartment.name}` : ""} có công việc đang mở.`
+    : "Chưa có nhân sự có công việc đang mở.";
+  workload.classList.toggle("empty-state", !filteredRows.length);
+  workload.innerHTML = filteredRows.length
+    ? filteredRows.map((row) => `
+        <button class="dashboard-workload-row dashboard-link" data-dashboard-person-tasks="${escapeHtml(row.person.id)}" type="button" aria-label="Xem công việc của ${escapeHtml(row.person.name)}">
+          <strong>${escapeHtml(row.person.name)}</strong>
+          <span>${row.total} việc liên quan</span>
+          <span class="${row.blocked ? "is-warning" : ""}">${row.blocked} trở ngại</span>
+          <span class="${row.overdue ? "is-danger" : ""}">${row.overdue} quá hạn</span>
+        </button>
+      `).join("")
+    : selectedDepartment
+      ? `Chưa có nhân sự phòng ${escapeHtml(selectedDepartment.name)} có công việc đang mở.`
+      : "Chưa có dữ liệu tải việc.";
 }
 
 function renderDashboard(options = {}) {
@@ -10208,14 +11034,15 @@ function renderDashboard(options = {}) {
   );
   const avg = averageScore(periodEvaluations);
   const visibleTasks = state.tasks.filter((task) => personById(task.ownerId) && canViewTaskRecord(task));
-  const overdue = visibleTasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
-  const reward = periodEvaluations.filter((item) => kpiResultScore(item) >= 90 || Number(item.behaviorScore || 0) >= 5).length;
+  const periodTasks = dashboardTasksForPeriod(state.activePeriod);
+  const approvedPeriodTasks = periodTasks.filter(taskCompletionIsApproved);
   byId("metricPeople").textContent = visiblePeople.length;
-  byId("metricOverdue").textContent = overdue;
+  byId("metricOverdue").textContent = periodTasks.length;
   byId("metricAvg").textContent = formatScore(avg);
-  byId("metricReward").textContent = reward;
+  byId("metricReward").textContent = approvedPeriodTasks.length;
   renderGradeDistribution(periodEvaluations, visiblePeople);
   renderDashboardDepartmentStatus(state.activePeriod);
+  renderDashboardOperations(visibleTasks);
 
   const ranking = [...periodEvaluations]
     .sort((a, b) => kpiResultScore(b) - kpiResultScore(a))
@@ -10234,7 +11061,16 @@ function renderDashboard(options = {}) {
   const alerts = [];
   visibleTasks
     .filter((task) => getDueStatus(task) === "Quá hạn")
-    .forEach((task) => alerts.push({ text: `Quá hạn: ${task.title} (${personById(task.ownerId)?.name || "chưa rõ"})`, taskId: task.id }));
+    .forEach((task) => alerts.push({ priority: 1, text: `Quá hạn: ${task.title} (${personById(task.ownerId)?.name || "chưa rõ"})`, taskId: task.id }));
+  visibleTasks
+    .filter(taskHasOpenBlocker)
+    .forEach((task) => alerts.push({ priority: 1, text: `Cần hỗ trợ: ${task.title} - ${taskBlockerLabels[normalizeTaskBlockerStatus(task.blockerStatus)]}`, taskId: task.id }));
+  visibleTasks
+    .filter((task) => taskFollowUpIsLate(task))
+    .forEach((task) => alerts.push({ priority: 2, text: `Trễ mốc cập nhật: ${task.title}`, taskId: task.id }));
+  visibleTasks
+    .filter((task) => normalizeTaskPriority(task.priority) === TASK_PRIORITY_URGENT && taskDueSoon(task, 3))
+    .forEach((task) => alerts.push({ priority: 2, text: `Khẩn, sắp đến hạn: ${task.title}`, taskId: task.id }));
   visibleTasks
     .filter((task) => taskViolationReasons(task).length)
     .forEach((task) =>
@@ -10250,6 +11086,7 @@ function renderDashboard(options = {}) {
     .map((department) => kpiContext.departmentEvaluationsById.get(department.id))
     .filter((item) => hasRecordedKpiResult(item) && kpiResultScore(item) < 65)
     .forEach((item) => alerts.push({ text: `KPI phòng dưới mức khá: ${departmentById(item.departmentId)?.name || "phòng đã xóa"} - ${formatScore(kpiResultScore(item))}`, departmentId: item.departmentId }));
+  alerts.sort((left, right) => (left.priority || 9) - (right.priority || 9));
   byId("alertList").classList.toggle("empty-state", !alerts.length);
   byId("alertList").innerHTML = alerts.length
     ? alerts
@@ -10284,6 +11121,7 @@ function rolesForRules() {
 
 function renderRules() {
   byId("openKpiCatalogManager")?.classList.toggle("is-hidden", !isAdmin());
+  renderKpiPeriodLocks();
   byId("rulesCriteria").innerHTML = rolesForRules()
     .map(
       (role) => `
@@ -10294,6 +11132,75 @@ function renderRules() {
       `,
     )
     .join("");
+}
+
+function renderKpiPeriodLocks() {
+  const panel = byId("kpiPeriodLockPanel");
+  if (!panel) return;
+  const canManage = isAdmin();
+  panel.classList.toggle("is-hidden", !canManage);
+  if (!canManage) return;
+  const periodInput = byId("kpiPeriodLockPeriod");
+  if (!periodInput.value) periodInput.value = state.activePeriod || currentMonth();
+  const locks = normalizeKpiPeriodLocks(state.kpiPeriodLocks);
+  const list = byId("kpiPeriodLockList");
+  list.classList.toggle("empty-state", !locks.length);
+  list.innerHTML = locks.length
+    ? locks.map((item) => `
+        <div class="kpi-period-lock-row">
+          <div>
+            <strong>${escapeHtml(formatMonthPeriod(item.period))}</strong>
+            <span>Chốt bởi ${escapeHtml(item.lockedBy || "Admin")} lúc ${escapeHtml(formatDateTime(item.lockedAt) || "chưa rõ")}</span>
+            ${item.note ? `<small>${escapeHtml(item.note)}</small>` : ""}
+          </div>
+          <button class="ghost" data-unlock-kpi-period="${escapeHtml(item.period)}" type="button">Mở chốt</button>
+        </div>
+      `).join("")
+    : "Chưa có kỳ KPI được chốt.";
+  const selectedLock = kpiPeriodLock(periodInput.value);
+  byId("toggleKpiPeriodLock").textContent = selectedLock ? "Mở chốt kỳ KPI" : "Chốt kỳ KPI";
+}
+
+function toggleKpiPeriodLock(period = byId("kpiPeriodLockPeriod")?.value) {
+  if (!isAdmin()) return;
+  const targetPeriod = String(period || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(targetPeriod)) {
+    alert("Chọn kỳ KPI hợp lệ trước khi chốt.");
+    return;
+  }
+  const existing = kpiPeriodLock(targetPeriod);
+  if (existing) {
+    if (!confirm(`Mở chốt kỳ ${formatMonthPeriod(targetPeriod)}? Các điều chỉnh sau đó vẫn được ghi vào lịch sử.`)) return;
+    state.kpiPeriodLocks = normalizeKpiPeriodLocks(state.kpiPeriodLocks).filter((item) => item.period !== targetPeriod);
+    logActivity({
+      action: "Mở chốt kỳ KPI",
+      module: "Quy chế",
+      targetType: "kpiPeriodLock",
+      targetId: targetPeriod,
+      period: targetPeriod,
+      title: formatMonthPeriod(targetPeriod),
+      details: existing.note || "Mở lại kỳ đánh giá.",
+    });
+  } else {
+    const actor = currentActorInfo();
+    const note = byId("kpiPeriodLockNote").value.trim();
+    state.kpiPeriodLocks = normalizeKpiPeriodLocks([
+      ...(state.kpiPeriodLocks || []),
+      { period: targetPeriod, lockedAt: new Date().toISOString(), lockedById: actor.id, lockedBy: actor.name, note },
+    ]);
+    logActivity({
+      action: "Chốt kỳ KPI",
+      module: "Quy chế",
+      targetType: "kpiPeriodLock",
+      targetId: targetPeriod,
+      period: targetPeriod,
+      title: formatMonthPeriod(targetPeriod),
+      details: note || "Đã chốt kỳ đánh giá và khóa quyền điều chỉnh thông thường.",
+    });
+  }
+  byId("kpiPeriodLockNote").value = "";
+  saveState();
+  renderAll();
 }
 
 let kpiCatalogDraft = null;
@@ -10733,6 +11640,38 @@ function applyKpiCatalogDraft(draft) {
   });
 }
 
+function kpiCatalogServerPayload(draft) {
+  const customization = normalizeSystemCustomization({
+    ...state.systemCustomization,
+    kpiParameters: draft.kpiParameters,
+  });
+  return {
+    departments: normalizeDepartmentsCatalog(draft.departments),
+    roles: normalizeRolesCatalog(draft.roles),
+    behaviorRules: normalizeBehaviorRulesCatalog(draft.behaviorRules),
+    kpiParameters: cloneKpiCatalog(customization.kpiParameters),
+  };
+}
+
+async function saveKpiCatalogServerCommand(draft) {
+  const { response, payload } = await sharedJsonRequest("kpi-catalog", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ catalog: kpiCatalogServerPayload(draft) }),
+  });
+  if (response.status === 401) {
+    handleSharedSessionUnauthorized();
+    return { ok: false, reason: "session-verification" };
+  }
+  if (!response.ok || !payload?.state) {
+    return { ok: false, reason: payload?.error || `server-${response.status}` };
+  }
+  sharedSync.revision = Number(payload.revision) || sharedSync.revision;
+  sharedSync.initialized = sharedSync.revision > 0;
+  await adoptSharedState(payload.state, { render: false });
+  return { ok: true };
+}
+
 function kpiCatalogSyncNeedsRetry(syncResult) {
   if (syncResult?.conflict) return true;
   const denied = Array.isArray(syncResult?.denied) ? syncResult.denied : [];
@@ -10761,12 +11700,49 @@ async function saveKpiCatalogManager() {
     return;
   }
   const submittedDraft = cloneKpiCatalog(kpiCatalogDraft);
+  const previousState = cloneStatePayload(state);
   applyKpiCatalogDraft(submittedDraft);
-  saveState();
+  const recalculatedEvaluations = cloneKpiCatalog(state.evaluations);
+  const recalculatedDepartmentEvaluations = cloneKpiCatalog(state.departmentEvaluations);
   const saveButton = byId("saveKpiCatalogManager");
   if (saveButton) saveButton.disabled = true;
   setKpiCatalogNotice("Đang lưu danh mục và kiểm tra dữ liệu đồng bộ...");
   try {
+    if (sharedSync.session && !isOfflineFileRuntime() && sharedSyncSupportsKpiCatalogCommand()) {
+      const command = await saveKpiCatalogServerCommand(submittedDraft);
+      if (!command.ok) {
+        Object.assign(state, previousState);
+        applyRuntimeKpiCatalogs(state);
+        kpiCatalogDraft = createKpiCatalogDraft();
+        renderAll();
+        renderKpiCatalogManager();
+        const message = command.reason === "session-expired"
+          ? "Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại trước khi cập nhật danh mục KPI."
+          : "Máy chủ chưa thể lưu danh mục KPI. Dữ liệu trên màn hình đã được khôi phục theo phiên bản hợp lệ gần nhất.";
+        setKpiCatalogNotice(message, true);
+        return;
+      }
+
+      // The server has already committed the catalog atomically. Only the
+      // recalculated KPI history is sent afterwards as record-level updates,
+      // so no scalar catalog field can be rejected as a stale client patch.
+      state.evaluations = recalculatedEvaluations;
+      state.departmentEvaluations = recalculatedDepartmentEvaluations;
+      applyRuntimeKpiCatalogs(state);
+      saveState();
+      const historySync = await flushSharedStateSync();
+      kpiCatalogDraft = createKpiCatalogDraft();
+      renderAll();
+      renderKpiCatalogManager();
+      if (historySync?.denied?.length || historySync?.conflict) {
+        setKpiCatalogNotice("Danh mục KPI đã được lưu trên máy chủ. Một số số liệu lịch sử vừa thay đổi ở thiết bị khác sẽ tự tải lại theo bản hợp lệ mới nhất.");
+      } else {
+        setKpiCatalogNotice("Đã lưu danh mục KPI trực tiếp trên máy chủ. Dữ liệu mới sẽ được đồng bộ tới các tài khoản theo phân quyền.");
+      }
+      return;
+    }
+
+    saveState();
     if (sharedSync.session && !isOfflineFileRuntime()) {
       let syncResult = await flushSharedStateSync();
       if (kpiCatalogSyncNeedsRetry(syncResult)) {
@@ -12268,9 +13244,35 @@ function renderSystemThemeControls() {
 
 function registerPwaForUpdates() {
   if (!("serviceWorker" in navigator) || window.location.protocol === "file:") return Promise.resolve(null);
+  pwaControllerChangeCanReload ||= Boolean(navigator.serviceWorker.controller);
+  if (!pwaControllerChangeHandlerBound) {
+    pwaControllerChangeHandlerBound = true;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!pwaControllerChangeCanReload) return;
+      try {
+        if (sessionStorage.getItem(PWA_RELEASE_RELOAD_KEY) === "1") return;
+        sessionStorage.setItem(PWA_RELEASE_RELOAD_KEY, "1");
+      } catch {
+        // Reloading once is still safer than mixing a new shell with an old controller.
+      }
+      window.location.reload();
+    });
+  }
   if (!pwaRegistrationPromise) {
     pwaRegistrationPromise = navigator.serviceWorker
-      .register(new URL("service-worker.js", window.location.href).href, { updateViaCache: "none" })
+      .register(new URL(`service-worker.js?v=${encodeURIComponent(APP_VERSION)}`, window.location.href).href, { updateViaCache: "none" })
+      .then((registration) => {
+        const activateWaitingWorker = () => registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+        activateWaitingWorker();
+        registration.addEventListener("updatefound", () => {
+          const worker = registration.installing;
+          worker?.addEventListener("statechange", () => {
+            if (worker.state === "installed" && navigator.serviceWorker.controller) activateWaitingWorker();
+          });
+        });
+        registration.update().catch(() => undefined);
+        return registration;
+      })
       .catch((error) => {
         console.warn("PWA registration failed:", error);
         return null;
@@ -12297,10 +13299,12 @@ function applySystemCustomization() {
 
 function renderTopbarThemeVisual(theme) {
   const scene = byId("topbarVisualScene");
-  if (!scene) return;
   const normalized = normalizeSystemTheme(theme);
   const preset = normalized.preset;
   const source = topbarThemeVisuals[preset] || topbarThemeVisuals.default;
+  const topbar = document.querySelector(".topbar");
+  if (topbar) topbar.style.setProperty("--topbar-theme-scene", `url("${source}")`);
+  if (!scene) return;
   if (scene.dataset.theme === preset && scene.getAttribute("src") === source) return;
   scene.dataset.theme = preset;
   scene.src = source;
@@ -13532,6 +14536,7 @@ function populateTaskForm(task) {
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
   updateTaskCategoryOptions(task.category);
   byId("taskWorkType").value = normalizeTaskWorkType(task);
+  byId("taskPriority").value = normalizeTaskPriority(task.priority);
   byId("taskRecurrence").value = normalizeTaskRecurrence(task);
   byId("taskStartDate").value = task.startDate || "";
   byId("taskDue").value = task.due;
@@ -13540,6 +14545,10 @@ function populateTaskForm(task) {
   byId("taskProgress").value = task.progress;
   byId("taskQualityPercent").value = normalizeTaskQualityInput(task.qualityPercent);
   byId("taskNote").value = !canEditTaskDetails(task) && canUpdateTaskProgress(task) && !taskHasQualityPercent(task) ? "" : task.note;
+  byId("taskFollowUpDate").value = task.followUpDate || "";
+  byId("taskBlockerStatus").value = normalizeTaskBlockerStatus(task.blockerStatus);
+  byId("taskBlockerNote").value = task.blockerNote || "";
+  renderTaskDependencyOptions(taskDependencyIds(task), task.id);
   updateTaskResponseMeta(task);
   byId("taskAttachments").value = "";
   taskAttachmentDraft = [...(task.attachments || [])];
@@ -13678,10 +14687,18 @@ function updateTaskFormLock(task = null) {
     element.classList.toggle("is-hidden", kind !== TASK_KIND_REGULAR);
   });
   byId("taskForm")
-    .querySelectorAll("#taskTitle, #taskProjectId, #taskOwner, #taskCategory, #taskWorkType, #taskRecurrence, #taskStartDate, #taskDue, #taskDueTime")
+    .querySelectorAll("#taskTitle, #taskProjectId, #taskOwner, #taskCategory, #taskWorkType, #taskPriority, #taskRecurrence, #taskStartDate, #taskDue, #taskDueTime")
     .forEach((input) => {
       input.disabled = !canEditDetails;
     });
+  const dependencyList = byId("taskDependencies");
+  if (dependencyList) {
+    dependencyList.classList.toggle("is-disabled", !canEditDetails);
+    dependencyList.setAttribute("aria-disabled", String(!canEditDetails));
+    dependencyList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      input.disabled = !canEditDetails;
+    });
+  }
   const ownerPickerLocked = !canEditDetails || (isEmployee() && kind === TASK_KIND_REGULAR);
   const ownerPicker = byId("taskOwnerPicker");
   if (ownerPicker) {
@@ -13709,7 +14726,7 @@ function updateTaskFormLock(task = null) {
   }
   byId("taskStatus").disabled = !canUpdateReport;
   byId("taskForm")
-    .querySelectorAll("#taskProgress, #taskAttachments")
+    .querySelectorAll("#taskProgress, #taskAttachments, #taskFollowUpDate, #taskBlockerStatus, #taskBlockerNote")
     .forEach((input) => {
       input.disabled = !canUpdateReport;
     });
@@ -13848,6 +14865,7 @@ function copyRegularTaskToForm(task) {
   updateTaskCollaboratorOptions(taskCollaboratorIds(task));
   updateTaskCategoryOptions(task.category);
   byId("taskWorkType").value = normalizeTaskWorkType(task);
+  byId("taskPriority").value = normalizeTaskPriority(task.priority);
   byId("taskRecurrence").value = normalizeTaskRecurrence(task);
   byId("taskStartDate").value = task.startDate || "";
   byId("taskDue").value = task.due || "";
@@ -13856,6 +14874,10 @@ function copyRegularTaskToForm(task) {
   byId("taskProgress").value = 0;
   byId("taskQualityPercent").value = "";
   byId("taskNote").value = task.note || "";
+  byId("taskFollowUpDate").value = "";
+  byId("taskBlockerStatus").value = "none";
+  byId("taskBlockerNote").value = "";
+  renderTaskDependencyOptions(taskDependencyIds(task));
   taskAttachmentDraft = [];
   byId("taskAttachments").value = "";
   updateTaskResponseMeta(null);
@@ -14042,6 +15064,7 @@ function openHistoryTimelineTarget(target) {
     byId("taskStatusFilter").value = "";
     byId("taskSearch").value = task?.title || title || "";
     byId("taskProjectFilter").value = "";
+    byId("taskDepartmentFilter").value = "";
     clearTaskTimeFilter();
     renderTaskBoard();
     switchView("tasks");
@@ -14193,6 +15216,21 @@ function openDashboardTaskDetail(taskId) {
   openTaskDetailDialog(taskId);
 }
 
+function openDashboardPersonTasks(personId) {
+  if (!personId || !canAccessView("tasks")) return;
+  const person = personById(personId);
+  if (!person) return;
+  taskDashboardPersonFilterId = person.id;
+  byId("taskSearch").value = "";
+  byId("taskStatusFilter").value = "";
+  byId("taskProjectFilter").value = "";
+  byId("taskDepartmentFilter").value = "";
+  clearTaskTimeFilter();
+  renderTaskBoard();
+  switchView("tasks");
+  byId("taskPersonFilterNote").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function openDashboardDetail(action) {
   if (action === "people" && canAccessView("people")) {
     clearDashboardDrillFilters();
@@ -14206,10 +15244,19 @@ function openDashboardDetail(action) {
     byId("taskSearch").value = "";
     byId("taskStatusFilter").value = "";
     byId("taskProjectFilter").value = "";
+    byId("taskDepartmentFilter").value = "";
     clearTaskTimeFilter();
     renderTaskBoard();
     switchView("tasks");
     openTaskStatusDetailDialog("Quá hạn");
+    return;
+  }
+  if (action === "period-tasks") {
+    openDashboardPeriodTaskDetail("all");
+    return;
+  }
+  if (action === "period-completed-tasks") {
+    openDashboardPeriodTaskDetail("completed");
     return;
   }
   if ((action === "evaluations" || action === "reward") && canAccessView("evaluations")) {
@@ -14284,6 +15331,7 @@ function renderAll(options = {}) {
   applySystemCustomization();
   const viewId = applyAccessControls();
   if (!currentAccount()) return;
+  if (repairInvalidTaskCompletionStates()) saveState();
   ensureRecurringTasksForPeriod();
   byId("activePeriod").value = state.activePeriod;
   byId("evalPeriod").value = state.activePeriod;
@@ -14310,11 +15358,16 @@ function resetTaskForm() {
   renderPersonOptions();
   byId("taskWorkType").value = TASK_WORK_TYPE_ROUTINE;
   byId("taskRecurrence").value = TASK_RECURRENCE_NONE;
+  byId("taskPriority").value = TASK_PRIORITY_NORMAL;
   byId("taskProgress").value = 0;
   byId("taskQualityPercent").value = "";
   byId("taskStatus").value = TASK_STATUS_PREPARING;
   byId("taskStartDate").value = "";
   byId("taskDueTime").value = "";
+  byId("taskFollowUpDate").value = "";
+  byId("taskBlockerStatus").value = "none";
+  byId("taskBlockerNote").value = "";
+  renderTaskDependencyOptions();
   updateTaskResponseMeta(null);
   byId("taskAttachments").value = "";
   taskAttachmentDraft = [];
@@ -14490,6 +15543,8 @@ byId("loginForm").addEventListener("submit", async (event) => {
   }
   rememberSessionLoginCredential(account, password);
   localStorage.setItem(SESSION_KEY, account.id);
+  setLoginLandingView(account);
+  selectLatestEvaluationPeriod();
   birthdayCelebrationDisplayKey = "";
   const nhanVienTongHopGpmbCatalogMigrated = migrateNhanVienTongHopGpmbKpiCatalog();
   const sectionHeadCatalogMigrated = migrateSectionHeadKpiCatalog();
@@ -14525,6 +15580,11 @@ window.addEventListener("storage", (event) => {
 });
 
 byId("dashboard").addEventListener("click", (event) => {
+  const operationDetail = event.target.closest("[data-dashboard-operation]");
+  if (operationDetail) {
+    openDashboardOperationDetail(operationDetail.dataset.dashboardOperation);
+    return;
+  }
   const evaluationDetail = event.target.closest("[data-dashboard-evaluation-detail]");
   if (evaluationDetail) {
     openDashboardPersonalEvaluationDetail(evaluationDetail.dataset.dashboardEvaluationDetail);
@@ -14540,6 +15600,16 @@ byId("dashboard").addEventListener("click", (event) => {
     openDashboardTaskDetail(taskDetail.dataset.dashboardTaskDetail);
     return;
   }
+  const personTasks = event.target.closest("[data-dashboard-person-tasks]");
+  if (personTasks) {
+    openDashboardPersonTasks(personTasks.dataset.dashboardPersonTasks);
+    return;
+  }
+  const departmentTaskDetail = event.target.closest("[data-dashboard-department-task-detail]");
+  if (departmentTaskDetail) {
+    openDashboardDepartmentTaskDetail(departmentTaskDetail.dataset.dashboardDepartmentTaskDetail);
+    return;
+  }
   const personLink = event.target.closest("[data-dashboard-person-history]");
   if (personLink) {
     openHistoryDetail("person", personLink.dataset.dashboardPersonHistory);
@@ -14552,7 +15622,12 @@ byId("dashboard").addEventListener("click", (event) => {
   }
   const gradeLink = event.target.closest("[data-dashboard-grade]");
   if (gradeLink) {
-    openDashboardGradeDetail(gradeLink.dataset.dashboardGrade);
+    openDashboardKpiSummaryDialog(gradeLink.dataset.dashboardGrade);
+    return;
+  }
+  const kpiSummary = event.target.closest("[data-dashboard-kpi-summary]");
+  if (kpiSummary) {
+    openDashboardKpiSummaryDialog();
     return;
   }
   const actionLink = event.target.closest("[data-dashboard-action]");
@@ -15452,6 +16527,12 @@ byId("resetPersonForm").addEventListener("click", () => {
 
 byId("openKpiCatalogManager")?.addEventListener("click", openKpiCatalogManager);
 byId("closeKpiCatalogManager")?.addEventListener("click", () => closeModal("kpiCatalogManagerDialog"));
+byId("toggleKpiPeriodLock")?.addEventListener("click", () => toggleKpiPeriodLock());
+byId("kpiPeriodLockPeriod")?.addEventListener("change", renderKpiPeriodLocks);
+byId("kpiPeriodLockList")?.addEventListener("click", (event) => {
+  const period = event.target.closest("[data-unlock-kpi-period]")?.dataset.unlockKpiPeriod;
+  if (period) toggleKpiPeriodLock(period);
+});
 byId("kpiCatalogManagerDialog")?.addEventListener("click", (event) => {
   if (event.target === byId("kpiCatalogManagerDialog")) closeModal("kpiCatalogManagerDialog");
 });
@@ -15777,6 +16858,11 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     attachments: [...draftAttachments, ...uploadedAttachments],
     customFields: collectCustomFieldValues("tasks", existingTask?.customFields),
   };
+  preparedRecord.priority = normalizeTaskPriority(preparedRecord.priority);
+  preparedRecord.blockerStatus = normalizeTaskBlockerStatus(preparedRecord.blockerStatus);
+  preparedRecord.blockerNote = String(preparedRecord.blockerNote || "").trim();
+  preparedRecord.followUpDate = String(preparedRecord.followUpDate || "");
+  preparedRecord.dependencyIds = taskDependencyIds(preparedRecord).filter((id) => id !== preparedRecord.id);
   const progressOnlyUpdate = !!existingTask && !canEditTaskDetails(existingTask) && canUpdateTaskProgress(existingTask);
   if (progressOnlyUpdate) {
     // A collaborator receives a filtered personnel list from the server. Preserve
@@ -15903,10 +16989,12 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     collaboratorsChanged ||
     existingTask.category !== preparedRecord.category ||
     normalizeTaskWorkType(existingTask) !== preparedRecord.workType ||
+    normalizeTaskPriority(existingTask.priority) !== preparedRecord.priority ||
     normalizeTaskRecurrence(existingTask) !== preparedRecord.recurrence ||
     (existingTask.startDate || "") !== (preparedRecord.startDate || "") ||
     existingTask.due !== preparedRecord.due ||
     (existingTask.dueTime || "") !== (preparedRecord.dueTime || "") ||
+    !samePersonIdList(taskDependencyIds(existingTask), preparedRecord.dependencyIds) ||
     (existingTask.note || "") !== preparedRecord.note;
 
   let mergedRecord = canEditDetails
@@ -15921,6 +17009,9 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
           status: preparedRecord.status,
           progress: preparedRecord.progress,
           attachments: preparedRecord.attachments,
+          followUpDate: preparedRecord.followUpDate,
+          blockerStatus: preparedRecord.blockerStatus,
+          blockerNote: preparedRecord.blockerNote,
         }
       : {
           ...existingTask,
@@ -16142,6 +17233,7 @@ byId("taskForm").addEventListener("submit", async (event) => {
       collaboratorIds: selectedTaskCollaboratorIds(),
       category: byId("taskCategory").value,
       workType: byId("taskWorkType").value,
+      priority: byId("taskPriority").value,
       recurrence: byId("taskRecurrence").value,
       startDate: byId("taskStartDate").value,
       due: byId("taskDue").value,
@@ -16150,6 +17242,10 @@ byId("taskForm").addEventListener("submit", async (event) => {
       progress: clamp(byId("taskProgress").value, 0, 100),
       qualityPercent: normalizeTaskQualityInput(byId("taskQualityPercent").value),
       note: byId("taskNote").value.trim(),
+      followUpDate: byId("taskFollowUpDate").value,
+      blockerStatus: byId("taskBlockerStatus").value,
+      blockerNote: byId("taskBlockerNote").value.trim(),
+      dependencyIds: selectedTaskDependencyIds(),
     },
     byId("taskAttachments"),
     taskAttachmentDraft,
@@ -16302,7 +17398,13 @@ byId("assignmentTaskStatus")?.addEventListener("change", () => {
 });
 byId("taskSearch").addEventListener("input", debounce(renderTaskBoard, 200));
 byId("taskProjectFilter").addEventListener("change", renderTaskBoard);
+byId("taskDepartmentFilter").addEventListener("change", renderTaskBoard);
 byId("taskStatusFilter").addEventListener("change", renderTaskBoard);
+byId("taskPersonFilterNote").addEventListener("click", (event) => {
+  if (!event.target.closest("[data-clear-task-person-filter]")) return;
+  taskDashboardPersonFilterId = "";
+  renderTaskBoard();
+});
 byId("taskDateFrom").addEventListener("change", renderTaskBoard);
 byId("taskDateTo").addEventListener("change", renderTaskBoard);
 byId("clearTaskTimeFilter").addEventListener("click", () => {
@@ -16328,10 +17430,24 @@ byId("taskInboxList")?.addEventListener("click", (event) => {
   openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
 });
 byId("closeTaskStatusDetail").addEventListener("click", closeTaskStatusDetailDialog);
+byId("exportTaskStatusDetailExcel").addEventListener("click", () => downloadDashboardPopupExcel(taskStatusDetailExport));
 byId("taskStatusDetailDialog").addEventListener("click", (event) => {
   if (event.target === byId("taskStatusDetailDialog")) {
     closeTaskStatusDetailDialog();
   }
+});
+byId("closeDashboardDetail").addEventListener("click", closeDashboardDetailDialog);
+byId("exportDashboardDetailExcel").addEventListener("click", () => downloadDashboardPopupExcel(dashboardDetailExport));
+byId("dashboardDetailDialog").addEventListener("click", (event) => {
+  if (event.target === byId("dashboardDetailDialog")) closeDashboardDetailDialog();
+});
+byId("dashboardDetailDialog").addEventListener("change", (event) => {
+  if (event.target.id !== "dashboardKpiSummaryDepartmentFilter") return;
+  openDashboardKpiSummaryDialog(dashboardKpiSummaryGradeFilter, event.target.value);
+});
+byId("dashboardWorkloadDepartmentFilter").addEventListener("change", (event) => {
+  dashboardWorkloadDepartmentFilter = event.target.value;
+  renderDashboardOperations(dashboardOperationalTasks());
 });
 byId("closeTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
 byId("cancelTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
@@ -16358,6 +17474,15 @@ byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
   if (reviewTaskCompletion(taskId, decision, byId("taskCompletionReviewNote").value, qualityPercent)) {
     closeTaskCompletionReviewDialog();
   }
+});
+byId("exportTaskDetailExcel").addEventListener("click", () => {
+  const task = state.tasks.find((item) => item.id === byId("taskDetailDialog").dataset.taskId);
+  if (!task) return;
+  downloadDashboardPopupExcel(taskStatusDetailExportData({
+    title: `Chi tiết công việc - ${task.title || "Công việc"}`,
+    subtitle: `Thông tin công việc trong kỳ ${formatMonthPeriod(taskPeriod(task) || state.activePeriod)}.`,
+    tasks: [task],
+  }));
 });
 byId("closeTaskDetail").addEventListener("click", closeTaskDetailDialog);
 byId("taskDetailDialog").addEventListener("click", (event) => {
@@ -16536,6 +17661,10 @@ byId("departmentEvaluationForm").addEventListener("submit", (event) => {
     alert("Tài khoản hiện tại không có quyền lưu KPI phòng.");
     return;
   }
+  if (!canAdjustLockedKpiPeriod(period, byId("deptEvalComment").value)) {
+    alert("Kỳ KPI này đã được chốt. Chỉ Admin được điều chỉnh và phải ghi rõ lý do trong phần nhận xét.");
+    return;
+  }
   const existing = latestDepartmentEvaluation(departmentId, period);
   const adjustmentActor = currentAdjustmentActor();
   const calculated = calculateDepartmentEvaluationFromForm();
@@ -16666,6 +17795,10 @@ byId("evaluationForm").addEventListener("submit", (event) => {
   const existing = state.evaluations.find((item) => item.period === period && item.personId === personId);
   if (!canEditBase && !canEditBehavior) {
     alert("Tài khoản hiện tại không có quyền lưu phiếu KPI này hoặc kỳ đánh giá đã khóa.");
+    return;
+  }
+  if (!canAdjustLockedKpiPeriod(period, byId("evalComment").value)) {
+    alert("Kỳ KPI này đã được chốt. Chỉ Admin được điều chỉnh và phải ghi rõ lý do trong phần nhận xét.");
     return;
   }
   if (!canEditBase && !existing) {

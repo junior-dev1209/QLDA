@@ -6,15 +6,15 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.0.57">
+  <meta name="application-version" content="3.0.75">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="app-icon-phuc-thinh.png" type="image/png">
-  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png">
-  <script src="supabase-config.js"></script>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.webmanifest?v=3.0.75">
+  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.0.75" type="image/png">
+  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.0.75">
+  <script src="supabase-config.js?v=3.0.75"></script>
+  <link rel="stylesheet" href="styles.css?v=3.0.75">
   <!-- 🔥 CHẶN ĐỨNG MÀN ĐĂNG NHẬP TRƯỚC KHI TRÌNH DUYỆT BẮT ĐẦU VẼ GIAO DIỆN -->
   <script>
     if (localStorage.getItem("phuc-thinh-current-account-v1")) {
@@ -45,7 +45,7 @@
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.0.56</strong>
+          <strong data-app-version>Phiên bản 3.0.75</strong>
         </p>
       </form>
     </div>
@@ -149,19 +149,36 @@
             <span>Nhân sự</span>
             <strong id="metricPeople">0</strong>
           </article>
-          <article class="dashboard-link" data-dashboard-action="overdue">
-            <span>Công việc quá hạn</span>
+          <article class="dashboard-link" data-dashboard-action="period-tasks">
+            <span>Tổng số công việc</span>
             <strong id="metricOverdue">0</strong>
           </article>
           <article class="dashboard-link" data-dashboard-action="evaluations">
             <span>KPI bình quân</span>
             <strong id="metricAvg">0</strong>
           </article>
-          <article class="dashboard-link" data-dashboard-action="reward">
-            <span>Đề xuất khen thưởng</span>
+          <article class="dashboard-link" data-dashboard-action="period-completed-tasks">
+            <span>Tổng công việc toàn Ban đã hoàn thành</span>
             <strong id="metricReward">0</strong>
           </article>
         </div>
+
+        <section class="block dashboard-operations-block">
+          <div id="dashboardOperations" class="dashboard-operations-grid empty-state">Chưa có công việc cần theo dõi.</div>
+          <div class="dashboard-workload-head">
+            <h4>Thống kê công việc theo nhân sự</h4>
+            <div class="dashboard-workload-actions">
+              <label class="dashboard-workload-filter" for="dashboardWorkloadDepartmentFilter">
+                <span>Lọc phòng</span>
+                <select id="dashboardWorkloadDepartmentFilter" aria-label="Lọc phòng cho thống kê công việc theo nhân sự">
+                  <option value="">Tất cả phòng</option>
+                </select>
+              </label>
+              <span id="dashboardWorkloadSummary" class="muted">Chưa có dữ liệu.</span>
+            </div>
+          </div>
+          <div id="dashboardWorkload" class="dashboard-workload-list empty-state">Chưa có dữ liệu tải việc.</div>
+        </section>
 
         <section class="block chart-block dashboard-department-block dashboard-department-effectiveness-full">
           <div class="chart-heading">
@@ -182,7 +199,7 @@
                   <p id="gradeChartSummary" class="muted">Chưa có dữ liệu đánh giá.</p>
                 </div>
               </div>
-              <div id="gradeDistributionChart" class="grade-chart empty-state">Chưa có dữ liệu đánh giá.</div>
+              <div id="gradeDistributionChart" class="grade-chart dashboard-link empty-state" data-dashboard-kpi-summary>Chưa có dữ liệu đánh giá.</div>
             </section>
 
             <section class="block dashboard-rank-block">
@@ -545,6 +562,9 @@
           </div>
           <div class="task-head-actions">
             <button id="openTaskBulkImport" class="ghost is-hidden" type="button">Nhập Excel</button>
+            <select id="taskDepartmentFilter" aria-label="Lọc công việc theo phòng">
+              <option value="">Tất cả phòng</option>
+            </select>
             <button id="openTaskForm" type="button">Thêm công việc</button>
           </div>
         </div>
@@ -624,6 +644,13 @@
               <option value="arising">Công việc phát sinh</option>
             </select>
           </label>
+          <label class="regular-only task-priority-field">Mức độ ưu tiên
+            <select id="taskPriority">
+              <option value="normal">Bình thường</option>
+              <option value="high">Cao</option>
+              <option value="urgent">Khẩn</option>
+            </select>
+          </label>
           <label class="regular-only task-recurrence-field">Định kỳ
             <select id="taskRecurrence">
               <option value="none">Không định kỳ</option>
@@ -670,6 +697,33 @@
             <span id="taskProgressMeta" class="field-note"></span>
             <div id="taskProgressReportList" class="progress-report-list"></div>
           </label>
+          <section class="wide task-tracking-panel" aria-labelledby="taskTrackingTitle">
+            <div class="task-tracking-head">
+              <h3 id="taskTrackingTitle">Theo dõi điều hành</h3>
+              <p>Ghi nhận mốc cập nhật, trở ngại và công việc phụ thuộc để hệ thống cảnh báo đúng việc cần xử lý.</p>
+            </div>
+            <div class="task-tracking-grid">
+              <label>Mốc cập nhật tiếp theo
+                <input id="taskFollowUpDate" type="date">
+              </label>
+              <label>Trạng thái trở ngại
+                <select id="taskBlockerStatus">
+                  <option value="none">Không có trở ngại</option>
+                  <option value="needs-support">Cần hỗ trợ</option>
+                  <option value="in-progress">Đang xử lý trở ngại</option>
+                  <option value="resolved">Đã gỡ trở ngại</option>
+                </select>
+              </label>
+              <fieldset class="task-dependency-field">
+                <legend>Công việc phụ thuộc</legend>
+                <div id="taskDependencies" class="task-dependency-list" role="group" aria-describedby="taskDependenciesNote"></div>
+                <span id="taskDependenciesNote" class="field-note">Tích chọn từng công việc cần phụ thuộc.</span>
+              </fieldset>
+              <label class="task-blocker-note-field">Nội dung trở ngại / đề nghị hỗ trợ
+                <textarea id="taskBlockerNote" rows="3" placeholder="Nêu rõ vướng mắc, đơn vị cần phối hợp và đề nghị xử lý..."></textarea>
+              </label>
+            </div>
+          </section>
           <div class="form-actions wide">
             <button type="submit">Lưu công việc</button>
             <button id="resetTaskForm" class="ghost" type="button">Làm mới</button>
@@ -738,6 +792,7 @@
           </label>
           <button id="clearTaskTimeFilter" class="ghost" type="button">Bỏ lọc ngày</button>
         </div>
+        <div id="taskPersonFilterNote" class="task-person-filter-note is-hidden" aria-live="polite"></div>
         <div id="taskBoard" class="task-board"></div>
         <div class="task-scroll-actions" aria-label="Điều hướng nhanh trang công việc">
           <button id="scrollTasksToTop" class="scroll-jump-button" data-scroll-page="top" type="button" title="Lên đầu trang" aria-label="Lên đầu trang">&uarr;</button>
@@ -1254,6 +1309,24 @@
           </div>
           <div id="rulesCriteria" class="rules-criteria"></div>
         </section>
+        <section id="kpiPeriodLockPanel" class="block kpi-period-lock-panel is-hidden" aria-labelledby="kpiPeriodLockTitle">
+          <div class="section-head">
+            <div>
+              <h3 id="kpiPeriodLockTitle">Chốt kỳ KPI</h3>
+              <p class="section-note">Sau khi chốt, chỉ Admin được điều chỉnh KPI của kỳ đó và phải ghi rõ lý do trong nhận xét của phiếu KPI.</p>
+            </div>
+          </div>
+          <div class="kpi-period-lock-form">
+            <label>Kỳ KPI
+              <input id="kpiPeriodLockPeriod" type="month">
+            </label>
+            <label>Lý do chốt kỳ
+              <input id="kpiPeriodLockNote" maxlength="240" placeholder="Ví dụ: Đã đối soát kết quả kỳ đánh giá.">
+            </label>
+            <button id="toggleKpiPeriodLock" type="button">Chốt kỳ KPI</button>
+          </div>
+          <div id="kpiPeriodLockList" class="kpi-period-lock-list empty-state">Chưa có kỳ KPI được chốt.</div>
+        </section>
       </section>
 
       <section id="kpiCatalogManagerDialog" class="modal-backdrop is-hidden" aria-hidden="true">
@@ -1362,7 +1435,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.0.56</strong>
+    <strong data-app-version>Phiên bản 3.0.75</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -1472,10 +1545,30 @@
           <h2 id="taskStatusDetailTitle">Công việc theo trạng thái</h2>
           <p id="taskStatusDetailSubtitle" class="muted">Chưa chọn trạng thái.</p>
         </div>
-        <button id="closeTaskStatusDetail" class="ghost" type="button">Đóng</button>
+        <div class="dialog-head-actions">
+          <button id="exportTaskStatusDetailExcel" class="ghost" type="button">Xuất Excel</button>
+          <button id="closeTaskStatusDetail" class="ghost" type="button">Đóng</button>
+        </div>
       </div>
       <div id="taskStatusDetailContext" class="kpi-task-detail-context"></div>
       <div id="taskStatusDetailList" class="kpi-task-detail-list"></div>
+    </div>
+  </section>
+
+  <section id="dashboardDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card dashboard-detail-modal is-wide" role="dialog" aria-modal="true" aria-labelledby="dashboardDetailTitle">
+      <div class="section-head">
+        <div>
+          <p id="dashboardDetailSubtitle" class="eyebrow">Tổng quan</p>
+          <h2 id="dashboardDetailTitle">Báo cáo chi tiết</h2>
+        </div>
+        <div class="dialog-head-actions">
+          <button id="exportDashboardDetailExcel" class="ghost" type="button">Xuất Excel</button>
+          <button id="closeDashboardDetail" class="ghost" type="button">Đóng</button>
+        </div>
+      </div>
+      <div id="dashboardDetailContext" class="kpi-task-detail-context"></div>
+      <div id="dashboardDetailContent" class="dashboard-detail-content"></div>
     </div>
   </section>
 
@@ -1520,7 +1613,10 @@
           <p id="taskDetailSubtitle" class="eyebrow">Chi tiết công việc</p>
           <h2 id="taskDetailTitle">Công việc</h2>
         </div>
-        <button id="closeTaskDetail" class="ghost" type="button">Đóng</button>
+        <div class="dialog-head-actions">
+          <button id="exportTaskDetailExcel" class="ghost" type="button">Xuất Excel</button>
+          <button id="closeTaskDetail" class="ghost" type="button">Đóng</button>
+        </div>
       </div>
       <div id="taskDetailActions" class="task-detail-actions" aria-label="Điều khiển công việc"></div>
       <div id="taskDetailMeta" class="task-detail-meta"></div>
@@ -1816,7 +1912,7 @@
   </section>
 
   <!-- System data must load before the application runtime. -->
-  <script src="people-data.js"></script>
-  <script src="script.js"></script>
+  <script src="people-data.js?v=3.0.75"></script>
+  <script src="script.js?v=3.0.75"></script>
 </body>
 </html>

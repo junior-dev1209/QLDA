@@ -1,49 +1,61 @@
-const CACHE_NAME = "phuc-thinh-kpi-v348";
+const RELEASE_VERSION = "3.0.75";
+const CACHE_NAME = "phuc-thinh-kpi-v366";
 const APP_SHELL = [
-  "./",
-  "./index.html",
-  "./styles.css",
-  "./people-data.js",
-  "./supabase-config.js",
-  "./script.js",
-  "./manifest.webmanifest",
-  "./app-icon-phuc-thinh.png",
-  "./assets/birthday-cake.png",
-  "./assets/birthday-bouquet.png",
-  "./assets/topbar-infrastructure-scene.png",
-  "./assets/topbar-scene-tet.png",
-  "./assets/topbar-scene-national-day.png",
-  "./assets/topbar-scene-anniversary.png",
-  "./assets/topbar-scene-women-day.png",
-  "./assets/topbar-scene-new-year.png",
-  "./assets/topbar-scene-hung-kings.png",
-  "./assets/topbar-scene-reunification-day.png",
-  "./assets/topbar-scene-children-day.png",
-  "./assets/topbar-scene-martyrs-day.png",
-  "./assets/topbar-scene-august-revolution.png",
-  "./assets/topbar-scene-vietnamese-women-day.png",
-  "./assets/topbar-scene-vietnamese-culture-day.png",
-  "./assets/topbar-scene-christmas.png",
-];
+  "index.html",
+  "styles.css",
+  "people-data.js",
+  "supabase-config.js",
+  "script.js",
+  "manifest.webmanifest",
+  "app-icon-phuc-thinh.png",
+].map((asset) => `./${asset}?v=${encodeURIComponent(RELEASE_VERSION)}`);
+const APP_SHELL_URLS = new Set(APP_SHELL.map((asset) => new URL(asset, self.registration.scope).href));
+const NAVIGATION_FALLBACK = new URL(APP_SHELL[0], self.registration.scope).href;
+
+async function precacheReleaseShell() {
+  const cache = await caches.open(CACHE_NAME);
+  await Promise.all(APP_SHELL.map(async (asset) => {
+    const request = new Request(asset, { cache: "reload" });
+    const response = await fetch(request);
+    if (!response.ok) throw new Error(`Unable to cache ${asset}: ${response.status}`);
+    await cache.put(request, response);
+  }));
+}
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
+  event.waitUntil(precacheReleaseShell().then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))),
-  );
-  self.clients.claim();
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
-  if (url.pathname.includes("/api/")) return;
+  if (url.origin !== self.location.origin || url.pathname.includes("/api/")) return;
+
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(new Request(event.request, { cache: "no-store" }))
+        .catch(() => caches.open(CACHE_NAME).then((cache) => cache.match(NAVIGATION_FALLBACK))),
+    );
+    return;
+  }
+
+  if (APP_SHELL_URLS.has(url.href)) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(event.request);
+        return cached || fetch(new Request(event.request, { cache: "reload" }));
+      }),
+    );
+    return;
+  }
 
   event.respondWith(
     fetch(event.request)
@@ -54,12 +66,7 @@ self.addEventListener("fetch", (event) => {
         }
         return response;
       })
-      .catch(() =>
-        caches.match(event.request).then((cached) => {
-          if (cached) return cached;
-          return event.request.mode === "navigate" ? caches.match("./index.html") : Response.error();
-        }),
-      ),
+      .catch(() => caches.match(event.request).then((cached) => cached || Response.error())),
   );
 });
 
