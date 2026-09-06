@@ -5,7 +5,10 @@ const legacyServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const secretKeys = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}") as Record<string, string>;
 const serviceRoleKey = legacyServiceRoleKey || secretKeys.default || Object.values(secretKeys)[0] || "";
 const bucketName = "kpi-files";
-const sessionLifetimeHours = 12;
+// Keep a single-device session usable through ordinary connectivity outages.
+// The expiry is renewed only while the same device remains active.
+const sessionLifetimeHours = 24 * 7;
+const sessionRenewalWindowMs = 24 * 60 * 60 * 1000;
 const stateId = "primary";
 const maxUploadBytes = 10 * 1024 * 1024;
 const maxJsonPayloadBytes = 12 * 1024 * 1024;
@@ -13,10 +16,10 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.08.25.3";
+const deploymentVersion = "2026.09.03.1";
 
 const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
-const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "nhanVienTongHopGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "deletedIds"] as const;
+const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "nhanVienTongHopGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "kpiPeriodLocks", "deletedIds"] as const;
 const moduleAccessRoles = ["director", "manager", "deputy_manager", "section_head", "employee"] as const;
 const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
 const moduleDefaultRoleAccess: Record<string, string[]> = {
@@ -36,7 +39,7 @@ const moduleSettingsVersion = 3;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable = "kpi_record_people" | "kpi_record_tasks" | "kpi_record_task_progress_reports" | "kpi_record_evaluations" | "kpi_record_catalog" | "kpi_record_activity_log";
+type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -90,11 +93,18 @@ type StatePatch = {
   fields?: Array<{ key: ScalarField; value: unknown; baseValue?: unknown }>;
 };
 
+type KpiCatalogUpdate = {
+  departments: JsonRecord[];
+  roles: JsonRecord[];
+  behaviorRules: unknown[];
+  kpiParameters: JsonRecord;
+};
+
 const projectionTableByCollection: Partial<Record<CollectionName, RecordProjectionTable>> = {
-  people: "kpi_record_people",
-  tasks: "kpi_record_tasks",
-  evaluations: "kpi_record_evaluations",
-  activityLog: "kpi_record_activity_log",
+  people: "people",
+  tasks: "tasks",
+  evaluations: "evaluations",
+  activityLog: "activity_log",
 };
 const kpiCatalogScalarFields: ScalarField[] = [
   "departments",
@@ -410,18 +420,6 @@ function mergeKpiSystemCustomizationChange(baseValue: unknown, localValue: unkno
 
 function rebaseScalarFieldChange(key: ScalarField, baseValue: unknown, localValue: unknown, remoteValue: unknown): { ok: true; value: unknown } | { ok: false } {
   if (sameJson(remoteValue, baseValue) || sameJson(remoteValue, localValue)) return { ok: true, value: localValue };
-
-  // Migration/version markers are metadata only. A stale browser base must not
-  // create a false conflict when Admin advances one of these catalog versions.
-  if ([
-    "canBoGpmbKpiCatalogVersion",
-    "nhanVienTongHopGpmbKpiCatalogVersion",
-    "sectionHeadKpiCatalogVersion",
-    "personalKpiClassificationVersion",
-  ].includes(key)) {
-    return { ok: true, value: clone(localValue) };
-  }
-
   if (["departments", "roles", "behaviorRules"].includes(key)) {
     const merged = mergeKpiCatalogArrayChange(key, baseValue, localValue, remoteValue);
     return merged ? { ok: true, value: merged } : { ok: false };
@@ -431,6 +429,119 @@ function rebaseScalarFieldChange(key: ScalarField, baseValue: unknown, localValu
     return merged ? { ok: true, value: merged } : { ok: false };
   }
   return { ok: false };
+}
+
+function validCatalogText(value: unknown, maxLength = 180): boolean {
+  const text = String(value || "").trim();
+  return Boolean(text) && text.length <= maxLength;
+}
+
+function validCatalogWeight(value: unknown, minimum: number, maximum: number): boolean {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= minimum && number <= maximum;
+}
+
+function validKpiCriteria(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.length <= 60
+    && value.every((criterion) => Array.isArray(criterion)
+      && validCatalogText(criterion[0])
+      && validCatalogWeight(criterion[1], 0, 120));
+}
+
+function validKpiCatalogUpdate(value: unknown): value is KpiCatalogUpdate {
+  if (!isRecord(value) || !Array.isArray(value.departments) || !Array.isArray(value.roles) || !Array.isArray(value.behaviorRules) || !isRecord(value.kpiParameters)) return false;
+  if (value.departments.length > 40 || value.roles.length > 160 || value.behaviorRules.length > 80 || Object.keys(value.kpiParameters).length > 16) return false;
+  const departmentIds = new Set<string>();
+  const roleIds = new Set<string>();
+  const behaviorNames = new Set<string>();
+  const departmentsValid = value.departments.every((department) => {
+    if (!isRecord(department)) return false;
+    const id = String(department.id || "").trim();
+    if (!validCatalogText(id, 96) || !validCatalogText(department.name) || departmentIds.has(id) || !validKpiCriteria(department.criteria)) return false;
+    departmentIds.add(id);
+    return true;
+  });
+  const rolesValid = value.roles.every((role) => {
+    if (!isRecord(role)) return false;
+    const id = String(role.id || "").trim();
+    if (!validCatalogText(id, 96) || !validCatalogText(role.departmentId, 96) || !validCatalogText(role.name) || roleIds.has(id) || !validKpiCriteria(role.criteria)) return false;
+    roleIds.add(id);
+    return true;
+  });
+  const behaviorValid = value.behaviorRules.every((rule) => {
+    if (!Array.isArray(rule) || !validCatalogText(rule[0]) || !validCatalogWeight(rule[1], -120, 120)) return false;
+    const key = String(rule[0]).trim().replace(/\s+/g, " ").toLocaleLowerCase("vi");
+    if (behaviorNames.has(key)) return false;
+    behaviorNames.add(key);
+    return true;
+  });
+  const parametersValid = Object.entries(value.kpiParameters).every(([key, parameter]) => /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) && validCatalogWeight(parameter, 0, 300));
+  return departmentsValid && rolesValid && behaviorValid && parametersValid;
+}
+
+function remapKpiIndexedValues(value: unknown, previousCriteria: unknown, nextCriteria: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(previousCriteria) || !Array.isArray(nextCriteria)) return value;
+  const nextIndexesByName = new Map(
+    nextCriteria.map((criterion, index) => [String(Array.isArray(criterion) ? criterion[0] || "" : ""), index]),
+  );
+  const output: JsonRecord = {};
+  const matched = new Set<number>();
+  Object.entries(value).forEach(([index, entry]) => {
+    const oldIndex = Number(index);
+    const name = String(Array.isArray(previousCriteria[oldIndex]) ? previousCriteria[oldIndex][0] || "" : "");
+    const nextIndex = nextIndexesByName.get(name);
+    if (Number.isInteger(nextIndex)) {
+      output[String(nextIndex)] = clone(entry);
+      matched.add(oldIndex);
+    }
+  });
+  if (previousCriteria.length === nextCriteria.length) {
+    Object.entries(value).forEach(([index, entry]) => {
+      const oldIndex = Number(index);
+      if (!matched.has(oldIndex) && Number.isInteger(oldIndex) && nextCriteria[oldIndex]) output[index] = clone(entry);
+    });
+  }
+  return output;
+}
+
+function remapKpiIndexedArray(value: unknown, previousCriteria: unknown, nextCriteria: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const mapped = remapKpiIndexedValues(Object.fromEntries(value.map((entry, index) => [index, entry])), previousCriteria, nextCriteria);
+  if (!isRecord(mapped)) return value;
+  return Object.keys(mapped).sort((left, right) => Number(left) - Number(right)).map((key) => mapped[key]);
+}
+
+function migrateKpiCatalogHistoryForUpdate(state: JsonRecord, previous: KpiCatalogUpdate, next: KpiCatalogUpdate): void {
+  const peopleById = new Map(records(state, "people").map((person) => [recordId(person), person]));
+  const previousRoles = new Map(previous.roles.map((role) => [recordId(role), role]));
+  const nextRoles = new Map(next.roles.map((role) => [recordId(role), role]));
+  const previousDepartments = new Map(previous.departments.map((department) => [recordId(department), department]));
+  const nextDepartments = new Map(next.departments.map((department) => [recordId(department), department]));
+  state.evaluations = records(state, "evaluations").map((evaluation) => {
+    const roleId = String(peopleById.get(String(evaluation.personId || ""))?.roleId || "");
+    const previousRole = previousRoles.get(roleId);
+    const nextRole = nextRoles.get(roleId);
+    const remapRole = (value: unknown) => remapKpiIndexedValues(value, previousRole?.criteria, nextRole?.criteria);
+    return {
+      ...evaluation,
+      criteriaScores: remapRole(evaluation.criteriaScores),
+      criteriaResults: remapKpiIndexedArray(evaluation.criteriaResults, previousRole?.criteria, nextRole?.criteria),
+      behavior: remapKpiIndexedValues(evaluation.behavior, previous.behaviorRules, next.behaviorRules),
+      behaviorManual: remapKpiIndexedValues(evaluation.behaviorManual, previous.behaviorRules, next.behaviorRules),
+      behaviorAutomatic: remapKpiIndexedValues(evaluation.behaviorAutomatic, previous.behaviorRules, next.behaviorRules),
+    };
+  });
+  state.departmentEvaluations = records(state, "departmentEvaluations").map((evaluation) => {
+    const departmentId = String(evaluation.departmentId || "");
+    const previousDepartment = previousDepartments.get(departmentId);
+    const nextDepartment = nextDepartments.get(departmentId);
+    return {
+      ...evaluation,
+      criteriaScores: remapKpiIndexedValues(evaluation.criteriaScores, previousDepartment?.criteria, nextDepartment?.criteria),
+      criteriaResults: remapKpiIndexedArray(evaluation.criteriaResults, previousDepartment?.criteria, nextDepartment?.criteria),
+    };
+  });
 }
 
 function withoutKeys(value: JsonRecord, ignored: string[]): JsonRecord {
@@ -495,6 +606,7 @@ function defaultState(): JsonRecord {
     nhanVienTongHopGpmbKpiCatalogVersion: "",
     sectionHeadKpiCatalogVersion: "",
     personalKpiClassificationVersion: "",
+    kpiPeriodLocks: [],
     deletedIds: [],
   };
 }
@@ -1108,6 +1220,9 @@ function appendOnly(previous: unknown, next: unknown): boolean {
 const taskProgressMutableFields = [
     "status",
     "progress",
+    "followUpDate",
+    "blockerStatus",
+    "blockerNote",
     "attachments",
     "progressReports",
     "completedAt",
@@ -1143,15 +1258,44 @@ function isBlankTaskField(value: unknown): boolean {
   return String(value ?? "").trim() === "";
 }
 
-function taskCompletionIsLateFromTimestamp(task: JsonRecord): boolean {
-  if (!completedTaskStatus(task.status) || !String(task.due || "").trim() || !String(task.completedAt || "").trim()) return false;
-  const dueDate = String(task.due || "").trim();
-  const rawDueTime = String(task.dueTime || "").trim();
-  const dueTime = /^\d{2}:\d{2}$/.test(rawDueTime) ? `${rawDueTime}:00` : "23:59:59";
-  const deadline = new Date(`${dueDate}T${dueTime}+07:00`);
-  const completedAt = new Date(String(task.completedAt || ""));
-  if (Number.isNaN(deadline.getTime()) || Number.isNaN(completedAt.getTime())) return false;
-  return completedAt.getTime() > deadline.getTime();
+function normalizeTaskCompletionLifecycle(next: JsonRecord): JsonRecord {
+  const normalized = clone(next);
+  const reviewStatus = String(normalized.completionReviewStatus || "").trim();
+  const clearQualityFields = [
+    "qualityPercent",
+    "qualityAssessedAt",
+    "qualityAssessedById",
+    "qualityAssessedByName",
+  ];
+  const clearCompletedFields = ["completedAt", "completedById", "completedByName"];
+  const clearReviewFields = [
+    "completionReviewedAt",
+    "completionReviewedById",
+    "completionReviewedByName",
+    "completionReviewNote",
+  ];
+  if (completedTaskStatus(normalized.status)) {
+    if (reviewStatus === "passed" && !isBlankTaskField(normalized.qualityPercent)) return normalized;
+    normalized.completionReviewStatus = "pending";
+    [...clearReviewFields, ...clearQualityFields].forEach((field) => {
+      normalized[field] = "";
+    });
+    normalized.lateCompletion = false;
+    return normalized;
+  }
+  if (reviewStatus === "failed") {
+    [...clearCompletedFields, ...clearQualityFields].forEach((field) => {
+      normalized[field] = "";
+    });
+    normalized.lateCompletion = false;
+    return normalized;
+  }
+  normalized.completionReviewStatus = "";
+  [...clearReviewFields, ...clearCompletedFields, ...clearQualityFields].forEach((field) => {
+    normalized[field] = "";
+  });
+  normalized.lateCompletion = false;
+  return normalized;
 }
 
 function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
@@ -1166,12 +1310,9 @@ function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
     "qualityAssessedByName",
   ];
   const cleared = completionFields.every((field) => isBlankTaskField(next[field]));
-  if (!cleared) return false;
-  if (completedTaskStatus(next.status)) {
-    if (String(next.completionReviewStatus || "") !== "pending") return false;
-    return Boolean(next.lateCompletion) === taskCompletionIsLateFromTimestamp(next);
-  }
-  return isBlankTaskField(next.completionReviewStatus) && !Boolean(next.lateCompletion);
+  if (!cleared || Boolean(next.lateCompletion)) return false;
+  if (completedTaskStatus(next.status)) return String(next.completionReviewStatus || "") === "pending";
+  return isBlankTaskField(next.completionReviewStatus);
 }
 
 function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
@@ -1192,7 +1333,7 @@ function taskProgressChangeIntent(previous: JsonRecord, next: JsonRecord, allowC
 }
 
 function taskProgressIsLocked(task: JsonRecord): boolean {
-  return String(task.completionReviewStatus || "") === "passed" || !isBlankTaskField(task.qualityPercent);
+  return completedTaskStatus(task.status) && (String(task.completionReviewStatus || "") === "passed" || !isBlankTaskField(task.qualityPercent));
 }
 
 function normalizeTaskProgressLifecycle(next: JsonRecord): JsonRecord {
@@ -1210,12 +1351,11 @@ function normalizeTaskProgressLifecycle(next: JsonRecord): JsonRecord {
   clearFields.forEach((field) => {
     normalized[field] = "";
   });
+  normalized.lateCompletion = false;
   if (completedTaskStatus(normalized.status)) {
     normalized.completionReviewStatus = "pending";
-    normalized.lateCompletion = taskCompletionIsLateFromTimestamp(normalized);
   } else {
     normalized.completionReviewStatus = "";
-    normalized.lateCompletion = false;
     normalized.completedAt = "";
     normalized.completedById = "";
     normalized.completedByName = "";
@@ -1318,74 +1458,6 @@ function canUpdateTaskProgress(state: JsonRecord, account: JsonRecord, task: Jso
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, task, accountDepartmentId(state, account)));
 }
 
-function mergeTaskProgressReportsFromMutation(live: JsonRecord, base: JsonRecord, incoming: JsonRecord): JsonRecord[] {
-  const liveReports = Array.isArray(live.progressReports) ? clone(live.progressReports) : [];
-  const baseReports = Array.isArray(base.progressReports) ? base.progressReports : [];
-  const incomingReports = Array.isArray(incoming.progressReports) ? incoming.progressReports.filter(isRecord) : [];
-  const baseIds = new Set(baseReports.map((report) => recordId(report)).filter(Boolean));
-  const liveIds = new Set(liveReports.map((report) => recordId(report)).filter(Boolean));
-  incomingReports.forEach((report) => {
-    const id = recordId(report);
-    if ((id && baseIds.has(id)) || (id && liveIds.has(id))) return;
-    liveReports.push(clone(report));
-    if (id) liveIds.add(id);
-  });
-  return liveReports;
-}
-
-function sanitizeTaskProgressMutation(
-  state: JsonRecord,
-  account: JsonRecord,
-  live: JsonRecord,
-  base: JsonRecord,
-  incoming: JsonRecord,
-): JsonRecord | null {
-  if (!canUpdateTaskProgress(state, account, live) || taskProgressIsLocked(live)) return null;
-  if (taskCompletionReviewChange(base, incoming) || taskQualityOnlyChange(base, incoming)) return null;
-
-  const hasProgressIntent = taskProgressFields(true).some((field) => !sameJson(base[field], incoming[field]));
-  if (!hasProgressIntent || !appendOnly(base.progressReports || [], incoming.progressReports || [])) return null;
-
-  const sanitized = clone(live);
-  [
-    "status",
-    "progress",
-    "attachments",
-    "responseStatus",
-    "responseNote",
-    "responseAt",
-    "responseById",
-    "responseByName",
-    "updatedAt",
-    "updatedBy",
-    "updatedById",
-  ].forEach((field) => {
-    if (Object.prototype.hasOwnProperty.call(incoming, field)) sanitized[field] = clone(incoming[field]);
-  });
-  sanitized.progressReports = mergeTaskProgressReportsFromMutation(live, base, incoming);
-
-  const canManageDepartmentProgress = isDirector(account)
-    || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, live, accountDepartmentId(state, account)));
-  if (canManageDepartmentProgress) {
-    if (Object.prototype.hasOwnProperty.call(incoming, "collaboratorIds")) sanitized.collaboratorIds = clone(incoming.collaboratorIds);
-    if (Object.prototype.hasOwnProperty.call(incoming, "collaboratorId")) sanitized.collaboratorId = clone(incoming.collaboratorId);
-  }
-
-  const wasCompleted = completedTaskStatus(live.status);
-  const nowCompleted = completedTaskStatus(sanitized.status);
-  if (nowCompleted && !wasCompleted) {
-    sanitized.completedAt = new Date().toISOString();
-    sanitized.completedById = accountPersonId(state, account) || String(account.id || "");
-    sanitized.completedByName = String(account.displayName || account.username || "");
-  } else if (nowCompleted && wasCompleted) {
-    sanitized.completedAt = live.completedAt || "";
-    sanitized.completedById = live.completedById || "";
-    sanitized.completedByName = live.completedByName || "";
-  }
-
-  return normalizeTaskProgressLifecycle(sanitized);
-}
-
 function shouldNormalizeTaskProgressUpdate(
   state: JsonRecord,
   account: JsonRecord,
@@ -1413,7 +1485,20 @@ function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRec
   return false;
 }
 
+function kpiPeriodIsLocked(state: JsonRecord, period: unknown): boolean {
+  const targetPeriod = String(period || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(targetPeriod)) return false;
+  const locks = Array.isArray(state.kpiPeriodLocks) ? state.kpiPeriodLocks : [];
+  return locks.some((item) => isRecord(item) && String(item.period || "").trim() === targetPeriod);
+}
+
+function lockedKpiChangeAllowed(state: JsonRecord, account: JsonRecord, value: JsonRecord): boolean {
+  if (!kpiPeriodIsLocked(state, value.period)) return true;
+  return isAdmin(account) && String(value.comment || "").trim().length >= 3;
+}
+
 function canChangeEvaluation(state: JsonRecord, account: JsonRecord, value: JsonRecord): boolean {
+  if (!lockedKpiChangeAllowed(state, account, value)) return false;
   if (!isCurrentPeriod(value.period)) return isAdmin(account) || isDirector(account);
   if (isAdmin(account) || isDirector(account)) return true;
   const personId = String(value.personId || "");
@@ -1421,6 +1506,7 @@ function canChangeEvaluation(state: JsonRecord, account: JsonRecord, value: Json
 }
 
 function canChangeDepartmentEvaluation(state: JsonRecord, account: JsonRecord, value: JsonRecord): boolean {
+  if (!lockedKpiChangeAllowed(state, account, value)) return false;
   if (!isCurrentPeriod(value.period)) return isAdmin(account) || isDirector(account);
   if (isAdmin(account) || isDirector(account)) return true;
   return hasDepartmentManagement(account) && String(value.departmentId || "") === accountDepartmentId(state, account);
@@ -1639,38 +1725,10 @@ function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch):
     const deleteCount = deleteIds.size;
     currentTotal += currentCount;
     deletedTotal += deleteCount;
-
     if (["people", "tasks", "accounts"].includes(collection) && currentCount > 0 && deleteCount >= currentCount) return true;
-
-    // Preserve the stricter stable-build threshold for the three critical
-    // collections while retaining v3.0.57's broader 35% protection elsewhere.
-    if (["people", "tasks", "accounts"].includes(collection) && currentCount >= 20) {
-      const threshold = Math.max(10, Math.ceil(currentCount * 0.25));
-      if (deleteCount >= threshold) return true;
-    }
-
-    if (collection === "accounts" && deleteCount > 0) {
-      const remainingAdmins = currentRecords.filter((account) => !deleteIds.has(recordId(account)) && isAdmin(account));
-      if (!remainingAdmins.length) return true;
-    }
-
     if (currentCount >= 5 && deleteCount / currentCount > 0.35) return true;
   }
   return currentTotal >= 5 && deletedTotal / currentTotal > 0.35;
-}
-
-function mutationAuditSummary(state: JsonRecord, patch: StatePatch): Record<string, unknown> {
-  const summary: Record<string, unknown> = {};
-  collections.forEach((collection) => {
-    const changes = patch.collections?.[collection];
-    if (!changes) return;
-    summary[collection] = {
-      existing: records(state, collection).length,
-      upserts: Array.isArray(changes.upserts) ? changes.upserts.length : 0,
-      deletes: Array.isArray(changes.deletes) ? changes.deletes.length : 0,
-    };
-  });
-  return summary;
 }
 
 function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number): void {
@@ -1713,29 +1771,22 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       let candidate = value;
       const taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
-      const sanitizedTaskProgress = collection === "tasks" && previous && taskBaseValue
-        ? sanitizeTaskProgressMutation(next, actor, previous, taskBaseValue, candidate)
-        : null;
-
-      if (sanitizedTaskProgress) {
-        candidate = sanitizedTaskProgress;
-      } else if (
+      if (collection === "tasks") candidate = normalizeTaskCompletionLifecycle(candidate);
+      if (
         collection === "tasks"
         && previous
         && taskBaseValue
         && shouldNormalizeTaskProgressUpdate(next, actor, previous, taskBaseValue, candidate)
       ) {
+        // Progress reporters may only change progress data. Clear stale review data before authorization.
         candidate = normalizeTaskProgressLifecycle(candidate);
       }
-
       if (previous && !sameJson(operation.baseValue, serverValue)) {
-        const rebased = sanitizedTaskProgress
-          ? candidate
-          : collection === "tasks" && isRecord(operation.baseValue)
-            ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
-            : collection === "supportRequests" && supportRequestBaseValue
-              ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
-              : null;
+        const rebased = collection === "tasks" && isRecord(operation.baseValue)
+          ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
+          : collection === "supportRequests" && supportRequestBaseValue
+            ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
+          : null;
         if (!rebased) {
           denied.push({ scope: collection, id, reason: "Record changed by another user." });
           return;
@@ -1806,15 +1857,25 @@ async function activeSessionAccountId(request: Request): Promise<string | null> 
     .eq("token_hash", tokenHash)
     .gt("expires_at", new Date().toISOString())
     .maybeSingle();
-  if (error || !data) return null;
+  // A temporary database failure must remain a 5xx response. Treating it as
+  // a missing token incorrectly signs users out whenever the network or
+  // Supabase has a short interruption.
+  if (error) throw error;
+  if (!data) return null;
   const accountId = String(data.account_id || "");
   const previousSeenAt = new Date(String(data.last_seen_at || "")).getTime();
-  if (!Number.isFinite(previousSeenAt) || Date.now() - previousSeenAt >= sessionLastSeenUpdateIntervalMs) {
-    const seenAt = new Date();
-    await Promise.all([
-      admin.from("kpi_sync_sessions").update({ last_seen_at: seenAt.toISOString() }).eq("token_hash", tokenHash),
-      recordAccountDailyActivity(accountId, seenAt),
-    ]);
+  const now = new Date();
+  const expiresAt = new Date(String(data.expires_at || "")).getTime();
+  const renewSession = !Number.isFinite(expiresAt) || expiresAt - now.getTime() <= sessionRenewalWindowMs;
+  if (!Number.isFinite(previousSeenAt) || now.getTime() - previousSeenAt >= sessionLastSeenUpdateIntervalMs || renewSession) {
+    const nextSessionValues: JsonRecord = { last_seen_at: now.toISOString() };
+    if (renewSession) nextSessionValues.expires_at = new Date(now.getTime() + sessionLifetimeHours * 60 * 60 * 1000).toISOString();
+    const { error: updateError } = await admin
+      .from("kpi_sync_sessions")
+      .update(nextSessionValues)
+      .eq("token_hash", tokenHash);
+    if (updateError) throw updateError;
+    await recordAccountDailyActivity(accountId, now);
   }
   return accountId;
 }
@@ -2205,11 +2266,11 @@ async function replaceTaskProgressProjection(task: JsonRecord, revision: number)
   const taskId = recordId(task);
   if (!taskId) return;
   const { error: deleteError } = await admin
-    .from("kpi_record_task_progress_reports")
+    .from("task_progress_reports")
     .delete()
     .eq("task_id", taskId);
   if (deleteError) throw deleteError;
-  await upsertProjectionRows("kpi_record_task_progress_reports", taskProgressProjectionRows(task, revision));
+  await upsertProjectionRows("task_progress_reports", taskProgressProjectionRows(task, revision));
 }
 
 async function updateRecordProjectionMarker(revision: number): Promise<void> {
@@ -2239,7 +2300,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         if (task) await replaceTaskProgressProjection(task, revision);
       }
       for (const id of (changes.deletes || []).map((entry) => String(entry.id || "")).filter(Boolean)) {
-        const { error } = await admin.from("kpi_record_task_progress_reports").delete().eq("task_id", id);
+        const { error } = await admin.from("task_progress_reports").delete().eq("task_id", id);
         if (error) throw error;
       }
     }
@@ -2257,8 +2318,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return row;
       })
       .filter((record): record is JsonRecord => Boolean(record));
-    await upsertProjectionRows("kpi_record_evaluations", rows);
-    await deleteProjectionRows("kpi_record_evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
+    await upsertProjectionRows("evaluations", rows);
+    await deleteProjectionRows("evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
   }
 
   const projectChanges = changedCollections.projectCatalog;
@@ -2272,8 +2333,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return id ? { id: `project:${id}`, version: Math.max(1, revision), data: clone(record), updated_at: new Date().toISOString() } : null;
       })
       .filter((record): record is JsonRecord => record !== null);
-    await upsertProjectionRows("kpi_record_catalog", rows);
-    await deleteProjectionRows("kpi_record_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
+    await upsertProjectionRows("kpi_catalog", rows);
+    await deleteProjectionRows("kpi_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
   }
 
   const changedCatalogFields = new Set((patch.fields || []).map((field) => field.key));
@@ -2283,7 +2344,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         const fieldName = String(row.id || "").replace(/^catalog:/, "").replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
         return changedCatalogFields.has(fieldName as ScalarField);
       });
-    await upsertProjectionRows("kpi_record_catalog", rows);
+    await upsertProjectionRows("kpi_catalog", rows);
   }
 
   // Every accepted command adds one server activity record, even when the
@@ -2291,18 +2352,18 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
   const latestServerActivity = records(state, "activityLog")
     .filter((item) => recordId(item).startsWith("server-sync-"))
     .slice(-1)[0];
-  if (latestServerActivity) await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows([latestServerActivity], revision));
+  if (latestServerActivity) await upsertProjectionRows("activity_log", projectionRecordRows([latestServerActivity], revision));
   await updateRecordProjectionMarker(revision);
 }
 
 async function syncAllRecordProjections(state: JsonRecord, revision: number): Promise<void> {
-  await upsertProjectionRows("kpi_record_people", projectionRecordRows(records(state, "people"), revision));
-  await upsertProjectionRows("kpi_record_tasks", projectionRecordRows(records(state, "tasks"), revision));
-  await upsertProjectionRows("kpi_record_evaluations", evaluationProjectionRows(state, revision));
-  await upsertProjectionRows("kpi_record_catalog", kpiCatalogProjectionRows(state, revision));
-  await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(records(state, "activityLog"), revision));
+  await upsertProjectionRows("people", projectionRecordRows(records(state, "people"), revision));
+  await upsertProjectionRows("tasks", projectionRecordRows(records(state, "tasks"), revision));
+  await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
+  await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
+  await upsertProjectionRows("activity_log", projectionRecordRows(records(state, "activityLog"), revision));
   const reports = records(state, "tasks").flatMap((task) => taskProgressProjectionRows(task, revision));
-  await upsertProjectionRows("kpi_record_task_progress_reports", reports);
+  await upsertProjectionRows("task_progress_reports", reports);
   await updateRecordProjectionMarker(revision);
 }
 
@@ -2352,6 +2413,93 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
     }
   }
   throw new Error("Concurrent update limit reached.");
+}
+
+function kpiCatalogFromState(state: JsonRecord): KpiCatalogUpdate {
+  const customization = isRecord(state.systemCustomization) ? state.systemCustomization : {};
+  return {
+    departments: Array.isArray(state.departments) ? clone(state.departments).filter(isRecord) : [],
+    roles: Array.isArray(state.roles) ? clone(state.roles).filter(isRecord) : [],
+    behaviorRules: Array.isArray(state.behaviorRules) ? clone(state.behaviorRules) : [],
+    kpiParameters: isRecord(customization.kpiParameters) ? clone(customization.kpiParameters) : {},
+  };
+}
+
+function addKpiCatalogServerActivity(state: JsonRecord, actor: JsonRecord): void {
+  const activityLog = records(state, "activityLog");
+  activityLog.push({
+    id: `server-sync-${crypto.randomUUID()}`,
+    action: "Cập nhật",
+    module: "Quy chế",
+    targetType: "kpi-catalog",
+    targetId: "kpi-catalog",
+    title: "Danh mục KPI",
+    details: "Danh mục KPI, phòng, vị trí, tiêu chí và tham số tính điểm đã được cập nhật trực tiếp trên máy chủ.",
+    createdAt: new Date().toISOString(),
+    createdBy: String(actor.displayName || actor.username || "Admin"),
+    createdById: String(actor.id || ""),
+  });
+  state.activityLog = activityLog.slice(-5000);
+}
+
+async function updateKpiCatalogWithRetry(actorId: string, requestedCatalog: KpiCatalogUpdate): Promise<StateSnapshot> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const current = await snapshot();
+    if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
+    const actor = accountForId(current.state, actorId);
+    if (!actor) throw new Error("Authentication required.");
+    if (!isAdmin(actor)) throw new Error("Permission denied.");
+
+    const previousCatalog = kpiCatalogFromState(current.state);
+    const nextState = clone(current.state);
+    const nextCustomization = isRecord(nextState.systemCustomization) ? clone(nextState.systemCustomization) : {};
+    let changed = false;
+    if (!sameJson(nextState.departments, requestedCatalog.departments)) {
+      nextState.departments = clone(requestedCatalog.departments);
+      changed = true;
+    }
+    if (!sameJson(nextState.roles, requestedCatalog.roles)) {
+      nextState.roles = clone(requestedCatalog.roles);
+      changed = true;
+    }
+    if (!sameJson(nextState.behaviorRules, requestedCatalog.behaviorRules)) {
+      nextState.behaviorRules = clone(requestedCatalog.behaviorRules);
+      changed = true;
+    }
+    if (!sameJson(nextCustomization.kpiParameters, requestedCatalog.kpiParameters)) {
+      nextCustomization.kpiParameters = clone(requestedCatalog.kpiParameters);
+      nextState.systemCustomization = nextCustomization;
+      changed = true;
+    }
+    if (!changed) return current;
+
+    migrateKpiCatalogHistoryForUpdate(nextState, previousCatalog, requestedCatalog);
+    addKpiCatalogServerActivity(nextState, actor);
+    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+      expected_revision: current.revision,
+      next_state: nextState,
+    });
+    if (error) throw error;
+    if (Array.isArray(data) && data.length) {
+      const updated = data[0] as { next_revision: number; next_updated_at: string };
+      const result = {
+        revision: Number(updated.next_revision),
+        updatedAt: String(updated.next_updated_at || ""),
+        state: nextState,
+      };
+      try {
+        await syncAllRecordProjections(result.state, result.revision);
+      } catch (projectionError) {
+        console.error("Unable to mirror an authorised KPI catalog update.", projectionError);
+      }
+      return result;
+    }
+    if (attempt < 7) {
+      const delay = Math.min(900, 60 * 2 ** attempt) + Math.round(Math.random() * 120);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Concurrent KPI catalog update limit reached.");
 }
 
 async function initializeFromBackup(actorId: string, incoming: JsonRecord): Promise<StateSnapshot> {
@@ -2529,6 +2677,25 @@ Deno.serve(async (request) => {
       });
     }
 
+    if (action === "kpi-catalog" && ["PUT", "POST"].includes(request.method)) {
+      const current = await snapshot();
+      const accountId = await requireSession(request, current);
+      if (accountId instanceof Response) return accountId;
+      const account = accountForId(current.state, accountId);
+      if (!account || !isAdmin(account)) return json(request, { error: "Forbidden." }, 403);
+      if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
+      const body = await readJsonPayload(request);
+      if (!validKpiCatalogUpdate(body.catalog)) return json(request, { error: "Invalid KPI catalog payload." }, 422);
+      const updated = await updateKpiCatalogWithRetry(accountId, body.catalog);
+      const responseAccount = accountForId(updated.state, accountId);
+      if (!responseAccount) return json(request, { error: "Authentication required." }, 401);
+      return json(request, {
+        revision: updated.revision,
+        updatedAt: updated.updatedAt,
+        state: visibleState(updated.state, responseAccount),
+      });
+    }
+
     if (action === "mutate" && ["PUT", "POST"].includes(request.method)) {
       const current = await snapshot();
       const accountId = await requireSession(request, current);
@@ -2536,23 +2703,7 @@ Deno.serve(async (request) => {
       const body = await readJsonPayload(request);
       if (!validPatch(body?.patch)) return json(request, { error: "Invalid mutation payload." }, 422);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
-
-      const auditActor = accountForId(current.state, accountId);
-      console.log("kpi-sync mutation audit", JSON.stringify({
-        revision: current.revision,
-        actorId: accountId,
-        actorUsername: String(auditActor?.username || ""),
-        actorRole: auditActor ? accountRole(auditActor) : "",
-        summary: mutationAuditSummary(current.state, body.patch),
-      }));
-
       if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
-        console.error("kpi-sync destructive mutation blocked", JSON.stringify({
-          revision: current.revision,
-          actorId: accountId,
-          actorUsername: String(auditActor?.username || ""),
-          summary: mutationAuditSummary(current.state, body.patch),
-        }));
         return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
       }
       const result = await updateWithRetry(accountId, body.patch);
