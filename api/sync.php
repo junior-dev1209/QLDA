@@ -1,6 +1,11 @@
 <?php
 declare(strict_types=1);
 
+const PASSWORD_HASH_ALGORITHM = 'pbkdf2-sha256-v1';
+const PASSWORD_HASH_ITERATIONS = 310000;
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_HASH_BYTES = 32;
+
 /*
  * Shared state API for the Phuc Thinh workforce application.
  * Deploy this file on the same HTTPS origin as index.html.
@@ -12,6 +17,7 @@ header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()');
 header('X-Frame-Options: SAMEORIGIN');
+header("Content-Security-Policy: default-src 'none'; base-uri 'none'; frame-ancestors 'none'");
 
 $secureCookie = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
 ini_set('session.use_strict_mode', '1');
@@ -64,8 +70,15 @@ if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!empty($account['disabled'])) {
         respond(['error' => 'This account has been disabled by an administrator.'], 403);
     }
-    if (!hash_equals((string) ($account['password'] ?? ''), $password)) {
+    if (!accountPasswordMatches($account, $password)) {
         respond(['error' => 'Invalid username or password.'], 401);
+    }
+    if ($snapshot['revision'] > 0 && !hasPasswordHash($account)) {
+        $snapshot = migrateLegacyAccountPassword($stateFile, $lockFile, (string) $account['id'], $password);
+        $account = accountByUsername($snapshot['state'], $username);
+        if (!$account || !accountPasswordMatches($account, $password)) {
+            respond(['error' => 'Invalid username or password.'], 401);
+        }
     }
 
     session_regenerate_id(true);
@@ -73,7 +86,7 @@ if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     respond([
         'revision' => $snapshot['revision'],
         'updatedAt' => $snapshot['updatedAt'],
-        'state' => $snapshot['state'],
+        'state' => sanitizedState($snapshot['state']),
     ]);
 }
 
@@ -93,7 +106,7 @@ if ($action === 'state' && $_SERVER['REQUEST_METHOD'] === 'GET') {
     respond([
         'revision' => $snapshot['revision'],
         'updatedAt' => $snapshot['updatedAt'],
-        'state' => $snapshot['state'],
+        'state' => sanitizedState($snapshot['state']),
     ]);
 }
 
@@ -115,6 +128,7 @@ if ($action === 'state' && in_array($_SERVER['REQUEST_METHOD'], ['PUT', 'POST'],
     try {
         $current = readSnapshot($stateFile);
         $actor = requireSessionAccountFromState($current['state']);
+        $nextState = mergeAccountCredentials($current['state'], $nextState);
         if ($current['revision'] === 0 && !isAdminAccount($actor)) {
             $responsePayload = ['error' => 'Permission denied.'];
             $responseStatus = 403;
@@ -235,6 +249,7 @@ function defaultState(): array
         'activePeriod' => gmdate('Y-m'),
         'people' => [],
         'tasks' => [],
+        'calendarEvents' => [],
         'projectCatalog' => [],
         'bulletins' => [],
         'archiveRecords' => [],
@@ -374,6 +389,129 @@ function accountByUsername(array $state, string $username): ?array
         }
     }
     return null;
+}
+
+function hasPasswordHash(array $account): bool
+{
+    return (string) ($account['passwordAlgorithm'] ?? '') === PASSWORD_HASH_ALGORITHM
+        && (string) ($account['passwordHash'] ?? '') !== ''
+        && (string) ($account['passwordSalt'] ?? '') !== '';
+}
+
+function passwordHashBytes(string $password, string $salt): string
+{
+    return hash_pbkdf2('sha256', $password, $salt, PASSWORD_HASH_ITERATIONS, PASSWORD_HASH_BYTES, true);
+}
+
+function accountPasswordMatches(array $account, string $password): bool
+{
+    if ($password === '' || strlen($password) > 256) {
+        return false;
+    }
+    if (!hasPasswordHash($account)) {
+        return hash_equals((string) ($account['password'] ?? ''), $password);
+    }
+    $salt = base64_decode((string) $account['passwordSalt'], true);
+    $expected = base64_decode((string) $account['passwordHash'], true);
+    if (!is_string($salt) || !is_string($expected) || strlen($salt) < PASSWORD_SALT_BYTES || strlen($expected) !== PASSWORD_HASH_BYTES) {
+        return false;
+    }
+    return hash_equals($expected, passwordHashBytes($password, $salt));
+}
+
+function setAccountPasswordCredential(array &$account, string $password): void
+{
+    if ($password === '' || strlen($password) > 256) {
+        throw new InvalidArgumentException('A valid password is required.');
+    }
+    $salt = random_bytes(PASSWORD_SALT_BYTES);
+    $account['passwordAlgorithm'] = PASSWORD_HASH_ALGORITHM;
+    $account['passwordSalt'] = base64_encode($salt);
+    $account['passwordHash'] = base64_encode(passwordHashBytes($password, $salt));
+    unset($account['password']);
+    $account['passwordChangeRequired'] = false;
+}
+
+function sanitizedAccount(array $account): array
+{
+    unset($account['password'], $account['passwordAlgorithm'], $account['passwordSalt'], $account['passwordHash']);
+    return $account;
+}
+
+function sanitizedState(array $state): array
+{
+    $output = $state;
+    $output['accounts'] = array_values(array_map(static function ($account): array {
+        return is_array($account) ? sanitizedAccount($account) : [];
+    }, $state['accounts'] ?? []));
+    return $output;
+}
+
+function mergeAccountCredentials(array $currentState, array $nextState): array
+{
+    $previousById = [];
+    foreach (($currentState['accounts'] ?? []) as $account) {
+        if (is_array($account) && (string) ($account['id'] ?? '') !== '') {
+            $previousById[(string) $account['id']] = $account;
+        }
+    }
+
+    foreach (($nextState['accounts'] ?? []) as $index => $account) {
+        if (!is_array($account)) {
+            continue;
+        }
+        $id = (string) ($account['id'] ?? '');
+        $previous = $previousById[$id] ?? null;
+        $requestedPassword = (string) ($account['password'] ?? '');
+        unset($account['passwordAlgorithm'], $account['passwordSalt'], $account['passwordHash']);
+        if ($requestedPassword !== '') {
+            setAccountPasswordCredential($account, $requestedPassword);
+        } elseif (is_array($previous) && hasPasswordHash($previous)) {
+            unset($account['password']);
+            $account['passwordAlgorithm'] = $previous['passwordAlgorithm'];
+            $account['passwordSalt'] = $previous['passwordSalt'];
+            $account['passwordHash'] = $previous['passwordHash'];
+        } elseif (is_array($previous) && (string) ($previous['password'] ?? '') !== '') {
+            setAccountPasswordCredential($account, (string) $previous['password']);
+        } elseif ($previous === null) {
+            setAccountPasswordCredential($account, '123456');
+        }
+        $account['passwordChangeRequired'] = false;
+        $nextState['accounts'][$index] = $account;
+    }
+    return $nextState;
+}
+
+function migrateLegacyAccountPassword(string $stateFile, string $lockFile, string $accountId, string $password): array
+{
+    $lock = fopen($lockFile, 'c+');
+    if ($lock === false || !flock($lock, LOCK_EX)) {
+        throw new RuntimeException('Cannot lock shared state.');
+    }
+    try {
+        $snapshot = readSnapshot($stateFile);
+        foreach (($snapshot['state']['accounts'] ?? []) as $index => $account) {
+            if (!is_array($account) || (string) ($account['id'] ?? '') !== $accountId) {
+                continue;
+            }
+            if (hasPasswordHash($account)) {
+                return $snapshot;
+            }
+            if (!accountPasswordMatches($account, $password)) {
+                throw new RuntimeException('Credential changed before migration.');
+            }
+            setAccountPasswordCredential($account, $password);
+            $snapshot['state']['accounts'][$index] = $account;
+            $snapshot['revision'] = max(0, (int) $snapshot['revision']) + 1;
+            $snapshot['updatedAt'] = gmdate('c');
+            writeSnapshot($stateFile, $snapshot);
+            return $snapshot;
+        }
+        throw new RuntimeException('Authentication required.');
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
 }
 
 function requireSessionAccount(string $stateFile): array

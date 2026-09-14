@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.0.75";
+const APP_VERSION = "3.0.81";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -15,7 +15,6 @@ const SHARED_SYNC_ENDPOINT = "api/sync.php";
 const SHARED_SYNC_CONFLICT_KEY = "phuc-thinh-shared-sync-conflict-v1";
 const SHARED_SYNC_REQUIRED_KEY = "phuc-thinh-shared-sync-required-v1";
 const SHARED_SYNC_SESSION_TOKEN_KEY = "phuc-thinh-shared-sync-session-v1";
-const LOGIN_SESSION_CREDENTIAL_KEY = "phuc-thinh-login-session-v1";
 const SHARED_SYNC_DIRTY_KEY = "phuc-thinh-shared-sync-dirty-v1";
 const STATE_SAVED_AT_KEY = "phuc-thinh-state-saved-at-v1";
 // Poll less often while a tab is idle. Focus/online events still refresh at
@@ -31,7 +30,7 @@ const ACCOUNT_USAGE_REQUEST_TIMEOUT_MS = 45000;
 const ACCOUNT_USAGE_AUTO_REFRESH_MS = 60000;
 const MAX_DELETED_ID_HISTORY = 2000;
 const ACCOUNT_PRESENCE_HEARTBEAT_MS = 60000;
-const SHARED_SYNC_COLLECTIONS = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"];
+const SHARED_SYNC_COLLECTIONS = ["people", "calendarEvents", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"];
 const SHARED_PROTECTED_COLLECTIONS = ["people", "tasks", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
 const SHARED_SYNC_SCALAR_FIELDS = [
   "moduleSettings",
@@ -1083,6 +1082,7 @@ const systemModules = [
   { id: "archive", label: "Lưu Trữ", note: "Kho hồ sơ dự án, nhân sự, văn bản và công văn." },
   { id: "people", label: "Nhân sự", note: "Hồ sơ nhân sự toàn Ban và thông tin hợp đồng, lương." },
   { id: "tasks", label: "Công việc", note: "Danh mục công việc, hồ sơ và tiến độ." },
+  { id: "calendar", label: "Lịch công việc", note: "Lịch tuần, cuộc họp, kết luận và nhắc lịch." },
   { id: "department-evaluations", label: "KPI phòng", note: "Dữ liệu hoạt động và chấm điểm KPI cấp phòng." },
   { id: "evaluations", label: "KPI cá nhân", note: "Chấm điểm KPI cá nhân và kết quả thi đua tháng." },
   { id: "history", label: "Lịch sử", note: "Dòng thời gian hoạt động của phòng ban và nhân viên." },
@@ -1099,6 +1099,7 @@ const moduleDefaultRoleAccess = {
   archive: [...moduleAccessRoles],
   people: ["director", "manager", "deputy_manager"],
   tasks: [...moduleAccessRoles],
+  calendar: [...moduleAccessRoles],
   "department-evaluations": ["director", "manager", "deputy_manager"],
   evaluations: [...moduleAccessRoles],
   history: ["director", "manager", "deputy_manager"],
@@ -1537,6 +1538,7 @@ let taskStatusDetailExport = null;
 let dashboardDetailExport = null;
 let dashboardWorkloadDepartmentFilter = "";
 let dashboardKpiSummaryGradeFilter = "";
+let taskDisplayScope = "current";
 const dashboardKpiContextCache = new Map();
 const TASK_BOARD_INITIAL_RENDER_LIMIT = 40;
 const TASK_BOARD_RENDER_STEP = 40;
@@ -1585,6 +1587,7 @@ const sharedSync = {
   baseState: null,
   serverBaseState: null,
   deploymentVersion: "",
+  calendarEventsSupported: false,
   accountId: "",
   dirtyAccountId: "",
   localChangeVersion: 0,
@@ -2411,6 +2414,8 @@ function defaultStatePayload() {
     activePeriod: currentMonth(),
     people: [],
     tasks: [],
+    calendarEvents: [],
+    calendarDirectory: [],
     projectCatalog: [],
     bulletins: [],
     archiveRecords: [],
@@ -2535,6 +2540,8 @@ function normalizeStatePayload(parsed) {
     activePeriod: parsed.activePeriod || fallback.activePeriod,
     people: Array.isArray(parsed.people) ? parsed.people : [],
     tasks: normalizeTaskProjectLinks(tasks, projectCatalog),
+    calendarEvents: Array.isArray(parsed.calendarEvents) ? parsed.calendarEvents.filter((event) => event && typeof event === "object" && event.id) : [],
+    calendarDirectory: Array.isArray(parsed.calendarDirectory) ? parsed.calendarDirectory : [],
     projectCatalog,
     bulletins: Array.isArray(parsed.bulletins) ? parsed.bulletins : [],
     archiveRecords: Array.isArray(parsed.archiveRecords) ? parsed.archiveRecords : [],
@@ -2785,42 +2792,6 @@ function sharedServerBasePayload(payload) {
     if (!Array.isArray(base[collection])) base[collection] = [];
   });
   return base;
-}
-
-function normalizedLoginUsername(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function readSessionLoginCredential() {
-  try {
-    const value = JSON.parse(sessionStorage.getItem(LOGIN_SESSION_CREDENTIAL_KEY) || "{}");
-    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function rememberSessionLoginCredential(account, password) {
-  if (!account?.id || !account?.username || !password) return;
-  try {
-    sessionStorage.setItem(LOGIN_SESSION_CREDENTIAL_KEY, JSON.stringify({
-      accountId: String(account.id),
-      username: normalizedLoginUsername(account.username),
-      password: String(password),
-    }));
-  } catch {
-    // An unavailable session store must not stop a normal online sign-in.
-  }
-}
-
-function cachedSessionLoginAccount(username, password) {
-  const credential = readSessionLoginCredential();
-  if (!credential || credential.username !== normalizedLoginUsername(username) || credential.password !== String(password || "")) return null;
-  const account = (state.accounts || []).find((item) => (
-    String(item?.id || "") === String(credential.accountId || "")
-    && normalizedLoginUsername(item?.username) === credential.username
-  ));
-  return account && !account.disabled ? account : null;
 }
 
 function localStateHasBusinessData(payload = state) {
@@ -3820,6 +3791,7 @@ async function probeSharedSync({ force = false } = {}) {
     sharedSync.available = response.ok && payload?.available === true;
     sharedSync.initialized = sharedSync.available ? Boolean(payload?.initialized) : null;
     sharedSync.deploymentVersion = sharedSync.available ? String(payload?.deploymentVersion || "") : "";
+    sharedSync.calendarEventsSupported = sharedSync.available && payload?.calendarEvents === true;
   } catch {
     // Do not cache a transient connection failure. The next online/focus/poll
     // event must be able to reconnect without forcing the user to reload.
@@ -3915,15 +3887,6 @@ async function loginSharedSession(username, password) {
     return { mode: "local" };
   }
   if (!(await probeSharedSync())) {
-    const cachedAccount = cachedSessionLoginAccount(username, password);
-    if (cachedAccount) {
-      sharedSync.session = false;
-      sharedSync.accountId = String(cachedAccount.id);
-      sharedSync.sessionToken = "";
-      sharedSync.available = null;
-      sharedSync.initialized = null;
-      return { mode: "cached-session", accountId: String(cachedAccount.id) };
-    }
     return usingSupabaseSync() || localStorage.getItem(SHARED_SYNC_REQUIRED_KEY) === "1"
       ? { mode: "remote", error: "Không thể kết nối máy chủ dữ liệu. Vui lòng kiểm tra kết nối mạng và thử lại." }
       : { mode: "local" };
@@ -4531,6 +4494,7 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
     departmentEvaluations: "KPI phòng",
     accounts: "Tài khoản",
     supportRequests: "Yêu cầu hỗ trợ",
+    calendarEvents: "Lịch công việc",
     activityLog: "Lịch sử hoạt động",
     field: "Cấu hình hệ thống",
   };
@@ -4857,7 +4821,6 @@ function expireSharedSession(message = "Phiên đăng nhập đã kết thúc v�
   sharedSync.available = null;
   localStorage.removeItem(SHARED_SYNC_SESSION_TOKEN_KEY);
   localStorage.removeItem(SESSION_KEY);
-  sessionStorage.removeItem(LOGIN_SESSION_CREDENTIAL_KEY);
   document.documentElement.classList.remove("is-authenticated");
   document.body?.classList.remove("is-authenticated");
   const loginScreen = byId("loginScreen");
@@ -5664,6 +5627,7 @@ function accountAccessGrants(account = currentAccount()) {
     bulletinPublish: grants.bulletinPublish === true,
     archiveWrite: grants.archiveWrite === true,
     viewSystemContent: grants.viewSystemContent === true,
+    calendarWrite: grants.calendarWrite === true,
   };
 }
 
@@ -6536,7 +6500,8 @@ function taskUpdateChangeLabels(previousTask, nextTask) {
 }
 
 function getDueStatus(task) {
-  const status = normalizeTaskStatus(task.status);
+  const rawStatus = normalizeTaskStatus(task.status);
+  const status = rawStatus === "Quá hạn" ? (Number(task.progress) > 0 ? "Đang thực hiện" : TASK_STATUS_PREPARING) : rawStatus;
   if (status === TASK_STATUS_CLOSED) return status;
   if (status === TASK_STATUS_COMPLETED) return status;
   if (!task.due) return status;
@@ -6918,9 +6883,160 @@ function currentKpiParameters() {
   return state.systemCustomization.kpiParameters;
 }
 
+function tokenizeKpiFormula(source) {
+  const tokens = [];
+  let index = 0;
+  while (index < source.length) {
+    const remaining = source.slice(index);
+    const whitespace = remaining.match(/^\s+/);
+    if (whitespace) {
+      index += whitespace[0].length;
+      continue;
+    }
+    const number = remaining.match(/^(?:\d+\.?\d*|\.\d+)/);
+    if (number) {
+      tokens.push({ type: "number", value: Number(number[0]) });
+      index += number[0].length;
+      continue;
+    }
+    const identifier = remaining.match(/^[A-Za-z_]\w*/);
+    if (identifier) {
+      tokens.push({ type: "identifier", value: identifier[0] });
+      index += identifier[0].length;
+      continue;
+    }
+    const operator = remaining.match(/^(?:===|!==|==|!=|<=|>=|&&|\|\||[+\-*/%(),?:<>!])/);
+    if (!operator) return null;
+    tokens.push({ type: "operator", value: operator[0] });
+    index += operator[0].length;
+  }
+  tokens.push({ type: "eof", value: "" });
+  return tokens;
+}
+
+function parseKpiFormula(source, variables, helpers) {
+  const tokens = tokenizeKpiFormula(source);
+  if (!tokens) throw new Error("Invalid formula characters.");
+  let cursor = 0;
+  const current = () => tokens[cursor];
+  const consume = (operator) => {
+    if (current().value !== operator) return false;
+    cursor += 1;
+    return true;
+  };
+  const expect = (operator) => {
+    if (!consume(operator)) throw new Error("Invalid formula syntax.");
+  };
+  const numericVariable = (name) => {
+    if (!Object.prototype.hasOwnProperty.call(variables, name)) throw new Error("Unknown formula variable.");
+    return Number(variables[name]) || 0;
+  };
+
+  const conditional = () => {
+    const test = logicalOr();
+    if (!consume("?")) return test;
+    const whenTrue = conditional();
+    expect(":");
+    const whenFalse = conditional();
+    return test ? whenTrue : whenFalse;
+  };
+  const logicalOr = () => {
+    let value = logicalAnd();
+    while (consume("||")) value = Boolean(value) || Boolean(logicalAnd());
+    return value;
+  };
+  const logicalAnd = () => {
+    let value = equality();
+    while (consume("&&")) value = Boolean(value) && Boolean(equality());
+    return value;
+  };
+  const equality = () => {
+    let value = comparison();
+    while (["==", "===", "!=", "!=="].includes(current().value)) {
+      const operator = current().value;
+      cursor += 1;
+      const next = comparison();
+      value = operator === "==" || operator === "===" ? value === next : value !== next;
+    }
+    return value;
+  };
+  const comparison = () => {
+    let value = additive();
+    while (["<", "<=", ">", ">="].includes(current().value)) {
+      const operator = current().value;
+      cursor += 1;
+      const next = additive();
+      if (operator === "<") value = value < next;
+      else if (operator === "<=") value = value <= next;
+      else if (operator === ">") value = value > next;
+      else value = value >= next;
+    }
+    return value;
+  };
+  const additive = () => {
+    let value = multiplicative();
+    while (["+", "-"].includes(current().value)) {
+      const operator = current().value;
+      cursor += 1;
+      const next = multiplicative();
+      value = operator === "+" ? Number(value) + Number(next) : Number(value) - Number(next);
+    }
+    return value;
+  };
+  const multiplicative = () => {
+    let value = unary();
+    while (["*", "/", "%"].includes(current().value)) {
+      const operator = current().value;
+      cursor += 1;
+      const next = unary();
+      if (operator === "*") value = Number(value) * Number(next);
+      else if (operator === "/") value = Number(value) / Number(next);
+      else value = Number(value) % Number(next);
+    }
+    return value;
+  };
+  const unary = () => {
+    if (consume("+")) return Number(unary());
+    if (consume("-")) return -Number(unary());
+    if (consume("!")) return !unary();
+    return primary();
+  };
+  const primary = () => {
+    if (current().type === "number") {
+      const value = current().value;
+      cursor += 1;
+      return value;
+    }
+    if (current().type === "identifier") {
+      const name = current().value;
+      cursor += 1;
+      if (!consume("(")) return numericVariable(name);
+      if (!Object.prototype.hasOwnProperty.call(helpers, name)) throw new Error("Unknown formula helper.");
+      const argumentsList = [];
+      if (!consume(")")) {
+        do {
+          argumentsList.push(conditional());
+        } while (consume(","));
+        expect(")");
+      }
+      return helpers[name](...argumentsList.map(Number));
+    }
+    if (consume("(")) {
+      const value = conditional();
+      expect(")");
+      return value;
+    }
+    throw new Error("Invalid formula syntax.");
+  };
+
+  const value = conditional();
+  if (current().type !== "eof") throw new Error("Invalid formula syntax.");
+  return value;
+}
+
 function evaluateKpiFormula(expression, variables, fallback) {
   const source = String(expression || "").trim();
-  if (!source) return fallback;
+  if (!source || source.length > 500) return fallback;
   const helpers = {
     min: Math.min,
     max: Math.max,
@@ -6930,15 +7046,8 @@ function evaluateKpiFormula(expression, variables, fallback) {
     ceil: Math.ceil,
     clamp,
   };
-  const allowedNames = new Set([...Object.keys(variables), ...Object.keys(helpers)]);
-  const identifiers = source.match(/[A-Za-z_]\w*/g) || [];
-  if (identifiers.some((name) => !allowedNames.has(name))) return fallback;
-  if (/[^0-9A-Za-z_\s+\-*/%().,?:<>=!&|]/.test(source)) return fallback;
   try {
-    const keys = Object.keys(variables);
-    const helperKeys = Object.keys(helpers);
-    const fn = new Function(...keys, ...helperKeys, `"use strict"; return (${source});`);
-    const value = fn(...keys.map((key) => Number(variables[key]) || 0), ...helperKeys.map((key) => helpers[key]));
+    const value = parseKpiFormula(source, variables, helpers);
     return Number.isFinite(Number(value)) ? Number(value) : fallback;
   } catch {
     return fallback;
@@ -7429,6 +7538,40 @@ function currentTaskTimeFilter() {
     from: byId("taskDateFrom")?.value || "",
     to: byId("taskDateTo")?.value || "",
   };
+}
+
+function normalizeTaskDisplayScope(value) {
+  return value === "all" ? "all" : "current";
+}
+
+function currentTaskDisplayScope() {
+  return normalizeTaskDisplayScope(taskDisplayScope);
+}
+
+function taskDisplayScopeLabel(scope = currentTaskDisplayScope()) {
+  return scope === "all"
+    ? "toàn bộ từ trước đến nay"
+    : `tháng hiện tại ${formatMonthPeriod(currentMonth())}`;
+}
+
+function taskMatchesDisplayScope(task, scope = currentTaskDisplayScope()) {
+  return scope === "all" || taskPeriod(task) === currentMonth();
+}
+
+function syncTaskDisplayScopeControls() {
+  const scope = currentTaskDisplayScope();
+  ["dashboardTaskScope", "taskScopeFilter"].forEach((id) => {
+    const control = byId(id);
+    if (control) control.value = scope;
+  });
+}
+
+function setTaskDisplayScope(value) {
+  taskDisplayScope = normalizeTaskDisplayScope(value);
+  taskBoardRenderSignature = "";
+  syncTaskDisplayScopeControls();
+  if (canAccessView("tasks")) renderTaskBoard();
+  if (canAccessView("dashboard")) renderDashboard();
 }
 
 function currentTaskProjectFilter() {
@@ -7929,7 +8072,8 @@ function taskBulkImportStatus(value) {
   if (!normalized || normalized.includes("chuan bi") || normalized.includes("chua bat dau")) return TASK_STATUS_PREPARING;
   if (normalized.includes("dang thuc hien")) return "Đang thực hiện";
   if (normalized.includes("hoan thanh")) return TASK_STATUS_COMPLETED;
-  if (normalized.includes("qua han")) return "Quá hạn";
+  // "Quá hạn" is calculated from the deadline, never accepted as a manually-set status.
+  if (normalized.includes("qua han")) return "Đang thực hiện";
   return "";
 }
 
@@ -8261,6 +8405,7 @@ function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTi
   return state.tasks
     .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
     .filter((task) => canViewTaskRecord(task))
+    .filter((task) => taskMatchesDisplayScope(task))
     .filter((task) => taskMatchesStatusFilter(task, status))
     .filter((task) => taskMatchesTimeFilter(task, timeFilter))
     .filter((task) => taskMatchesProjectFilter(task, projectFilter))
@@ -8289,7 +8434,7 @@ function pendingTaskCompletionRecords(filterOptions = {}) {
   // The panel has its own fixed status: completed work waiting for review.
   return state.tasks
     .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
-    .filter((task) => taskPeriod(task) === state.activePeriod)
+    .filter((task) => taskMatchesDisplayScope(task))
     .filter((task) => canViewTaskRecord(task))
     .filter(taskCompletionNeedsReview)
     .filter((task) => taskMatchesTimeFilter(task, timeFilter))
@@ -8307,6 +8452,7 @@ function pendingTaskCompletionFilterSummary() {
   const department = departmentById(currentTaskDepartmentFilter());
   const person = personById(currentTaskPersonFilter());
   const parts = [
+    `phạm vi ${taskDisplayScopeLabel()}`,
     search && `tìm "${search}"`,
     project && `dự án ${project}`,
     department && `phòng ${department.name}`,
@@ -8356,7 +8502,7 @@ function openTaskCompletionPendingDetailDialog() {
   openTaskStatusDetailDialog(TASK_STATUS_PENDING_REVIEW, {
     tasks,
     title: "Chờ phê duyệt hoàn thành",
-    subtitle: `Danh sách công việc hoàn thành đang chờ đánh giá trong ${formatMonthPeriod(state.activePeriod)}${filterSummary ? ` · ${filterSummary}` : ""}.`,
+    subtitle: `Danh sách công việc hoàn thành đang chờ đánh giá trong phạm vi ${taskDisplayScopeLabel()}${filterSummary ? ` · ${filterSummary}` : ""}.`,
   });
 }
 
@@ -8371,6 +8517,7 @@ function renderTaskPersonFilterNote() {
 }
 
 function renderTaskBoard(options = {}) {
+  syncTaskDisplayScopeControls();
   byId("openTaskForm")?.classList.toggle("is-hidden", !canCreateRegularTasks());
   byId("openTaskBulkImport")?.classList.toggle("is-hidden", !isAdmin());
   renderTaskProjectFilterOptions();
@@ -8382,7 +8529,7 @@ function renderTaskBoard(options = {}) {
   const timeFilter = currentTaskTimeFilter();
   const projectFilter = currentTaskProjectFilter();
   const departmentId = currentTaskDepartmentFilter();
-  const nextRenderSignature = [search, filter, timeFilter.from, timeFilter.to, projectFilter, departmentId, currentTaskPersonFilter()].join("|");
+  const nextRenderSignature = [currentTaskDisplayScope(), search, filter, timeFilter.from, timeFilter.to, projectFilter, departmentId, currentTaskPersonFilter()].join("|");
   if (taskBoardRenderSignature !== nextRenderSignature) {
     taskBoardRenderSignature = nextRenderSignature;
     taskBoardVisibleLimits.clear();
@@ -8530,6 +8677,7 @@ function openTaskStatusDetailDialog(status, options = {}) {
   const reportTitle = options.title || status || "Tất cả trạng thái";
   const reportSubtitle = options.subtitle || [
     "Danh sách công việc",
+    `phạm vi ${taskDisplayScopeLabel()}`,
     search && `đang lọc theo "${search}"`,
     rangeLabel && `ngày hoàn thành ${rangeLabel}`,
   ].filter(Boolean).join(" · ");
@@ -10706,7 +10854,7 @@ function renderHistory() {
 
 function dashboardDepartmentSituationRows(period = state.activePeriod) {
   return visibleDepartmentsForDepartmentEvaluations().map((department) => {
-    const tasks = departmentTasksForKpi(department.id, period).filter((task) => canViewTaskRecord(task));
+    const tasks = dashboardDepartmentTasks(department.id);
     return {
       department,
       total: tasks.length,
@@ -10719,7 +10867,16 @@ function dashboardDepartmentSituationRows(period = state.activePeriod) {
 
 function dashboardTasksForPeriod(period = state.activePeriod) {
   return state.tasks
-    .filter((task) => taskPeriod(task) === period)
+    .filter((task) => taskMatchesDisplayScope(task))
+    .filter((task) => canViewTaskRecord(task))
+    .slice()
+    .sort(compareTaskRecords);
+}
+
+function dashboardDepartmentTasks(departmentId) {
+  return state.tasks
+    .filter((task) => taskHasParticipantInDepartment(task, departmentId))
+    .filter((task) => taskMatchesDisplayScope(task))
     .filter((task) => canViewTaskRecord(task))
     .slice()
     .sort(compareTaskRecords);
@@ -10742,15 +10899,14 @@ function dashboardTaskContextHtml(tasks, extra = []) {
 
 function openDashboardPeriodTaskDetail(kind) {
   if (!canAccessView("tasks")) return;
-  const period = state.activePeriod;
   const completed = kind === "completed";
-  const tasks = completed ? dashboardApprovedTasksForPeriod(period) : dashboardTasksForPeriod(period);
+  const tasks = completed ? dashboardApprovedTasksForPeriod() : dashboardTasksForPeriod();
   openTaskStatusDetailDialog("", {
     tasks,
     title: completed ? "Công việc toàn Ban đã hoàn thành" : "Tổng số công việc",
     subtitle: completed
-      ? `Công việc đã Hoàn thành và được đánh giá Đạt trong kỳ ${formatMonthPeriod(period)}.`
-      : `Toàn bộ công việc trong kỳ báo cáo ${formatMonthPeriod(period)}.`,
+      ? `Công việc đã Hoàn thành và được đánh giá Đạt trong phạm vi ${taskDisplayScopeLabel()}.`
+      : `Toàn bộ công việc trong phạm vi ${taskDisplayScopeLabel()}.`,
     contextHtml: dashboardTaskContextHtml(tasks, completed ? [`<span><strong>${tasks.length}</strong> đã đánh giá Đạt</span>`] : [
       `<span><strong>${tasks.filter(taskCompletionNeedsReview).length}</strong> chờ phê duyệt</span>`,
       `<span><strong>${tasks.filter((task) => getDueStatus(task) === "Quá hạn").length}</strong> quá hạn</span>`,
@@ -10879,14 +11035,11 @@ function openDashboardDepartmentTaskDetail(departmentId) {
   if (!departmentId || !canAccessView("tasks")) return;
   const row = dashboardDepartmentSituationRows(state.activePeriod).find((item) => item.department.id === departmentId);
   if (!row) return;
-  const tasks = departmentTasksForKpi(departmentId, state.activePeriod)
-    .filter((task) => canViewTaskRecord(task))
-    .slice()
-    .sort(compareTaskRecords);
+  const tasks = dashboardDepartmentTasks(departmentId);
   openTaskStatusDetailDialog("", {
     tasks,
     title: `Tình hình ${row.department.name}`,
-    subtitle: `Công việc của phòng trong kỳ ${formatMonthPeriod(state.activePeriod)}.`,
+    subtitle: `Công việc của phòng trong phạm vi ${taskDisplayScopeLabel()}.`,
     contextHtml: [
       `<span><strong>${row.total}</strong> tổng công việc</span>`,
       `<span><strong>${row.approved}</strong> hoàn thành Đạt</span>`,
@@ -10915,7 +11068,7 @@ function renderDashboardDepartmentStatus(period = state.activePeriod) {
 }
 
 function dashboardOperationalTasks() {
-  return state.tasks.filter((task) => personById(task.ownerId) && canViewTaskRecord(task));
+  return state.tasks.filter((task) => personById(task.ownerId) && taskMatchesDisplayScope(task) && canViewTaskRecord(task));
 }
 
 function dashboardOperationRows(visibleTasks = dashboardOperationalTasks(), today = new Date()) {
@@ -11026,6 +11179,7 @@ function renderDashboardOperations(visibleTasks) {
 
 function renderDashboard(options = {}) {
   byId("dashboardPeriodLabel").textContent = formatMonthPeriod(state.activePeriod || currentMonth());
+  syncTaskDisplayScopeControls();
   const kpiContext = cachedDashboardKpiContext(state.activePeriod);
   const visiblePeople = visiblePeopleForEvaluation();
   const visiblePersonIds = new Set(visiblePeople.map((person) => person.id));
@@ -11033,7 +11187,7 @@ function renderDashboard(options = {}) {
     (evaluation) => visiblePersonIds.has(evaluation.personId) && hasRecordedKpiResult(evaluation),
   );
   const avg = averageScore(periodEvaluations);
-  const visibleTasks = state.tasks.filter((task) => personById(task.ownerId) && canViewTaskRecord(task));
+  const visibleTasks = dashboardOperationalTasks();
   const periodTasks = dashboardTasksForPeriod(state.activePeriod);
   const approvedPeriodTasks = periodTasks.filter(taskCompletionIsApproved);
   byId("metricPeople").textContent = visiblePeople.length;
@@ -14130,6 +14284,7 @@ function populateAccountForm(account) {
   byId("accountCanPublishBulletins").checked = grants.bulletinPublish;
   byId("accountCanSaveArchive").checked = grants.archiveWrite;
   byId("accountCanViewSystemContent").checked = grants.viewSystemContent;
+  byId("accountCanManageCalendar").checked = grants.calendarWrite;
   updateAccountFormAccess();
   renderCustomFieldsForScope("accounts");
   applyFieldCustomizations();
@@ -14186,6 +14341,7 @@ function updateAccountFormAccess() {
   byId("accountCanPublishBulletins").disabled = !canManageGrants;
   byId("accountCanSaveArchive").disabled = !canManageGrants;
   byId("accountCanViewSystemContent").disabled = !canManageGrants;
+  byId("accountCanManageCalendar").disabled = !canManageGrants;
 }
 
 function syncMobileNavigationAccess(activeViewId = document.querySelector(".view.is-active")?.id || "") {
@@ -14218,6 +14374,8 @@ function applyAccessControls() {
   document.querySelector(".topbar").classList.toggle("is-hidden", !account);
   document.querySelector(".layout").classList.toggle("is-hidden", !account);
   if (!account) {
+    closeModal("calendarDialog");
+    clearCalendarReminders();
     accessControlAccountId = "";
     document.body.classList.remove("is-customize-mode");
     syncMobileNavigationAccess();
@@ -14299,6 +14457,8 @@ function renderActiveView(viewId = activeViewId(), { animateDashboard = false } 
     renderPersonOptions();
     updateTaskFormLock();
     renderTaskBoard({ applyCustomization: false });
+  } else if (viewId === "calendar") {
+    renderCalendarView();
   } else if (viewId === "department-evaluations") {
     renderDepartmentEvaluationOptions();
     loadDepartmentEvaluationForSelection();
@@ -14541,7 +14701,7 @@ function populateTaskForm(task) {
   byId("taskStartDate").value = task.startDate || "";
   byId("taskDue").value = task.due;
   byId("taskDueTime").value = task.dueTime || "";
-  byId("taskStatus").value = normalizeTaskStatus(task.status);
+  byId("taskStatus").value = editableTaskStatus(task);
   byId("taskProgress").value = task.progress;
   byId("taskQualityPercent").value = normalizeTaskQualityInput(task.qualityPercent);
   byId("taskNote").value = !canEditTaskDetails(task) && canUpdateTaskProgress(task) && !taskHasQualityPercent(task) ? "" : task.note;
@@ -14725,6 +14885,7 @@ function updateTaskFormLock(task = null) {
     byId("taskOwner").disabled = true;
   }
   byId("taskStatus").disabled = !canUpdateReport;
+  syncTaskStatusChoices();
   byId("taskForm")
     .querySelectorAll("#taskProgress, #taskAttachments, #taskFollowUpDate, #taskBlockerStatus, #taskBlockerNote")
     .forEach((input) => {
@@ -15339,6 +15500,7 @@ function renderAll(options = {}) {
   renderActiveView(viewId, { animateDashboard: options.animateDashboard === true });
   renderHelpSupportBadge();
   renderBirthdayCelebration();
+  if (typeof checkCalendarReminders === "function") checkCalendarReminders();
 }
 
 function resetPersonForm() {
@@ -15348,6 +15510,7 @@ function resetPersonForm() {
 }
 
 function resetTaskForm() {
+  calendarTaskSourceId = "";
   byId("taskForm").reset();
   byId("taskId").value = "";
   renderTaskProjectOptions();
@@ -15512,6 +15675,15 @@ function renderApplicationIdentity() {
 
 renderApplicationIdentity();
 
+// Passwords from earlier releases were kept only to support an
+// offline re-login shortcut. A valid server session already provides that
+// continuity, so remove the retired sensitive value on the first load.
+try {
+  sessionStorage.removeItem("phuc-thinh-login-session-v1");
+} catch {
+  // Private browsing can deny storage access without affecting sign-in.
+}
+
 // 🌟 Tự động kéo dữ liệu mây MỚI NHẤT ngay khi Đăng nhập thành công
 byId("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -15524,15 +15696,12 @@ byId("loginForm").addEventListener("submit", async (event) => {
     return;
   }
   if (sharedLogin.warning) alert(sharedLogin.warning);
-  const remoteSupabaseLogin = usingSupabaseSync() && sharedLogin.mode === "remote";
-  const cachedSessionLogin = sharedLogin.mode === "cached-session";
+  const remoteAuthenticatedLogin = sharedLogin.mode === "remote" && !isOfflineFileRuntime();
   const normalizedUsername = username.toLowerCase();
-  const account = cachedSessionLogin
-    ? state.accounts.find((item) => String(item.id || "") === String(sharedLogin.accountId || ""))
-    : state.accounts.find((item) => (
-      String(item.username || "").toLowerCase() === normalizedUsername
-      && (remoteSupabaseLogin || item.password === password)
-    ));
+  const account = state.accounts.find((item) => (
+    String(item.username || "").toLowerCase() === normalizedUsername
+    && (remoteAuthenticatedLogin || item.password === password)
+  ));
   if (!account) {
     byId("loginError").textContent = "Tên đăng nhập hoặc mật khẩu không đúng.";
     return;
@@ -15541,7 +15710,6 @@ byId("loginForm").addEventListener("submit", async (event) => {
     byId("loginError").textContent = "Tài khoản này đang bị vô hiệu hóa. Vui lòng liên hệ Admin.";
     return;
   }
-  rememberSessionLoginCredential(account, password);
   localStorage.setItem(SESSION_KEY, account.id);
   setLoginLandingView(account);
   selectLatestEvaluationPeriod();
@@ -15560,7 +15728,6 @@ byId("loginForm").addEventListener("submit", async (event) => {
 
 byId("logoutButton").addEventListener("click", () => {
   logoutSharedSession();
-  sessionStorage.removeItem(LOGIN_SESSION_CREDENTIAL_KEY);
   localStorage.removeItem(SESSION_KEY);
   renderAll();
 });
@@ -16652,6 +16819,7 @@ byId("accountForm").addEventListener("submit", (event) => {
           bulletinPublish: byId("accountCanPublishBulletins").checked,
           archiveWrite: byId("accountCanSaveArchive").checked,
           viewSystemContent: byId("accountCanViewSystemContent").checked,
+          calendarWrite: byId("accountCanManageCalendar").checked,
         }
       : existing?.accessGrants || {},
     customFields: collectCustomFieldValues("accounts", existing?.customFields),
@@ -17227,6 +17395,7 @@ byId("taskForm").addEventListener("submit", async (event) => {
     {
       id: taskId,
       kind: TASK_KIND_REGULAR,
+      sourceCalendarEventId: existingTask?.sourceCalendarEventId || calendarTaskSourceId || "",
       title: byId("taskTitle").value.trim(),
       projectId: byId("taskProjectId").value,
       ownerId,
@@ -17397,6 +17566,7 @@ byId("assignmentTaskStatus")?.addEventListener("change", () => {
   updateAssignmentTaskFormLock();
 });
 byId("taskSearch").addEventListener("input", debounce(renderTaskBoard, 200));
+byId("taskScopeFilter").addEventListener("change", (event) => setTaskDisplayScope(event.target.value));
 byId("taskProjectFilter").addEventListener("change", renderTaskBoard);
 byId("taskDepartmentFilter").addEventListener("change", renderTaskBoard);
 byId("taskStatusFilter").addEventListener("change", renderTaskBoard);
@@ -17449,6 +17619,7 @@ byId("dashboardWorkloadDepartmentFilter").addEventListener("change", (event) => 
   dashboardWorkloadDepartmentFilter = event.target.value;
   renderDashboardOperations(dashboardOperationalTasks());
 });
+byId("dashboardTaskScope").addEventListener("change", (event) => setTaskDisplayScope(event.target.value));
 byId("closeTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
 byId("cancelTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
 byId("taskCompletionReviewDialog").addEventListener("click", (event) => {
@@ -18045,6 +18216,7 @@ function splitStateForExport(exported) {
         ...metadata,
         group: "operations",
         tasks: exported.tasks || [],
+        calendarEvents: exported.calendarEvents || [],
         projectCatalog: exported.projectCatalog || [],
         evaluations: exported.evaluations || [],
         departmentEvaluations: exported.departmentEvaluations || [],
@@ -18201,6 +18373,7 @@ function mergeOperations(target, data, timestamp, allowMissing = false) {
   const evaluations = Array.isArray(data.evaluations) ? data.evaluations : allowMissing ? null : requireImportArray(data, "evaluations", "operations");
   const departmentEvaluations = Array.isArray(data.departmentEvaluations) ? data.departmentEvaluations : allowMissing ? null : requireImportArray(data, "departmentEvaluations", "operations");
   if (tasks) target.tasks = mergeImportedRecords(target.tasks, tasks, timestamp);
+  if (Array.isArray(data.calendarEvents)) target.calendarEvents = mergeImportedRecords(target.calendarEvents, data.calendarEvents, timestamp);
   if (projectCatalog) target.projectCatalog = mergeImportedRecords(target.projectCatalog, projectCatalog, timestamp);
   if (evaluations) target.evaluations = mergeImportedRecords(target.evaluations, evaluations, timestamp);
   if (departmentEvaluations) target.departmentEvaluations = mergeImportedRecords(target.departmentEvaluations, departmentEvaluations, timestamp);

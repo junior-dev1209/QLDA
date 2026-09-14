@@ -6,24 +6,17 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.0.75">
+  <meta name="application-version" content="3.0.81">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
-  <link rel="manifest" href="manifest.webmanifest?v=3.0.75">
-  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.0.75" type="image/png">
-  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.0.75">
-  <script src="supabase-config.js?v=3.0.75"></script>
-  <link rel="stylesheet" href="styles.css?v=3.0.75">
-  <!-- 🔥 CHẶN ĐỨNG MÀN ĐĂNG NHẬP TRƯỚC KHI TRÌNH DUYỆT BẮT ĐẦU VẼ GIAO DIỆN -->
-  <script>
-    if (localStorage.getItem("phuc-thinh-current-account-v1")) {
-      document.documentElement.classList.add("is-authenticated");
-    }
-  </script>
-  <style>
-    html.is-authenticated #loginScreen { display: none !important; }
-  </style>
+  <link rel="manifest" href="manifest.webmanifest?v=3.0.81">
+  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.0.81" type="image/png">
+  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.0.81">
+  <script src="supabase-config.js?v=3.0.81"></script>
+  <script src="auth-bootstrap.js?v=3.0.81"></script>
+  <link rel="stylesheet" href="styles.css?v=3.0.81">
+  <link rel="stylesheet" href="work-calendar.css?v=3.0.81">
 </head>
 <body>
   <section id="loginScreen" class="login-screen">
@@ -45,7 +38,7 @@
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.0.75</strong>
+          <strong data-app-version>Phiên bản 3.0.81</strong>
         </p>
       </form>
     </div>
@@ -120,6 +113,7 @@
         <button class="nav-item" data-view="archive" type="button" title="Lưu Trữ"><span class="nav-icon" aria-hidden="true">▧</span><span class="nav-label">Lưu Trữ</span></button>
         <button class="nav-item" data-view="people" type="button" title="Nhân sự"><span class="nav-icon" aria-hidden="true">◉</span><span class="nav-label">Nhân sự</span></button>
         <button class="nav-item" data-view="tasks" type="button" title="Công việc"><span class="nav-icon" aria-hidden="true">☑</span><span class="nav-label">Công việc</span></button>
+        <button class="nav-item" data-view="calendar" type="button" title="Lịch công việc"><span class="nav-icon" aria-hidden="true">▦</span><span class="nav-label">Lịch công việc</span></button>
         <button class="nav-item" data-view="department-evaluations" type="button" title="KPI phòng"><span class="nav-icon" aria-hidden="true">▥</span><span class="nav-label">KPI phòng</span></button>
         <button class="nav-item" data-view="evaluations" type="button" title="KPI cá nhân"><span class="nav-icon" aria-hidden="true">◇</span><span class="nav-label">KPI cá nhân</span></button>
         <button class="nav-item" data-view="history" type="button" title="Lịch sử"><span class="nav-icon" aria-hidden="true">◷</span><span class="nav-label">Lịch sử</span></button>
@@ -141,7 +135,15 @@
             <p class="eyebrow">Điều hành</p>
             <h2>Tổng quan tháng <span id="dashboardPeriodLabel" class="title-period">-</span></h2>
           </div>
-          <button id="seedDemo" class="admin-action" type="button">Nạp dữ liệu mẫu</button>
+          <div class="dashboard-head-actions">
+            <label class="dashboard-task-scope" for="dashboardTaskScope">Hiển thị công việc
+              <select id="dashboardTaskScope">
+                <option value="current">Tháng hiện tại</option>
+                <option value="all">Toàn bộ từ trước đến nay</option>
+              </select>
+            </label>
+            <button id="seedDemo" class="admin-action" type="button">Nạp dữ liệu mẫu</button>
+          </div>
         </div>
 
         <div class="metrics">
@@ -554,6 +556,41 @@
         </div>
       </section>
 
+      <section id="calendar" class="view">
+        <div class="section-head calendar-section-head">
+          <div><h2>Lịch công việc</h2><span id="calendarCount" class="muted" aria-live="polite"></span></div>
+          <div class="calendar-head-actions"><button type="button" id="calendarAdd">+ Thêm cuộc họp</button></div>
+        </div>
+        <div class="calendar-tabs" role="tablist" aria-label="Loại lịch">
+          <button type="button" role="tab" id="calendarTabAll" data-calendar-tab="all" aria-selected="true" aria-controls="calendarPanel">Lịch tổng</button>
+          <button type="button" role="tab" id="calendarTabMine" data-calendar-tab="mine" aria-selected="false" aria-controls="calendarPanel" tabindex="-1">Lịch của tôi</button>
+          <button type="button" role="tab" id="calendarTabConclusions" data-calendar-tab="conclusions" aria-selected="false" aria-controls="calendarPanel" tabindex="-1">Việc từ kết luận</button>
+        </div>
+        <div id="calendarPanel" role="tabpanel" aria-labelledby="calendarTabAll">
+          <div class="calendar-toolbar">
+            <div class="calendar-week-nav">
+              <button type="button" class="ghost calendar-icon" id="calendarPrev" aria-label="Tuần trước" title="Tuần trước">‹</button>
+              <strong id="calendarWeekLabel"></strong>
+              <button type="button" class="ghost calendar-icon" id="calendarNext" aria-label="Tuần sau" title="Tuần sau">›</button>
+              <button type="button" class="ghost" id="calendarToday">Tuần này</button>
+            </div>
+            <label class="calendar-reminder-setting">Nhắc trước<select id="calendarReminderMinutes"><option value="5">5 phút</option><option value="15" selected>15 phút</option><option value="30">30 phút</option><option value="60">1 giờ</option><option value="0">Tắt nhắc</option></select></label>
+            <button type="button" class="ghost" id="calendarEnableNotifications">Bật thông báo thiết bị</button>
+            <details class="calendar-export"><summary>Xuất lịch</summary><div><button type="button" class="ghost" id="calendarExcel">Xuất Excel</button><button type="button" class="ghost" id="calendarIcs">Xuất lịch (.ics)</button></div></details>
+          </div>
+          <p id="calendarAvailability" class="calendar-notice is-hidden" role="status"></p>
+          <div class="calendar-filters">
+            <div class="calendar-leader-filter"><span>Lọc theo lãnh đạo</span><div id="calendarLeaderFilter" class="calendar-chips"></div></div>
+            <label>Lọc theo phòng<select id="calendarDepartment"><option value="">Tất cả phòng</option></select></label>
+            <label>Tìm kiếm<input id="calendarSearch" type="search" placeholder="Nội dung, địa điểm, phòng..."></label>
+          </div>
+          <div class="calendar-table-scroll" tabindex="0" role="region" aria-label="Lịch trong tuần">
+            <table class="calendar-table"><thead><tr><th>Thứ / Ngày</th><th>Thời gian</th><th>Nội dung công việc</th><th>Địa điểm</th><th>Lãnh đạo</th><th>Phòng chuẩn bị</th><th>Thao tác</th></tr></thead><tbody id="calendarRows"></tbody></table>
+          </div>
+          <div id="calendarMobileRows" class="calendar-mobile-list" aria-live="polite"></div>
+        </div>
+      </section>
+
       <section id="tasks" class="view">
         <div class="section-head">
           <div>
@@ -562,6 +599,10 @@
           </div>
           <div class="task-head-actions">
             <button id="openTaskBulkImport" class="ghost is-hidden" type="button">Nhập Excel</button>
+            <select id="taskScopeFilter" aria-label="Phạm vi hiển thị công việc">
+              <option value="current">Tháng hiện tại</option>
+              <option value="all">Toàn bộ từ trước đến nay</option>
+            </select>
             <select id="taskDepartmentFilter" aria-label="Lọc công việc theo phòng">
               <option value="">Tất cả phòng</option>
             </select>
@@ -666,14 +707,19 @@
           <label class="task-due-field">Ngày hoàn thành
             <input id="taskDue" type="date" required>
           </label>
-          <label class="task-status-field">Trạng thái
-            <select id="taskStatus">
+          <fieldset class="task-status-field task-status-control">
+            <legend>Trạng thái</legend>
+            <select id="taskStatus" class="is-hidden" aria-hidden="true" tabindex="-1">
               <option>Chuẩn bị thực hiện</option>
               <option>Đang thực hiện</option>
               <option>Hoàn thành</option>
-              <option>Quá hạn</option>
             </select>
-          </label>
+            <div id="taskStatusChoices" class="task-status-choices">
+              <label class="status-choice status-preparing"><input type="radio" name="taskStatusChoice" value="Chuẩn bị thực hiện"><span>Chuẩn bị thực hiện</span></label>
+              <label class="status-choice status-doing"><input type="radio" name="taskStatusChoice" value="Đang thực hiện"><span>Đang thực hiện</span></label>
+              <label class="status-choice status-completed"><input type="radio" name="taskStatusChoice" value="Hoàn thành"><span>Hoàn thành</span></label>
+            </div>
+          </fieldset>
           <label class="task-progress-field">Tiến độ (%)
             <input id="taskProgress" type="number" min="0" max="100" value="0">
           </label>
@@ -1236,6 +1282,10 @@
               <input id="accountCanViewSystemContent" type="checkbox">
               <span>Xem nội dung toàn hệ thống</span>
             </label>
+            <label class="checkbox-field">
+              <input id="accountCanManageCalendar" type="checkbox">
+              <span>Quản lý Lịch công việc (thêm, sửa, xóa)</span>
+            </label>
           </fieldset>
           <div class="form-actions wide">
             <button type="submit">Lưu tài khoản</button>
@@ -1435,7 +1485,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.0.75</strong>
+    <strong data-app-version>Phiên bản 3.0.81</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -1829,6 +1879,11 @@
 
     <!-- 2. LÍST MENU -->
     <div class="mobile-menu-list">
+      <button type="button" class="mobile-menu-item" data-view="calendar">
+        <div class="mobile-icon-box">▦</div>
+        <span class="mobile-menu-text">Lịch công việc</span>
+      </button>
+
       <button type="button" class="mobile-menu-item" data-view="archive">
         <div class="mobile-icon-box">▧</div>
         <span class="mobile-menu-text">Lưu Trữ</span>
@@ -1911,8 +1966,40 @@
     </div>
   </section>
 
+  <section id="calendarDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card calendar-modal" role="dialog" aria-modal="true" aria-labelledby="calendarDialogTitle">
+      <div class="section-head"><h2 id="calendarDialogTitle">Thêm cuộc họp</h2><div class="dialog-head-actions"><button type="button" class="ghost" id="calendarEdit">Sửa cuộc họp</button><button type="button" class="ghost" id="calendarClose">Đóng</button></div></div>
+      <form id="calendarForm" class="calendar-form">
+        <label class="calendar-wide">Nội dung công việc / cuộc họp<input id="calendarTitle" required maxlength="500"></label>
+        <label>Ngày<input id="calendarDate" type="date" required></label>
+        <label>Bắt đầu<input id="calendarTime" type="time" required></label>
+        <label>Kết thúc<input id="calendarEndTime" type="time"></label>
+        <label>Địa điểm<input id="calendarLocation" maxlength="300" required></label>
+        <fieldset><legend>Lãnh đạo</legend><div id="calendarLeaders" class="calendar-checklist"></div></fieldset>
+        <fieldset><legend>Phòng chuẩn bị</legend><div id="calendarDepartments" class="calendar-checklist"></div></fieldset>
+        <fieldset class="calendar-wide"><legend>Thành phần tham dự</legend>
+          <label class="calendar-all"><input id="calendarAllHands" type="checkbox">Toàn thể</label>
+          <input id="calendarParticipantSearch" type="search" aria-label="Tìm người tham dự" placeholder="Tìm tên nhân sự...">
+          <div id="calendarParticipants" class="calendar-checklist calendar-participants"></div>
+        </fieldset>
+        <label class="calendar-wide">Ghi chú / nội dung chuẩn bị<textarea id="calendarNote" rows="2" maxlength="10000"></textarea></label>
+        <label class="calendar-wide">Kết luận cuộc họp<textarea id="calendarConclusion" rows="3" maxlength="20000"></textarea></label>
+        <div class="calendar-wide"><div class="calendar-conclusion-head"><h3>Công việc từ kết luận</h3><button type="button" class="ghost" id="calendarCreateTask">+ Thêm công việc</button></div><div id="calendarLinkedTasks"></div></div>
+        <p id="calendarAudit" class="muted calendar-wide"></p>
+        <p id="calendarFormError" class="calendar-error calendar-wide" role="alert"></p>
+        <div class="calendar-form-actions calendar-wide"><button type="button" class="ghost" id="calendarDelete">Xóa cuộc họp</button><button type="submit" id="calendarSave">Lưu cuộc họp</button></div>
+      </form>
+    </div>
+  </section>
+
+  <aside id="calendarReminderToast" class="calendar-reminder-toast is-hidden" aria-live="polite" aria-label="Nhắc lịch công việc">
+    <div><strong>Sắp đến lịch làm việc</strong><button type="button" class="ghost calendar-icon" id="calendarDismissReminders" title="Đóng nhắc lịch" aria-label="Đóng nhắc lịch">×</button></div>
+    <div id="calendarReminderList"></div>
+  </aside>
+
   <!-- System data must load before the application runtime. -->
-  <script src="people-data.js?v=3.0.75"></script>
-  <script src="script.js?v=3.0.75"></script>
+  <script src="people-data.js?v=3.0.81"></script>
+  <script src="work-calendar.js?v=3.0.81"></script>
+  <script src="script.js?v=3.0.81"></script>
 </body>
 </html>

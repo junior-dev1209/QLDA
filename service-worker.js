@@ -1,8 +1,11 @@
-const RELEASE_VERSION = "3.0.75";
-const CACHE_NAME = "phuc-thinh-kpi-v366";
+const RELEASE_VERSION = "3.0.81";
+const CACHE_NAME = "phuc-thinh-kpi-v372";
 const APP_SHELL = [
   "index.html",
   "styles.css",
+  "work-calendar.css",
+  "work-calendar.js",
+  "auth-bootstrap.js",
   "people-data.js",
   "supabase-config.js",
   "script.js",
