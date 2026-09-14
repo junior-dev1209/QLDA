@@ -16,18 +16,23 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.09.03.1";
+const deploymentVersion = "2026.09.10.1";
+const passwordHashAlgorithm = "pbkdf2-sha256-v1";
+const passwordHashIterations = 310_000;
+const passwordSaltBytes = 16;
+const passwordHashBytes = 32;
 
-const collections = ["people", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
+const collections = ["people", "calendarEvents", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "nhanVienTongHopGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "kpiPeriodLocks", "deletedIds"] as const;
 const moduleAccessRoles = ["director", "manager", "deputy_manager", "section_head", "employee"] as const;
-const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
+const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "calendar", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
 const moduleDefaultRoleAccess: Record<string, string[]> = {
   dashboard: ["director"],
   bulletin: [...moduleAccessRoles],
   archive: [...moduleAccessRoles],
   people: ["director", "manager", "deputy_manager"],
   tasks: [...moduleAccessRoles],
+  calendar: [...moduleAccessRoles],
   "department-evaluations": ["director", "manager", "deputy_manager"],
   evaluations: [...moduleAccessRoles],
   history: ["director", "manager", "deputy_manager"],
@@ -550,6 +555,117 @@ function withoutKeys(value: JsonRecord, ignored: string[]): JsonRecord {
   return output;
 }
 
+function bytesToBase64(value: Uint8Array): string {
+  let output = "";
+  value.forEach((byte) => { output += String.fromCharCode(byte); });
+  return btoa(output);
+}
+
+function base64ToBytes(value: unknown): Uint8Array | null {
+  try {
+    const decoded = atob(String(value || ""));
+    return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+function hasPasswordHash(account: JsonRecord | undefined): boolean {
+  return Boolean(
+    account
+    && String(account.passwordAlgorithm || "") === passwordHashAlgorithm
+    && String(account.passwordHash || "")
+    && String(account.passwordSalt || ""),
+  );
+}
+
+function passwordBytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  let difference = left.length ^ right.length;
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (left[index] || 0) ^ (right[index] || 0);
+  }
+  return difference === 0;
+}
+
+async function passwordHash(password: string, salt: Uint8Array): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits({
+    name: "PBKDF2",
+    hash: "SHA-256",
+    salt,
+    iterations: passwordHashIterations,
+  }, key, passwordHashBytes * 8);
+  return new Uint8Array(bits);
+}
+
+async function setAccountPasswordCredential(account: JsonRecord, password: string): Promise<void> {
+  if (!password || password.length > 256) throw new InvalidJsonPayloadError("A valid password is required.");
+  const salt = crypto.getRandomValues(new Uint8Array(passwordSaltBytes));
+  account.passwordAlgorithm = passwordHashAlgorithm;
+  account.passwordSalt = bytesToBase64(salt);
+  account.passwordHash = bytesToBase64(await passwordHash(password, salt));
+  delete account.password;
+  account.passwordChangeRequired = false;
+}
+
+async function accountPasswordMatches(account: JsonRecord | undefined, password: string): Promise<boolean> {
+  if (!account || !password || password.length > 256) return false;
+  if (!hasPasswordHash(account)) return String(account.password || "") === password;
+  const salt = base64ToBytes(account.passwordSalt);
+  const expected = base64ToBytes(account.passwordHash);
+  if (!salt || !expected || salt.length < passwordSaltBytes || expected.length !== passwordHashBytes) return false;
+  return passwordBytesEqual(await passwordHash(password, salt), expected);
+}
+
+async function migrateLegacyAccountPassword(current: StateSnapshot, account: JsonRecord, password: string): Promise<StateSnapshot> {
+  const accountId = recordId(account);
+  if (!accountId || hasPasswordHash(account)) return current;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const source = attempt ? await snapshot() : current;
+    const target = accountForId(source.state, accountId);
+    if (!target) throw new Error("Authentication required.");
+    if (hasPasswordHash(target)) return source;
+    if (!(await accountPasswordMatches(target, password))) throw new Error("Credential changed before migration.");
+    const nextState = clone(source.state);
+    const nextAccount = accountForId(nextState, accountId);
+    if (!nextAccount) throw new Error("Authentication required.");
+    await setAccountPasswordCredential(nextAccount, password);
+    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+      expected_revision: source.revision,
+      next_state: nextState,
+    });
+    if (error) throw error;
+    if (Array.isArray(data) && data.length) {
+      const result = data[0] as { next_revision: number; next_updated_at: string };
+      return {
+        revision: Number(result.next_revision),
+        updatedAt: String(result.next_updated_at || ""),
+        state: nextState,
+      };
+    }
+  }
+  throw new Error("Credential migration conflict.");
+}
+
+async function secureMutatedAccountCredentials(state: JsonRecord, patch: StatePatch): Promise<void> {
+  const accountChanges = patch.collections?.accounts?.upserts || [];
+  if (!accountChanges.length) return;
+  const accounts = recordMap(state, "accounts");
+  for (const change of accountChanges) {
+    const account = accounts.get(String(change.id || ""));
+    if (!account || hasPasswordHash(account)) continue;
+    const legacyPassword = String(account.password || "");
+    if (legacyPassword) await setAccountPasswordCredential(account, legacyPassword);
+  }
+}
+
 function bootstrapAdminCredentials(): { username: string; password: string } | null {
   const username = String(Deno.env.get("KPI_BOOTSTRAP_ADMIN_USERNAME") || "").trim();
   const password = String(Deno.env.get("KPI_BOOTSTRAP_ADMIN_PASSWORD") || "");
@@ -588,6 +704,7 @@ function defaultState(): JsonRecord {
     activePeriod: currentPeriod(),
     people: [],
     tasks: [],
+    calendarEvents: [],
     projectCatalog: [],
     bulletins: [],
     archiveRecords: [],
@@ -615,7 +732,7 @@ function validState(state: unknown): state is JsonRecord {
   // projectCatalog and supportRequests were added after the first production
   // snapshots. Keep older central data readable until their next update.
   return isRecord(state) && collections
-    .filter((key) => key !== "projectCatalog" && key !== "supportRequests")
+    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents")
     .every((key) => Array.isArray(state[key]));
 }
 
@@ -624,13 +741,14 @@ function initializationBusinessRecordCount(state: JsonRecord): number {
     .reduce((total, collection) => total + records(state, collection as CollectionName).length, 0);
 }
 
-function prepareInitialState(incoming: JsonRecord, actor: JsonRecord): JsonRecord {
+async function prepareInitialState(incoming: JsonRecord, actor: JsonRecord): Promise<JsonRecord> {
   if (!validState(incoming) || initializationBusinessRecordCount(incoming) <= 0) {
     throw new InvalidJsonPayloadError("A complete backup is required to initialize central data.");
   }
   const next = clone(incoming);
   if (!Array.isArray(next.projectCatalog)) next.projectCatalog = [];
   if (!Array.isArray(next.supportRequests)) next.supportRequests = [];
+  if (!Array.isArray(next.calendarEvents)) next.calendarEvents = [];
   if (!Array.isArray(next.deletedIds)) next.deletedIds = [];
   const accounts = records(next, "accounts");
   let restoredActor = accounts.find((account) => recordId(account) === recordId(actor));
@@ -641,10 +759,15 @@ function prepareInitialState(incoming: JsonRecord, actor: JsonRecord): JsonRecor
   }
   // The authenticated bootstrap Admin remains usable after recovery even
   // when an exported JSON intentionally omits account passwords.
-  restoredActor.password = String(actor.password || "");
-  restoredActor.passwordChangeRequired = false;
+  const actorPassword = String(actor.password || "");
+  if (actorPassword) await setAccountPasswordCredential(restoredActor, actorPassword);
   restoredActor.role = "admin";
   restoredActor.disabled = false;
+  for (const account of accounts) {
+    if (account === restoredActor || hasPasswordHash(account)) continue;
+    const legacyPassword = String(account.password || "");
+    if (legacyPassword) await setAccountPasswordCredential(account, legacyPassword);
+  }
   const activityLog = records(next, "activityLog");
   activityLog.push({
     id: `server-initialize-${crypto.randomUUID()}`,
@@ -663,7 +786,7 @@ function prepareInitialState(incoming: JsonRecord, actor: JsonRecord): JsonRecor
 }
 
 function sanitizedAccount(account: JsonRecord): JsonRecord {
-  return withoutKeys(account, ["password"]);
+  return withoutKeys(account, ["password", "passwordAlgorithm", "passwordSalt", "passwordHash"]);
 }
 
 function sanitizedState(state: JsonRecord): JsonRecord {
@@ -678,8 +801,16 @@ const defaultNewAccountPassword = "123456";
 function mergeAccountPassword(previous: JsonRecord | undefined, incoming: JsonRecord): JsonRecord {
   const output = clone(incoming);
   const requested = String(output.password || "");
+  delete output.passwordAlgorithm;
+  delete output.passwordSalt;
+  delete output.passwordHash;
   if (requested) {
     output.password = requested;
+  } else if (previous && hasPasswordHash(previous)) {
+    delete output.password;
+    output.passwordAlgorithm = previous.passwordAlgorithm;
+    output.passwordSalt = previous.passwordSalt;
+    output.passwordHash = previous.passwordHash;
   } else if (String(previous?.password || "")) {
     output.password = String(previous?.password || "");
   } else {
@@ -712,6 +843,7 @@ async function snapshot(): Promise<StateSnapshot> {
   const state = validState(data.state) ? data.state : defaultState();
   if (!Array.isArray(state.projectCatalog)) state.projectCatalog = [];
   if (!Array.isArray(state.supportRequests)) state.supportRequests = [];
+  if (!Array.isArray(state.calendarEvents)) state.calendarEvents = [];
   const current = {
     revision: Number(data.revision) || 0,
     updatedAt: String(data.updated_at || ""),
@@ -743,12 +875,11 @@ async function restoreBootstrapAdminPassword(
   username: string,
   password: string,
 ): Promise<StateSnapshot> {
-  if (!isBootstrapAdminRecovery(account, username, password) || String(account.password || "") === password) return current;
+  if (!isBootstrapAdminRecovery(account, username, password)) return current;
   const nextState = clone(current.state);
   const target = records(nextState, "accounts").find((item) => recordId(item) === recordId(account));
   if (!target) return current;
-  target.password = password;
-  target.passwordChangeRequired = false;
+  await setAccountPasswordCredential(target, password);
   const { data, error } = await admin.rpc("kpi_update_shared_state", {
     expected_revision: current.revision,
     next_state: nextState,
@@ -993,12 +1124,13 @@ function isAdmin(account: JsonRecord): boolean {
   return accountRole(account) === "admin";
 }
 
-function accountAccessGrants(account: JsonRecord | undefined): { bulletinPublish: boolean; archiveWrite: boolean; viewSystemContent: boolean } {
+function accountAccessGrants(account: JsonRecord | undefined): { bulletinPublish: boolean; archiveWrite: boolean; viewSystemContent: boolean; calendarWrite: boolean } {
   const grants: JsonRecord = account && isRecord(account.accessGrants) ? account.accessGrants : {};
   return {
     bulletinPublish: grants.bulletinPublish === true,
     archiveWrite: grants.archiveWrite === true,
     viewSystemContent: grants.viewSystemContent === true,
+    calendarWrite: grants.calendarWrite === true,
   };
 }
 
@@ -1260,6 +1392,11 @@ function isBlankTaskField(value: unknown): boolean {
 
 function normalizeTaskCompletionLifecycle(next: JsonRecord): JsonRecord {
   const normalized = clone(next);
+  // Overdue is derived from the deadline. Old imports may still carry the
+  // former manual value, so convert it to a genuine working state on write.
+  if (String(normalized.status || "").trim() === "Quá hạn") {
+    normalized.status = Number(normalized.progress || 0) > 0 ? "Đang thực hiện" : "Chuẩn bị thực hiện";
+  }
   const reviewStatus = String(normalized.completionReviewStatus || "").trim();
   const clearQualityFields = [
     "qualityPercent",
@@ -1544,7 +1681,46 @@ function purgeRetiredAssignmentTasks(state: JsonRecord): number {
   return removed;
 }
 
+function calendarIds(value: unknown): string[] {
+  return Array.isArray(value) ? [...new Set(value.filter((id) => typeof id === "string" && id))] as string[] : [];
+}
+
+function validCalendarEvent(state: JsonRecord, event: JsonRecord): boolean {
+  const date = String(event.date || "");
+  const parsed = new Date(`${date}T12:00:00Z`);
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+  const validTime = (value: unknown) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || ""));
+  const people = new Set(records(state, "people").map(recordId));
+  const departments = new Set((Array.isArray(state.departments) ? state.departments : []).filter(isRecord).map(recordId));
+  const departmentIds = calendarIds(event.departmentIds);
+  return typeof event.title === "string" && Boolean(event.title.trim()) && event.title.length <= 500
+    && validDate && validTime(event.time) && (!event.endTime || (validTime(event.endTime) && String(event.endTime) > String(event.time)))
+    && typeof event.location === "string" && Boolean(event.location.trim()) && event.location.length <= 300
+    && typeof event.allHands === "boolean" && String(event.note || "").length <= 10000 && String(event.conclusion || "").length <= 20000
+    && [event.leaderIds, event.participantIds, event.departmentIds].every(Array.isArray)
+    && departmentIds.length > 0 && departmentIds.every((id) => departments.has(id))
+    && [...calendarIds(event.leaderIds), ...calendarIds(event.participantIds)].every((id) => people.has(id));
+}
+
+function canManageCalendarEvent(state: JsonRecord, actor: JsonRecord): boolean {
+  if (!moduleIsAvailableToAccount(state, actor, "calendar")) return false;
+  return isAdmin(actor) || isDirector(actor) || accountAccessGrants(actor).calendarWrite;
+}
+
+function calendarPublicDirectory(state: JsonRecord): JsonRecord[] {
+  return records(state, "people").map((person) => ({ id: person.id, name: person.name, departmentId: person.departmentId, roleId: person.roleId }));
+}
+
 function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionName, previous: JsonRecord | undefined, next: JsonRecord): boolean {
+  if (collection === "calendarEvents") {
+    return validCalendarEvent(state, next) && canManageCalendarEvent(state, actor)
+      && (!previous || (next.createdById === previous.createdById && next.createdAt === previous.createdAt))
+      && (previous !== undefined || next.createdById === actor.id);
+  }
+  if (collection === "tasks" && next.sourceCalendarEventId) {
+    if (!records(state, "calendarEvents").some((event) => event.id === next.sourceCalendarEventId)) return false;
+    if (!previous && !canManageCalendarEvent(state, actor)) return false;
+  }
   if (isAdmin(actor)) return true;
   if (collection === "people") return moduleIsAvailableToAccount(state, actor, "people") && isDirector(actor);
   if (collection === "accounts") return moduleIsAvailableToAccount(state, actor, "accounts") && accountChangeAllowed(actor, previous, next);
@@ -1566,6 +1742,8 @@ function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionN
 }
 
 function canDelete(state: JsonRecord, actor: JsonRecord, collection: CollectionName, previous: JsonRecord): boolean {
+  if (collection === "calendarEvents") return canManageCalendarEvent(state, actor)
+    && !records(state, "tasks").some((task) => task.sourceCalendarEventId === previous.id);
   if (isAdmin(actor)) return true;
   if (collection === "activityLog") return false;
   if (collection === "projectCatalog") return moduleIsAvailableToAccount(state, actor, "tasks") && (isAdmin(actor) || hasDepartmentManagement(actor) || accountRole(actor) === "section_head");
@@ -1612,8 +1790,11 @@ function taskParticipantDirectory(state: JsonRecord, tasks: JsonRecord[], primar
 }
 
 function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
+  const calendarAllowed = moduleIsAvailableToAccount(state, account, "calendar");
+  const calendarState = { calendarEvents: calendarAllowed ? records(state, "calendarEvents") : [], calendarDirectory: calendarAllowed ? calendarPublicDirectory(state) : [] };
   if (canViewSystemContent(account)) {
     const output = sanitizedState(state);
+    Object.assign(output, calendarState);
     // Support conversations are private to the reporter and Admin, even when
     // a non-Admin account is granted broad read access for operational data.
     if (!isAdmin(account)) {
@@ -1635,6 +1816,7 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
     : records(state, "people").filter((person) => String(person.id || "") === personId);
   const output: JsonRecord = {
     ...state,
+    ...calendarState,
     accounts: [resolvedPersonnelAccount(state, account)],
     people: taskParticipantDirectory(state, visibleTasks, primaryPeople),
     tasks: visibleTasks,
@@ -1798,6 +1980,15 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         return;
       }
       const saved = collection === "accounts" ? mergeAccountPassword(previous, candidate) : clone(candidate);
+      if (collection === "calendarEvents") {
+        const timestamp = new Date().toISOString();
+        saved.createdById = previous?.createdById || actor.id;
+        saved.createdBy = previous?.createdBy || actor.displayName || actor.username;
+        saved.createdAt = previous?.createdAt || timestamp;
+        saved.updatedById = actor.id;
+        saved.updatedBy = actor.displayName || actor.username;
+        saved.updatedAt = timestamp;
+      }
       values.set(id, saved);
       changed += 1;
     });
@@ -2385,6 +2576,7 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
     const result = applyPatch(current.state, actor, patch);
     lastDenied = result.denied;
     if (!result.changed) return { snapshot: current, denied: lastDenied, changed: 0 };
+    await secureMutatedAccountCredentials(result.state, patch);
     const { data, error } = await admin.rpc("kpi_update_shared_state", {
       expected_revision: current.revision,
       next_state: result.state,
@@ -2507,7 +2699,7 @@ async function initializeFromBackup(actorId: string, incoming: JsonRecord): Prom
   if (current.revision > 0) throw new UnsafeBulkDeletionError("Central data has already been initialized.");
   const actor = accountForId(current.state, actorId);
   if (!actor || !isAdmin(actor)) throw new Error("Permission denied.");
-  const nextState = prepareInitialState(incoming, actor);
+  const nextState = await prepareInitialState(incoming, actor);
   const { data, error } = await admin.rpc("kpi_update_shared_state", {
     expected_revision: 0,
     next_state: nextState,
@@ -2540,6 +2732,24 @@ function fileResponse(request: Request, blob: Blob, type: string): Response {
   });
 }
 
+async function recordProjectionHealth(revision: number): Promise<JsonRecord> {
+  const { data, error } = await admin
+    .from("kpi_record_projection_state")
+    .select("shared_revision, updated_at")
+    .eq("id", stateId)
+    .maybeSingle();
+  if (error || !data) {
+    return { available: false, synchronized: false, revision: 0, updatedAt: "" };
+  }
+  const projectedRevision = Number(data.shared_revision) || 0;
+  return {
+    available: true,
+    synchronized: projectedRevision === revision,
+    revision: projectedRevision,
+    updatedAt: String(data.updated_at || ""),
+  };
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(request) });
   if (!originAllowed(request)) return json(request, { error: "Origin is not allowed." }, 403);
@@ -2550,6 +2760,7 @@ Deno.serve(async (request) => {
     action = url.searchParams.get("action") || "";
     if (action === "status") {
       const current = await snapshot();
+      const recordProjection = await recordProjectionHealth(current.revision);
       const configuredOrigins = (Deno.env.get("KPI_ALLOWED_ORIGIN") || "")
         .split(",")
         .map((value) => value.trim())
@@ -2562,7 +2773,10 @@ Deno.serve(async (request) => {
         deploymentVersion,
         storageModel: "record-projection-transition",
         singleDeviceSession: true,
+        credentialHashing: true,
+        recordProjection,
         releaseUpdates: false,
+        calendarEvents: true,
         originRestricted: configuredOrigins.length > 0 && !configuredOrigins.includes("*"),
       });
     }
@@ -2583,13 +2797,23 @@ Deno.serve(async (request) => {
       if (Boolean(account.disabled)) {
         return json(request, { error: "This account has been disabled by an administrator." }, 403);
       }
-      const regularCredential = String(account.password || "") === password;
+      let regularCredential = await accountPasswordMatches(account, password);
       const bootstrapRecovery = isBootstrapAdminRecovery(account, username, password);
       if (!regularCredential && !bootstrapRecovery) return json(request, { error: "Invalid username or password." }, 401);
+      if (regularCredential && !hasPasswordHash(account)) {
+        current = await migrateLegacyAccountPassword(current, account, password);
+        account = records(current.state, "accounts").find((item) => recordId(item) === recordId(account));
+        if (!account || Boolean(account.disabled) || !(await accountPasswordMatches(account, password))) {
+          return json(request, { error: "Invalid username or password." }, 401);
+        }
+        regularCredential = true;
+      }
       if (bootstrapRecovery && !regularCredential) {
         current = await restoreBootstrapAdminPassword(current, account, username, password);
         account = records(current.state, "accounts").find((item) => recordId(item) === recordId(account));
-        if (!account || Boolean(account.disabled)) return json(request, { error: "Invalid username or password." }, 401);
+        if (!account || Boolean(account.disabled) || !(await accountPasswordMatches(account, password))) {
+          return json(request, { error: "Invalid username or password." }, 401);
+        }
       }
 
       const token = sessionToken();
