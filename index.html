@@ -6,17 +6,17 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.0.81">
+  <meta name="application-version" content="3.0.95">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
-  <link rel="manifest" href="manifest.webmanifest?v=3.0.81">
-  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.0.81" type="image/png">
-  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.0.81">
-  <script src="supabase-config.js?v=3.0.81"></script>
-  <script src="auth-bootstrap.js?v=3.0.81"></script>
-  <link rel="stylesheet" href="styles.css?v=3.0.81">
-  <link rel="stylesheet" href="work-calendar.css?v=3.0.81">
+  <link rel="manifest" href="manifest.webmanifest?v=3.0.95">
+  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.0.95" type="image/png">
+  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.0.95">
+  <script src="supabase-config.js?v=3.0.95"></script>
+  <script src="auth-bootstrap.js?v=3.0.95"></script>
+  <link rel="stylesheet" href="styles.css?v=3.0.95">
+  <link rel="stylesheet" href="work-calendar.css?v=3.0.95">
 </head>
 <body>
   <section id="loginScreen" class="login-screen">
@@ -38,7 +38,7 @@
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.0.81</strong>
+          <strong data-app-version>Phiên bản 3.0.95</strong>
         </p>
       </form>
     </div>
@@ -138,12 +138,19 @@
           <div class="dashboard-head-actions">
             <label class="dashboard-task-scope" for="dashboardTaskScope">Hiển thị công việc
               <select id="dashboardTaskScope">
-                <option value="current">Tháng hiện tại</option>
+                <option value="current">Theo kỳ đánh giá</option>
                 <option value="all">Toàn bộ từ trước đến nay</option>
               </select>
             </label>
             <button id="seedDemo" class="admin-action" type="button">Nạp dữ liệu mẫu</button>
           </div>
+        </div>
+
+        <div class="dashboard-daily-report-action">
+          <label for="dashboardDailyReportDate">Ngày báo cáo
+            <input id="dashboardDailyReportDate" type="date" aria-label="Chọn ngày cho báo cáo công việc hàng ngày">
+          </label>
+          <button id="exportDailyWorkReportPdf" class="dashboard-daily-report-button" type="button" title="Xuất báo cáo công việc hàng ngày ra PDF"><span aria-hidden="true">▣</span>Báo cáo công việc hàng ngày</button>
         </div>
 
         <div class="metrics">
@@ -168,11 +175,17 @@
         <section class="block dashboard-operations-block">
           <div id="dashboardOperations" class="dashboard-operations-grid empty-state">Chưa có công việc cần theo dõi.</div>
           <div class="dashboard-workload-head">
-            <h4>Thống kê công việc theo nhân sự</h4>
+            <div class="dashboard-workload-title">
+              <h4>Thống kê công việc</h4>
+              <div class="dashboard-workload-view-switch" role="group" aria-label="Nhóm thống kê công việc">
+                <button class="is-active" data-dashboard-workload-view="projects" type="button" aria-pressed="true">Dự án</button>
+                <button data-dashboard-workload-view="people" type="button" aria-pressed="false">Nhân sự</button>
+              </div>
+            </div>
             <div class="dashboard-workload-actions">
               <label class="dashboard-workload-filter" for="dashboardWorkloadDepartmentFilter">
                 <span>Lọc phòng</span>
-                <select id="dashboardWorkloadDepartmentFilter" aria-label="Lọc phòng cho thống kê công việc theo nhân sự">
+                <select id="dashboardWorkloadDepartmentFilter" aria-label="Lọc phòng cho thống kê công việc">
                   <option value="">Tất cả phòng</option>
                 </select>
               </label>
@@ -180,6 +193,110 @@
             </div>
           </div>
           <div id="dashboardWorkload" class="dashboard-workload-list empty-state">Chưa có dữ liệu tải việc.</div>
+        </section>
+
+        <section class="block dashboard-analytics-block" aria-labelledby="dashboardAnalyticsTitle">
+          <div class="chart-heading dashboard-analytics-heading">
+            <div>
+              <h3 id="dashboardAnalyticsTitle">Phân tích khối lượng và hiệu quả</h3>
+              <p id="dashboardAnalyticsSummary" class="muted">Chưa có dữ liệu công việc trong phạm vi được xem.</p>
+            </div>
+          </div>
+          <div class="dashboard-analytics-tabs" role="tablist" aria-label="Nhóm biểu đồ phân tích">
+            <button class="dashboard-analytics-tab is-active" data-dashboard-analytics-tab="operations" type="button" role="tab" aria-selected="true" aria-controls="dashboardAnalyticsOperations">Điều hành</button>
+            <button class="dashboard-analytics-tab" data-dashboard-analytics-tab="people" type="button" role="tab" aria-selected="false" aria-controls="dashboardAnalyticsPeople">Nhân sự</button>
+            <button class="dashboard-analytics-tab" data-dashboard-analytics-tab="projects" type="button" role="tab" aria-selected="false" aria-controls="dashboardAnalyticsProjects">Dự án</button>
+            <button class="dashboard-analytics-tab" data-dashboard-analytics-tab="departments" type="button" role="tab" aria-selected="false" aria-controls="dashboardAnalyticsDepartments">Phòng ban</button>
+          </div>
+
+          <div id="dashboardAnalyticsOperations" class="dashboard-analytics-panel" role="tabpanel" aria-labelledby="dashboardAnalyticsTitle">
+            <div class="dashboard-analytics-grid">
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardTrendTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardTrendTitle">Tiến độ theo mốc hoàn thành</h4><span id="dashboardTrendNote" class="muted"></span></div>
+                <div id="dashboardTrendChart" class="dashboard-trend-chart empty-state">Chưa có công việc trong phạm vi được xem.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardFunnelTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardFunnelTitle">Phễu hoàn thành</h4><span class="muted">Tách chờ phê duyệt khỏi hoàn thành đạt</span></div>
+                <div id="dashboardFunnelChart" class="dashboard-funnel-chart empty-state">Chưa có dữ liệu.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardOverdueAgeTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardOverdueAgeTitle">Tuổi việc quá hạn</h4><span class="muted">Ưu tiên xử lý việc tồn lâu</span></div>
+                <div id="dashboardOverdueAgeChart" class="dashboard-bar-list empty-state">Không có việc quá hạn trong phạm vi được xem.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardTaskStatusTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardTaskStatusTitle">Cơ cấu công việc</h4><span class="muted">Theo trạng thái thực tế</span></div>
+                <div id="dashboardTaskStatusChart" class="dashboard-bar-list empty-state">Chưa có dữ liệu.</div>
+              </section>
+            </div>
+          </div>
+
+          <div id="dashboardAnalyticsPeople" class="dashboard-analytics-panel is-hidden" role="tabpanel" aria-labelledby="dashboardAnalyticsTitle" hidden>
+            <div class="dashboard-analytics-grid">
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardPersonLoadTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardPersonLoadTitle">Tải công việc theo nhân sự</h4><span id="dashboardPersonLoadNote" class="muted"></span></div>
+                <div id="dashboardPersonLoadChart" class="dashboard-person-load-chart empty-state">Chưa có dữ liệu nhân sự.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardPersonalKpiTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardPersonalKpiTitle">Kế hoạch và thực hiện KPI</h4><span class="muted">Thực hiện đã quy đổi chất lượng</span></div>
+                <div id="dashboardPersonalKpiChart" class="dashboard-kpi-comparison empty-state">Chưa có dữ liệu KPI.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardKpiCategoryTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardKpiCategoryTitle">Phân bổ theo danh mục KPI</h4><span class="muted">Khối lượng công việc liên quan</span></div>
+                <div id="dashboardKpiCategoryChart" class="dashboard-bar-list empty-state">Chưa có danh mục KPI trong phạm vi được xem.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardAttentionTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardAttentionTitle">Nhân sự cần chú ý</h4><span class="muted">Tỷ lệ quá hạn trong việc đang mở</span></div>
+                <div id="dashboardAttentionChart" class="dashboard-attention-chart empty-state">Không có nhân sự có việc cần theo dõi.</div>
+              </section>
+            </div>
+          </div>
+
+          <div id="dashboardAnalyticsProjects" class="dashboard-analytics-panel is-hidden" role="tabpanel" aria-labelledby="dashboardAnalyticsTitle" hidden>
+            <div class="dashboard-project-analytics-stack">
+              <section class="dashboard-analytics-chart dashboard-project-health-section" aria-labelledby="dashboardProjectHealthTitle">
+                <div class="dashboard-analytics-chart-head"><div><h4 id="dashboardProjectHealthTitle">Sức khỏe từng dự án</h4></div><span id="dashboardProjectHealthNote" class="muted">Toàn Ban</span></div>
+                <div class="dashboard-project-legend" aria-label="Chú giải trạng thái"><span><i class="is-complete"></i>Hoàn thành đạt</span><span><i class="is-pending"></i>Chờ phê duyệt</span><span><i class="is-active"></i>Đang thực hiện</span><span><i class="is-overdue"></i>Quá hạn</span></div>
+                <div id="dashboardProjectHealthChart" class="dashboard-project-health-list empty-state">Chưa có công việc gắn dự án trong phạm vi được xem.</div>
+              </section>
+
+              <section class="dashboard-analytics-chart dashboard-project-trend-section" aria-labelledby="dashboardProjectTrendTitle">
+                <div class="dashboard-analytics-chart-head"><div><h4 id="dashboardProjectTrendTitle">Xu hướng kế hoạch và hoàn thành</h4><span id="dashboardProjectTrendNote" class="muted">Chọn dự án để xem tiến độ theo hạn hoàn thành</span></div><label class="dashboard-project-trend-filter"><span>Dự án</span><select id="dashboardProjectTrendFilter" aria-label="Chọn dự án xem xu hướng"></select></label></div>
+                <div id="dashboardProjectTrendChart" class="dashboard-project-trend-chart empty-state">Chưa có dữ liệu tiến độ theo dự án.</div>
+              </section>
+
+              <section class="dashboard-analytics-chart dashboard-project-timeline-section" aria-labelledby="dashboardProjectTimelineTitle">
+                <div class="dashboard-analytics-chart-head"><div><h4 id="dashboardProjectTimelineTitle">Mốc công việc và rủi ro trong kỳ</h4></div><span id="dashboardProjectTimelineNote" class="muted">Bấm một ô để xem danh sách công việc</span></div>
+                <div id="dashboardProjectTimelineChart" class="dashboard-project-timeline-chart empty-state">Chưa có mốc công việc theo dự án trong phạm vi được xem.</div>
+                <div class="dashboard-project-timeline-key" aria-label="Chú giải mốc công việc"><span><i class="is-complete"></i>Đã đạt</span><span><i class="is-active"></i>Đang xử lý</span><span><i class="is-risk"></i>Chờ phê duyệt</span><span><i class="is-overdue"></i>Quá hạn</span></div>
+              </section>
+
+              <section class="dashboard-analytics-chart dashboard-project-resource-section" aria-labelledby="dashboardProjectResourceTitle">
+                <div class="dashboard-analytics-chart-head"><div><h4 id="dashboardProjectResourceTitle">Nguồn lực và việc cần xử lý</h4></div><span class="muted">Đang thực hiện, chờ duyệt, quá hạn và cán bộ tham gia</span></div>
+                <div id="dashboardProjectResourceChart" class="dashboard-project-resource-list empty-state">Chưa có dữ liệu nguồn lực theo dự án.</div>
+              </section>
+            </div>
+          </div>
+
+          <div id="dashboardAnalyticsDepartments" class="dashboard-analytics-panel is-hidden" role="tabpanel" aria-labelledby="dashboardAnalyticsTitle" hidden>
+            <div class="dashboard-analytics-grid">
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardDepartmentComparisonTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardDepartmentComparisonTitle">Hiệu quả theo phòng</h4><span class="muted">Hoàn thành đạt và đúng hạn</span></div>
+                <div id="dashboardDepartmentComparisonChart" class="dashboard-department-comparison empty-state">Chưa có dữ liệu phòng ban.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardHeatmapTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardHeatmapTitle">Bản đồ nhiệt tải việc</h4><span class="muted">Việc đang mở theo nhóm vị trí</span></div>
+                <div id="dashboardHeatmapChart" class="dashboard-heatmap empty-state">Chưa có dữ liệu phòng ban.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardDepartmentBacklogTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardDepartmentBacklogTitle">Xu hướng tồn chưa đạt</h4><span id="dashboardDepartmentBacklogNote" class="muted"></span></div>
+                <div id="dashboardDepartmentBacklogChart" class="dashboard-department-backlog empty-state">Chưa có dữ liệu công việc.</div>
+              </section>
+              <section class="dashboard-analytics-chart" aria-labelledby="dashboardDepartmentStatusChartTitle">
+                <div class="dashboard-analytics-chart-head"><h4 id="dashboardDepartmentStatusChartTitle">Cơ cấu trạng thái theo phòng</h4><span class="muted">Đang xử lý, chờ duyệt, quá hạn</span></div>
+                <div id="dashboardDepartmentStatusChart" class="dashboard-department-status-chart empty-state">Chưa có dữ liệu công việc.</div>
+              </section>
+            </div>
+          </div>
         </section>
 
         <section class="block chart-block dashboard-department-block dashboard-department-effectiveness-full">
@@ -585,7 +702,7 @@
             <label>Tìm kiếm<input id="calendarSearch" type="search" placeholder="Nội dung, địa điểm, phòng..."></label>
           </div>
           <div class="calendar-table-scroll" tabindex="0" role="region" aria-label="Lịch trong tuần">
-            <table class="calendar-table"><thead><tr><th>Thứ / Ngày</th><th>Thời gian</th><th>Nội dung công việc</th><th>Địa điểm</th><th>Lãnh đạo</th><th>Phòng chuẩn bị</th><th>Thao tác</th></tr></thead><tbody id="calendarRows"></tbody></table>
+            <table class="calendar-table"><thead><tr><th>Thứ / Ngày</th><th>Thời gian</th><th>Nội dung công việc</th><th>Địa điểm</th><th>Lãnh đạo</th><th>Phòng chuẩn bị</th><th>Thành phần tham dự</th></tr></thead><tbody id="calendarRows"></tbody></table>
           </div>
           <div id="calendarMobileRows" class="calendar-mobile-list" aria-live="polite"></div>
         </div>
@@ -600,7 +717,7 @@
           <div class="task-head-actions">
             <button id="openTaskBulkImport" class="ghost is-hidden" type="button">Nhập Excel</button>
             <select id="taskScopeFilter" aria-label="Phạm vi hiển thị công việc">
-              <option value="current">Tháng hiện tại</option>
+              <option value="current">Theo kỳ đánh giá</option>
               <option value="all">Toàn bộ từ trước đến nay</option>
             </select>
             <select id="taskDepartmentFilter" aria-label="Lọc công việc theo phòng">
@@ -1286,6 +1403,10 @@
               <input id="accountCanManageCalendar" type="checkbox">
               <span>Quản lý Lịch công việc (thêm, sửa, xóa)</span>
             </label>
+            <label class="checkbox-field">
+              <input id="accountCanManagePeople" type="checkbox">
+              <span>Quản lý Nhân sự (thêm, sửa, xóa)</span>
+            </label>
           </fieldset>
           <div class="form-actions wide">
             <button type="submit">Lưu tài khoản</button>
@@ -1485,7 +1606,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.0.81</strong>
+    <strong data-app-version>Phiên bản 3.0.95</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -1968,15 +2089,17 @@
 
   <section id="calendarDialog" class="modal-backdrop is-hidden" aria-hidden="true">
     <div class="modal-card calendar-modal" role="dialog" aria-modal="true" aria-labelledby="calendarDialogTitle">
-      <div class="section-head"><h2 id="calendarDialogTitle">Thêm cuộc họp</h2><div class="dialog-head-actions"><button type="button" class="ghost" id="calendarEdit">Sửa cuộc họp</button><button type="button" class="ghost" id="calendarClose">Đóng</button></div></div>
+      <div class="section-head"><h2 id="calendarDialogTitle">Thêm cuộc họp</h2><div class="dialog-head-actions"><button type="button" class="ghost" id="calendarClose">Đóng</button></div></div>
       <form id="calendarForm" class="calendar-form">
-        <label class="calendar-wide">Nội dung công việc / cuộc họp<input id="calendarTitle" required maxlength="500"></label>
+        <label class="calendar-wide">Nội dung công việc / cuộc họp<input id="calendarTitle" required></label>
         <label>Ngày<input id="calendarDate" type="date" required></label>
         <label>Bắt đầu<input id="calendarTime" type="time" required></label>
         <label>Kết thúc<input id="calendarEndTime" type="time"></label>
         <label>Địa điểm<input id="calendarLocation" maxlength="300" required></label>
-        <fieldset><legend>Lãnh đạo</legend><div id="calendarLeaders" class="calendar-checklist"></div></fieldset>
-        <fieldset><legend>Phòng chuẩn bị</legend><div id="calendarDepartments" class="calendar-checklist"></div></fieldset>
+        <label class="calendar-recurrence-field">Lặp lại<select id="calendarRecurrence"><option value="none">Không lặp lại</option><option value="daily">Hàng ngày</option><option value="weekly">Hàng tuần</option></select></label>
+        <label class="calendar-reminder-field"><input id="calendarReminderEnabled" type="checkbox" checked><span>Nhắc lịch công việc</span></label>
+        <fieldset class="calendar-leader-field"><legend>Lãnh đạo</legend><div id="calendarLeaders" class="calendar-checklist calendar-grid-checklist"></div></fieldset>
+        <fieldset class="calendar-wide calendar-department-field"><legend>Phòng chuẩn bị (nếu có)</legend><div id="calendarDepartments" class="calendar-checklist calendar-grid-checklist"></div></fieldset>
         <fieldset class="calendar-wide"><legend>Thành phần tham dự</legend>
           <label class="calendar-all"><input id="calendarAllHands" type="checkbox">Toàn thể</label>
           <input id="calendarParticipantSearch" type="search" aria-label="Tìm người tham dự" placeholder="Tìm tên nhân sự...">
@@ -1992,14 +2115,21 @@
     </div>
   </section>
 
+  <section id="calendarDetailDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card calendar-modal calendar-detail-modal" role="dialog" aria-modal="true" aria-labelledby="calendarDetailTitle">
+      <div class="section-head"><h2 id="calendarDetailTitle">Chi tiết nội dung công việc</h2><div class="dialog-head-actions"><button type="button" class="ghost" id="calendarDetailEdit">Sửa</button><button type="button" class="ghost" id="calendarDetailClose">Đóng</button></div></div>
+      <div id="calendarDetailContent" class="calendar-detail-content"></div>
+    </div>
+  </section>
+
   <aside id="calendarReminderToast" class="calendar-reminder-toast is-hidden" aria-live="polite" aria-label="Nhắc lịch công việc">
     <div><strong>Sắp đến lịch làm việc</strong><button type="button" class="ghost calendar-icon" id="calendarDismissReminders" title="Đóng nhắc lịch" aria-label="Đóng nhắc lịch">×</button></div>
     <div id="calendarReminderList"></div>
   </aside>
 
   <!-- System data must load before the application runtime. -->
-  <script src="people-data.js?v=3.0.81"></script>
-  <script src="work-calendar.js?v=3.0.81"></script>
-  <script src="script.js?v=3.0.81"></script>
+  <script src="people-data.js?v=3.0.95"></script>
+  <script src="work-calendar.js?v=3.0.95"></script>
+  <script src="script.js?v=3.0.95"></script>
 </body>
 </html>

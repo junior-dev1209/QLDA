@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.0.81";
+const APP_VERSION = "3.0.95";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -1309,6 +1309,7 @@ function moduleIsAvailableToAccount(viewId, account = currentAccount()) {
   const module = systemModules.find((item) => item.id === viewId);
   if (!module || module.locked || account?.role === "admin") return true;
   if (!moduleIsEnabled(viewId)) return false;
+  if (viewId === "people" && accountAccessGrants(account).peopleWrite) return true;
   if (!moduleAccessRoles.includes(account?.role)) return false;
   return state?.moduleSettings?.[viewId]?.roles?.[account.role] === true;
 }
@@ -1537,7 +1538,11 @@ const taskBoardVisibleLimits = new Map();
 let taskStatusDetailExport = null;
 let dashboardDetailExport = null;
 let dashboardWorkloadDepartmentFilter = "";
+let dashboardWorkloadView = "projects";
+let dashboardWorkloadPeriod = "week";
 let dashboardKpiSummaryGradeFilter = "";
+let dashboardAnalyticsActiveTab = "operations";
+let dashboardProjectTrendKey = "";
 let taskDisplayScope = "current";
 const dashboardKpiContextCache = new Map();
 const TASK_BOARD_INITIAL_RENDER_LIMIT = 40;
@@ -5606,11 +5611,11 @@ function canEditOwnAccount() {
 }
 
 function canViewPeople() {
-  return canViewSystemContent() || hasDepartmentManagementAccess();
+  return canViewSystemContent() || hasDepartmentManagementAccess() || accountAccessGrants().peopleWrite;
 }
 
 function canEditPeople() {
-  return canViewAllData();
+  return canViewAllData() || accountAccessGrants().peopleWrite;
 }
 
 function canViewTasks() {
@@ -5628,6 +5633,7 @@ function accountAccessGrants(account = currentAccount()) {
     archiveWrite: grants.archiveWrite === true,
     viewSystemContent: grants.viewSystemContent === true,
     calendarWrite: grants.calendarWrite === true,
+    peopleWrite: grants.peopleWrite === true,
   };
 }
 
@@ -7551,11 +7557,15 @@ function currentTaskDisplayScope() {
 function taskDisplayScopeLabel(scope = currentTaskDisplayScope()) {
   return scope === "all"
     ? "toàn bộ từ trước đến nay"
-    : `tháng hiện tại ${formatMonthPeriod(currentMonth())}`;
+    : `kỳ đánh giá ${formatMonthPeriod(taskDisplayScopePeriod())}`;
+}
+
+function taskDisplayScopePeriod() {
+  return state?.activePeriod || currentMonth();
 }
 
 function taskMatchesDisplayScope(task, scope = currentTaskDisplayScope()) {
-  return scope === "all" || taskPeriod(task) === currentMonth();
+  return scope === "all" || taskPeriod(task) === taskDisplayScopePeriod();
 }
 
 function syncTaskDisplayScopeControls() {
@@ -10865,6 +10875,197 @@ function dashboardDepartmentSituationRows(period = state.activePeriod) {
   });
 }
 
+function dailyReportDateValue(value = new Date()) {
+  const source = value instanceof Date
+    ? `${value.getFullYear()}-${padDatePart(value.getMonth() + 1)}-${padDatePart(value.getDate())}`
+    : String(value || "").trim();
+  const match = source.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    const date = new Date(`${source}T12:00:00`);
+    if (!Number.isNaN(date.getTime()) && date.getFullYear() === Number(match[1]) && date.getMonth() + 1 === Number(match[2]) && date.getDate() === Number(match[3])) return source;
+  }
+  return dailyReportDateValue(new Date());
+}
+
+function dailyReportDatePart(value) {
+  if (!value) return "";
+  const source = String(value).trim();
+  const prefix = source.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (prefix) return dailyReportDateValue(prefix[1]);
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+}
+
+function dailyReportTaskEvents(task) {
+  return [
+    { date: task?.createdAt, label: "Phát sinh mới", kind: "created" },
+    { date: task?.completedAt, label: "Hoàn thành công việc", kind: "completed" },
+    { date: task?.completionReviewedAt, label: "Đánh giá hoàn thành", kind: "reviewed" },
+    { date: task?.responseAt, label: "Phản hồi công việc", kind: "response" },
+    ...(Array.isArray(task?.progressReports) ? task.progressReports.map((report) => ({ date: report?.createdAt, label: report?.action || "Cập nhật tiến độ", kind: "progress", note: report?.note || "" })) : []),
+    ...(String(task?.due || "") ? [{ date: task.due, label: "Đến hạn hoàn thành", kind: "due" }] : []),
+  ].filter((entry) => dailyReportDatePart(entry.date));
+}
+
+function taskOccurredInDailyReport(task, reportDate) {
+  const date = dailyReportDateValue(reportDate);
+  return dailyReportTaskEvents(task).some((entry) => dailyReportDatePart(entry.date) === date);
+}
+
+function dailyReportTaskStatus(task) {
+  if (taskCompletionIsApproved(task)) return "Hoàn thành đạt";
+  if (taskCompletionNeedsReview(task)) return "Chờ phê duyệt";
+  if (getDueStatus(task) === "Quá hạn") return "Quá hạn";
+  return normalizeTaskStatus(task?.status) || "Chuẩn bị thực hiện";
+}
+
+function dailyReportStatusTone(status) {
+  if (status === "Hoàn thành đạt") return "is-complete";
+  if (status === "Chờ phê duyệt") return "is-pending";
+  if (status === "Quá hạn") return "is-overdue";
+  if (status === "Đang thực hiện") return "is-active";
+  return "is-preparing";
+}
+
+function dailyReportTaskOwner(task) {
+  const owner = personById(taskParticipantIds(task)[0] || task?.ownerId);
+  return owner?.name || task?.ownerName || task?.owner || "Chưa phân công";
+}
+
+function dailyReportTaskDepartment(task) {
+  const owner = personById(taskParticipantIds(task)[0] || task?.ownerId);
+  const department = departmentById(owner?.departmentId);
+  return { id: department?.id || "", name: department?.name || "Chưa phân phòng" };
+}
+
+function dailyReportTaskActivity(task, reportDate) {
+  const date = dailyReportDateValue(reportDate);
+  const labels = [];
+  dailyReportTaskEvents(task).forEach((entry) => {
+    if (dailyReportDatePart(entry.date) !== date || labels.includes(entry.label)) return;
+    labels.push(entry.label);
+  });
+  return labels.join(" · ") || "Cập nhật trong ngày";
+}
+
+function dailyReportTaskNote(task, reportDate) {
+  const date = dailyReportDateValue(reportDate);
+  const report = [...(Array.isArray(task?.progressReports) ? task.progressReports : [])]
+    .reverse()
+    .find((item) => dailyReportDatePart(item?.createdAt) === date && String(item?.note || "").trim());
+  return report?.note || task?.note || "Chưa có ghi chú.";
+}
+
+function dailyReportProjectKey(task) {
+  const projectId = String(task?.projectId || "").trim();
+  const projectName = projectNameForTask(task);
+  return projectId ? `id:${projectId}` : projectName ? `name:${projectName}` : "";
+}
+
+function dailyWorkReportData(reportDate) {
+  const date = dailyReportDateValue(reportDate);
+  const visibleTaskById = new Map();
+  state.tasks.forEach((task, index) => {
+    if (!canViewTaskRecord(task)) return;
+    const key = String(task?.id || "").trim() || `task-row-${index}`;
+    if (!visibleTaskById.has(key)) visibleTaskById.set(key, task);
+  });
+  const visibleTasks = [...visibleTaskById.values()];
+  const tasks = visibleTasks
+    .filter((task) => taskOccurredInDailyReport(task, date))
+    .slice()
+    .sort((left, right) => dailyReportTaskDepartment(left).name.localeCompare(dailyReportTaskDepartment(right).name, "vi") || dailyReportTaskOwner(left).localeCompare(dailyReportTaskOwner(right), "vi") || String(left.due || "").localeCompare(String(right.due || "")));
+  const departmentMap = new Map();
+  tasks.forEach((task) => {
+    const department = dailyReportTaskDepartment(task);
+    const row = departmentMap.get(department.name) || { ...department, tasks: [] };
+    row.tasks.push(task);
+    departmentMap.set(department.name, row);
+  });
+  const departments = [...departmentMap.values()]
+    .map((row) => ({
+      ...row,
+      total: row.tasks.length,
+      approved: row.tasks.filter(taskCompletionIsApproved).length,
+      pending: row.tasks.filter(taskCompletionNeedsReview).length,
+      overdue: row.tasks.filter((task) => getDueStatus(task) === "Quá hạn").length,
+      active: row.tasks.filter((task) => !taskCompletionIsApproved(task) && !taskCompletionNeedsReview(task) && getDueStatus(task) !== "Quá hạn").length,
+    }))
+    .sort((left, right) => right.total - left.total || left.name.localeCompare(right.name, "vi"));
+  const projectMap = new Map();
+  tasks.forEach((task) => {
+    const key = dailyReportProjectKey(task);
+    if (!key) return;
+    const row = projectMap.get(key) || { key, name: projectNameForTask(task), dailyTasks: [] };
+    row.dailyTasks.push(task);
+    projectMap.set(key, row);
+  });
+  const projects = [...projectMap.values()]
+    .map((row) => {
+      const allTasks = visibleTasks.filter((task) => dailyReportProjectKey(task) === row.key);
+      const averageProgress = allTasks.length ? allTasks.reduce((sum, task) => sum + Number(task.progress || 0), 0) / allTasks.length : 0;
+      return {
+        ...row,
+        total: allTasks.length,
+        approved: allTasks.filter(taskCompletionIsApproved).length,
+        averageProgress: clamp(averageProgress, 0, 100),
+        departments: [...new Set(row.dailyTasks.map((task) => dailyReportTaskDepartment(task).name))],
+      };
+    })
+    .sort((left, right) => right.dailyTasks.length - left.dailyTasks.length || left.name.localeCompare(right.name, "vi"));
+  return {
+    date,
+    generatedAt: new Date(),
+    account: currentAccount(),
+    tasks,
+    departments,
+    projects,
+    metrics: {
+      total: tasks.length,
+      approved: tasks.filter(taskCompletionIsApproved).length,
+      pending: tasks.filter(taskCompletionNeedsReview).length,
+      overdue: tasks.filter((task) => getDueStatus(task) === "Quá hạn").length,
+    },
+  };
+}
+
+function dailyWorkReportDocumentHtml(report) {
+  const metricCard = (label, value, tone) => `<article class="metric ${tone}"><span>${escapeHtml(label)}</span><strong>${value}</strong></article>`;
+  const departmentRows = report.departments.length
+    ? report.departments.map((row) => `<tr><th scope="row">${escapeHtml(row.name)}</th><td>${row.total}</td><td class="good">${row.approved}</td><td class="active">${row.active}</td><td class="pending">${row.pending}</td><td class="overdue">${row.overdue}</td></tr>`).join("")
+    : '<tr><td colspan="6" class="empty">Không có công việc phát sinh, đến hạn hoặc có diễn biến thực tế trong ngày đã chọn.</td></tr>';
+  const projectRows = report.projects.length
+    ? report.projects.map((project) => `<article class="project-row"><div><strong>${escapeHtml(project.name)}</strong><small>${escapeHtml(project.departments.join(", "))}</small></div><div class="project-progress"><span><b>${project.dailyTasks.length}</b> việc trong ngày · <b>${project.approved}/${project.total}</b> đạt</span><div class="progress-track"><i style="width:${formatScore(project.averageProgress)}%"></i></div><small>Tiến độ bình quân hiện tại: ${formatScore(project.averageProgress)}%</small></div></article>`).join("")
+    : '<p class="empty-projects">Không có dự án có công việc phát sinh trong ngày đã chọn.</p>';
+  const taskRows = report.tasks.length
+    ? report.tasks.map((task) => {
+      const status = dailyReportTaskStatus(task);
+      return `<tr><td>${escapeHtml(dailyReportTaskDepartment(task).name)}</td><td><strong>${escapeHtml(task.title || "Chưa có tên công việc")}</strong><small>${escapeHtml(dailyReportTaskActivity(task, report.date))}</small></td><td>${escapeHtml(dailyReportTaskOwner(task))}</td><td><span class="status ${dailyReportStatusTone(status)}">${escapeHtml(status)}</span></td><td>${formatScore(Number(task.progress || 0))}%</td><td>${escapeHtml(dailyReportTaskNote(task, report.date))}</td></tr>`;
+    }).join("")
+    : '<tr><td colspan="6" class="empty">Không có công việc để liệt kê.</td></tr>';
+  const reportDate = formatDate(report.date);
+  const generatedAt = formatDateTime(report.generatedAt);
+  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Bao-cao-cong-viec-hang-ngay-${report.date}</title><style>
+@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{margin:0;color:#13263a;font-family:Arial,"Segoe UI",sans-serif;font-size:10.5px;line-height:1.38}header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:13px 16px;background:#0d4e5b;color:#fff}header p{margin:0 0 3px;font-size:9px;font-weight:700;text-transform:uppercase}header h1{margin:0;font-size:21px;line-height:1.15}header .meta{text-align:right;font-size:9px;line-height:1.65}.subtitle{margin:10px 0 9px;color:#607588;font-size:9.5px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}.metric{min-height:56px;padding:9px 11px;border:1px solid #d7e2e8;border-top:4px solid #176878;border-radius:5px;background:#fff}.metric span{display:block;color:#607588;font-size:9px;font-weight:700}.metric strong{display:block;margin-top:4px;color:#176878;font-size:24px;line-height:1}.metric.good{border-top-color:#16805f}.metric.good strong{color:#16805f}.metric.pending{border-top-color:#a56808}.metric.pending strong{color:#a56808}.metric.overdue{border-top-color:#b42318}.metric.overdue strong{color:#b42318}.grid{display:grid;grid-template-columns:1.22fr .98fr;gap:12px;align-items:start}.panel{border:1px solid #d7e2e8;border-radius:5px;overflow:hidden;background:#fff}.panel h2{margin:0;padding:8px 10px;border-bottom:1px solid #d7e2e8;color:#13263a;font-size:11.5px}.panel h2 small{float:right;color:#607588;font-size:8px;font-weight:400}.summary-table,.detail-table{width:100%;border-collapse:collapse}.summary-table th,.summary-table td{padding:6px 8px;border-bottom:1px solid #e2e9ed;text-align:right}.summary-table th:first-child{text-align:left}.summary-table thead th{background:#edf4f6;color:#607588;font-size:8px}.summary-table tbody th{font-weight:700}.summary-table tbody tr:nth-child(odd),.detail-table tbody tr:nth-child(odd){background:#f8fafc}.good{color:#16805f;font-weight:700}.active{color:#2f7fa4;font-weight:700}.pending{color:#a56808;font-weight:700}.overdue{color:#b42318;font-weight:700}.project-row{display:grid;grid-template-columns:minmax(120px,.8fr) minmax(170px,1.2fr);gap:10px;padding:8px 10px;border-bottom:1px solid #e2e9ed}.project-row:last-child{border-bottom:0}.project-row strong,.project-row small{display:block}.project-row small{margin-top:3px;color:#607588;font-size:8px}.project-progress>span{color:#38576b;font-size:8.5px}.project-progress b{color:#176878}.progress-track{height:8px;margin:4px 0 2px;overflow:hidden;border-radius:4px;background:#e5edf1}.progress-track i{display:block;height:100%;border-radius:4px;background:#16805f}.empty,.empty-projects{padding:12px;color:#607588;text-align:center}.detail{margin-top:10px}.detail-table thead{display:table-header-group}.detail-table th{padding:7px 6px;background:#edf4f6;color:#607588;font-size:8px;text-align:left}.detail-table td{padding:7px 6px;vertical-align:top;border-bottom:1px solid #e2e9ed}.detail-table td:nth-child(1){width:12%}.detail-table td:nth-child(2){width:30%}.detail-table td:nth-child(3){width:14%}.detail-table td:nth-child(4){width:13%}.detail-table td:nth-child(5){width:8%;font-weight:700;color:#176878}.detail-table td:nth-child(6){width:23%;color:#526b7c}.detail-table small{display:block;margin-top:3px;color:#607588;font-size:8px}.status{display:inline-block;padding:3px 6px;border-radius:4px;font-size:8px;font-weight:700;white-space:nowrap}.status.is-complete{background:#eaf7f0;color:#16805f}.status.is-pending{background:#fff5dd;color:#a56808}.status.is-overdue{background:#fcecec;color:#b42318}.status.is-active{background:#eaf3f8;color:#2f7fa4}.status.is-preparing{background:#f2f5f7;color:#526b7c}.note{margin:8px 0 0;padding:7px 9px;border-left:3px solid #a56808;background:#fff9ed;color:#67521d;font-size:8.5px}footer{display:flex;justify-content:space-between;margin-top:8px;padding-top:6px;border-top:1px solid #d7e2e8;color:#607588;font-size:7.5px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.grid{display:block}.grid>.panel+.panel{margin-top:10px}.panel{break-inside:auto}.project-row,.summary-table tr,.detail-table tr{break-inside:avoid;page-break-inside:avoid}header,.metrics{break-after:avoid;page-break-after:avoid}.detail-table thead{display:table-header-group}}
+</style></head><body><header><div><p>Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</p><h1>Báo cáo công việc hàng ngày</h1></div><div class="meta">Ngày báo cáo: <b>${escapeHtml(reportDate)}</b><br>Xuất lúc: ${escapeHtml(generatedAt)}<br>${escapeHtml(report.account?.displayName || report.account?.username || "Tài khoản hệ thống")}</div></header><p class="subtitle">Tổng hợp một lần cho mỗi công việc phát sinh mới, cập nhật tiến độ/phản hồi, đến hạn, hoàn thành hoặc được đánh giá trong ngày đã chọn; không nhân số liệu theo số người tham gia.</p><section class="metrics">${metricCard("Công việc trong ngày", report.metrics.total, "primary")}${metricCard("Hoàn thành đạt", report.metrics.approved, "good")}${metricCard("Chờ phê duyệt", report.metrics.pending, "pending")}${metricCard("Quá hạn cần xử lý", report.metrics.overdue, "overdue")}</section><section class="grid"><article class="panel"><h2>Khối lượng theo phòng ban <small>${report.departments.length} phòng có công việc</small></h2><table class="summary-table"><thead><tr><th>Phòng ban</th><th>Phát sinh</th><th>Đạt</th><th>Đang làm</th><th>Chờ duyệt</th><th>Quá hạn</th></tr></thead><tbody>${departmentRows}</tbody></table></article><article class="panel"><h2>Tiến độ dự án có công việc phát sinh <small>${report.projects.length} dự án</small></h2>${projectRows}</article></section><section class="panel detail"><h2>Danh sách công việc trong ngày <small>${report.tasks.length} công việc</small></h2><table class="detail-table"><thead><tr><th>Phòng</th><th>Công việc / diễn biến</th><th>Người thực hiện</th><th>Trạng thái hiện tại</th><th>Tiến độ</th><th>Cập nhật gần nhất</th></tr></thead><tbody>${taskRows}</tbody></table></section><p class="note">Lưu ý: Mỗi mã công việc chỉ được tính một lần, kể cả khi có nhiều người phối hợp hoặc có nhiều diễn biến trong ngày. Hệ thống dùng mốc tạo mới, báo cáo tiến độ, phản hồi, đến hạn, hoàn thành và đánh giá để xác định phạm vi; không dùng mốc đồng bộ kỹ thuật. Khi xuất lại báo cáo của ngày cũ, trạng thái và tiến độ là giá trị hiện tại vì hệ thống chưa lưu bản chụp trạng thái theo từng ngày.</p><footer><span>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</span><span>Báo cáo công việc hàng ngày · ${escapeHtml(reportDate)}</span></footer><script>window.addEventListener("load",()=>window.setTimeout(()=>window.print(),180));</script></body></html>`;
+}
+
+function exportDailyWorkReportPdf() {
+  const input = byId("dashboardDailyReportDate");
+  const report = dailyWorkReportData(input?.value || dailyReportDateValue());
+  if (input) input.value = report.date;
+  const reportWindow = window.open("", "_blank");
+  if (!reportWindow) {
+    alert("Trình duyệt đang chặn cửa sổ xuất PDF. Hãy cho phép cửa sổ bật lên rồi thử lại.");
+    return;
+  }
+  reportWindow.document.open();
+  reportWindow.document.write(dailyWorkReportDocumentHtml(report));
+  reportWindow.document.close();
+  reportWindow.focus();
+}
+
 function dashboardTasksForPeriod(period = state.activePeriod) {
   return state.tasks
     .filter((task) => taskMatchesDisplayScope(task))
@@ -11120,11 +11321,161 @@ function openDashboardOperationDetail(operationId) {
   });
 }
 
+function dashboardWorkloadDateKey(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return "";
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
+function dashboardWorkloadWeekBounds(now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  return { from: dashboardWorkloadDateKey(start), to: dashboardWorkloadDateKey(end) };
+}
+
+function dashboardWorkloadTasksInRange(tasks, range = dashboardWorkloadPeriod, now = new Date()) {
+  const normalizedRange = range === "week" ? "week" : "day";
+  const today = dashboardWorkloadDateKey(now);
+  const week = dashboardWorkloadWeekBounds(now);
+  return tasks.filter((task) => {
+    const due = String(task?.due || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return false;
+    return normalizedRange === "week" ? due >= week.from && due <= week.to : due === today;
+  });
+}
+
+function dashboardWorkloadProjectKey(task) {
+  const projectId = projectIdForTask(task);
+  if (projectId) return `id:${projectId}`;
+  const projectName = projectNameForTask(task);
+  return projectName ? `name:${projectName}` : "unassigned";
+}
+
+function dashboardWorkloadProjectName(task) {
+  return projectNameForTask(task) || "Chưa gắn dự án";
+}
+
+function dashboardWorkloadDepartmentOptions(tasks) {
+  const people = uniquePersonIds(tasks.flatMap(taskParticipantIds))
+    .map(personById)
+    .filter(Boolean);
+  return dashboardDepartmentFilterOptions(people);
+}
+
+function dashboardWorkloadScopedTasks(tasks = dashboardTasksForPeriod()) {
+  const selectedDepartment = dashboardWorkloadDepartmentFilter
+    ? departmentById(dashboardWorkloadDepartmentFilter)
+    : null;
+  return selectedDepartment
+    ? tasks.filter((task) => taskHasParticipantInDepartment(task, selectedDepartment.id))
+    : tasks;
+}
+
+function dashboardWorkloadProjectRows(tasks = dashboardTasksForPeriod(), now = new Date()) {
+  const scopedTasks = dashboardWorkloadScopedTasks(tasks);
+  const todayTasks = dashboardWorkloadTasksInRange(scopedTasks, "day", now);
+  const weekTasks = dashboardWorkloadTasksInRange(scopedTasks, "week", now);
+  const groups = new Map();
+  scopedTasks.forEach((task) => {
+    const key = dashboardWorkloadProjectKey(task);
+    const row = groups.get(key) || {
+      key,
+      name: dashboardWorkloadProjectName(task),
+      projectId: projectIdForTask(task),
+      tasks: [],
+    };
+    row.tasks.push(task);
+    groups.set(key, row);
+  });
+  const taskIds = (items) => new Set(items.map((task) => task.id));
+  return [...groups.values()]
+    .map((row) => {
+      const allIds = taskIds(row.tasks);
+      const dailyTasks = todayTasks.filter((task) => allIds.has(task.id));
+      const weeklyTasks = weekTasks.filter((task) => allIds.has(task.id));
+      const selectedTasks = dashboardWorkloadPeriod === "week" ? weeklyTasks : dailyTasks;
+      const participantIds = uniquePersonIds(row.tasks.flatMap(taskParticipantIds));
+      const departmentNames = [...new Set(participantIds.map((personId) => departmentById(personById(personId)?.departmentId)?.name).filter(Boolean))];
+      return {
+        ...row,
+        dailyTasks,
+        weeklyTasks,
+        selectedTasks,
+        dailyApproved: dailyTasks.filter(taskCompletionIsApproved).length,
+        weeklyApproved: weeklyTasks.filter(taskCompletionIsApproved).length,
+        participants: participantIds.length,
+        departments: departmentNames,
+        overdue: selectedTasks.filter((task) => getDueStatus(task) === "Quá hạn").length,
+      };
+    })
+    .filter((row) => row.dailyTasks.length || row.weeklyTasks.length || row.overdue)
+    .sort((left, right) => right.selectedTasks.length - left.selectedTasks.length || right.overdue - left.overdue || left.name.localeCompare(right.name, "vi"));
+}
+
+function dashboardWorkloadPeopleRows(tasks = dashboardTasksForPeriod(), now = new Date()) {
+  const scopedTasks = dashboardWorkloadScopedTasks(tasks);
+  const todayTasks = dashboardWorkloadTasksInRange(scopedTasks, "day", now);
+  const weekTasks = dashboardWorkloadTasksInRange(scopedTasks, "week", now);
+  const rows = new Map();
+  scopedTasks.forEach((task) => {
+    taskParticipantIds(task).forEach((personId) => {
+      const person = personById(personId);
+      if (!person) return;
+      const row = rows.get(personId) || { person, tasks: [] };
+      row.tasks.push(task);
+      rows.set(personId, row);
+    });
+  });
+  const taskIds = (items) => new Set(items.map((task) => task.id));
+  return [...rows.values()]
+    .map((row) => {
+      const allIds = taskIds(row.tasks);
+      const dailyTasks = todayTasks.filter((task) => allIds.has(task.id));
+      const weeklyTasks = weekTasks.filter((task) => allIds.has(task.id));
+      const selectedTasks = dashboardWorkloadPeriod === "week" ? weeklyTasks : dailyTasks;
+      return {
+        ...row,
+        dailyTasks,
+        weeklyTasks,
+        selectedTasks,
+        dailyApproved: dailyTasks.filter(taskCompletionIsApproved).length,
+        weeklyApproved: weeklyTasks.filter(taskCompletionIsApproved).length,
+        projects: new Set(selectedTasks.map(dashboardWorkloadProjectKey)).size,
+        overdue: selectedTasks.filter((task) => getDueStatus(task) === "Quá hạn").length,
+      };
+    })
+    .filter((row) => row.dailyTasks.length || row.weeklyTasks.length || row.overdue)
+    .sort((left, right) => right.selectedTasks.length - left.selectedTasks.length || right.overdue - left.overdue || left.person.name.localeCompare(right.person.name, "vi"));
+}
+
+function dashboardWorkloadTableHead(view = dashboardWorkloadView) {
+  const leading = view === "projects" ? "Dự án" : "Nhân sự";
+  const fourth = view === "projects" ? "Cán bộ" : "Dự án";
+  return `<div class="dashboard-workload-table-head" aria-hidden="true"><span>${leading}</span><span>Hôm nay</span><span>Cả tuần</span><span>${fourth}</span><span>Quá hạn</span></div>`;
+}
+
+function dashboardWorkloadSummary(tasks, selectedDepartment) {
+  const rangeTasks = dashboardWorkloadTasksInRange(tasks, "week");
+  const rangeLabel = "Tuần hiện tại";
+  const approved = rangeTasks.filter(taskCompletionIsApproved).length;
+  const overdue = rangeTasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
+  return rangeTasks.length
+    ? `${rangeLabel}: ${rangeTasks.length} việc, ${approved} đạt, ${overdue} quá hạn${selectedDepartment ? ` - ${selectedDepartment.name}` : ""}.`
+    : `${rangeLabel} chưa có công việc theo hạn hoàn thành${selectedDepartment ? ` của ${selectedDepartment.name}` : ""}.`;
+}
+
 function renderDashboardOperations(visibleTasks) {
   const operations = byId("dashboardOperations");
   const workload = byId("dashboardWorkload");
   const workloadDepartmentFilter = byId("dashboardWorkloadDepartmentFilter");
   if (!operations || !workload || !workloadDepartmentFilter) return;
+  document.querySelectorAll("[data-dashboard-workload-view]").forEach((button) => {
+    const active = button.dataset.dashboardWorkloadView === dashboardWorkloadView;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
   const { actionable, rows: operationRows } = dashboardOperationRows(visibleTasks);
   operations.classList.toggle("empty-state", !actionable.length);
   operations.innerHTML = actionable.length
@@ -11136,45 +11487,791 @@ function renderDashboardOperations(visibleTasks) {
         </button>
       `).join("")
     : "Không có công việc đang mở trong phạm vi được xem.";
-  const byPerson = new Map();
-  actionable.forEach((task) => {
+
+  const reportTasks = dashboardTasksForPeriod(state.activePeriod);
+  const departmentOptions = dashboardWorkloadDepartmentOptions(reportTasks);
+  fillSelect(workloadDepartmentFilter, [{ value: "", label: "Tất cả phòng" }, ...departmentOptions], dashboardWorkloadDepartmentFilter);
+  dashboardWorkloadDepartmentFilter = workloadDepartmentFilter.value;
+  const selectedDepartment = dashboardWorkloadDepartmentFilter ? departmentById(dashboardWorkloadDepartmentFilter) : null;
+  const scopedTasks = dashboardWorkloadScopedTasks(reportTasks);
+  const rows = dashboardWorkloadView === "people"
+    ? dashboardWorkloadPeopleRows(reportTasks)
+    : dashboardWorkloadProjectRows(reportTasks);
+  byId("dashboardWorkloadSummary").textContent = dashboardWorkloadSummary(scopedTasks, selectedDepartment);
+  workload.classList.toggle("empty-state", !rows.length);
+  workload.classList.toggle("is-projects", dashboardWorkloadView === "projects");
+  workload.classList.toggle("is-people", dashboardWorkloadView === "people");
+  workload.innerHTML = rows.length
+    ? `${dashboardWorkloadTableHead()}${rows.map((row) => {
+      if (dashboardWorkloadView === "projects") {
+        const departments = row.departments.length ? row.departments.join(", ") : "Chưa xác định phòng";
+        return `
+          <button class="dashboard-workload-row dashboard-link" data-dashboard-project-workload="${escapeHtml(row.key)}" type="button" aria-label="Xem công việc dự án ${escapeHtml(row.name)}">
+            <span class="dashboard-workload-primary"><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(departments)}</small></span>
+            <span data-dashboard-workload-label="Hôm nay">${row.dailyTasks.length} việc / <b>${row.dailyApproved} đạt</b></span>
+            <span data-dashboard-workload-label="Cả tuần">${row.weeklyTasks.length} việc / <b>${row.weeklyApproved} đạt</b></span>
+            <span data-dashboard-workload-label="Cán bộ">${row.participants} cán bộ</span>
+            <span data-dashboard-workload-label="Quá hạn" class="${row.overdue ? "is-danger" : ""}">${row.overdue} việc</span>
+          </button>
+        `;
+      }
+      const department = departmentById(row.person.departmentId)?.name || "Chưa cập nhật phòng";
+      return `
+        <button class="dashboard-workload-row dashboard-link" data-dashboard-person-tasks="${escapeHtml(row.person.id)}" type="button" aria-label="Xem công việc của ${escapeHtml(row.person.name)}">
+          <span class="dashboard-workload-primary"><strong>${escapeHtml(row.person.name)}</strong><small>${escapeHtml(department)}</small></span>
+          <span data-dashboard-workload-label="Hôm nay">${row.dailyTasks.length} việc / <b>${row.dailyApproved} đạt</b></span>
+          <span data-dashboard-workload-label="Cả tuần">${row.weeklyTasks.length} việc / <b>${row.weeklyApproved} đạt</b></span>
+          <span data-dashboard-workload-label="Dự án">${row.projects} dự án</span>
+          <span data-dashboard-workload-label="Quá hạn" class="${row.overdue ? "is-danger" : ""}">${row.overdue} việc</span>
+        </button>
+      `;
+    }).join("")}`
+    : selectedDepartment
+      ? `Chưa có công việc theo hạn hoàn thành của ${escapeHtml(selectedDepartment.name)} trong phạm vi được xem.`
+      : "Chưa có công việc theo hạn hoàn thành trong phạm vi được xem.";
+}
+
+function openDashboardWorkloadProjectTasks(projectKey) {
+  if (!projectKey || !canAccessView("tasks")) return;
+  const row = dashboardWorkloadProjectRows(dashboardTasksForPeriod()).find((item) => item.key === projectKey);
+  if (!row) return;
+  const tasks = dashboardWorkloadPeriod === "week" ? row.weeklyTasks : row.dailyTasks;
+  const rangeLabel = dashboardWorkloadPeriod === "week" ? "tuần này" : "hôm nay";
+  openTaskStatusDetailDialog("", {
+    tasks,
+    title: `Công việc dự án: ${row.name}`,
+    subtitle: `Công việc có hạn hoàn thành ${rangeLabel} trong phạm vi được xem.`,
+    contextHtml: dashboardTaskContextHtml(tasks, [
+      `<span><strong>${tasks.filter(taskCompletionIsApproved).length}</strong> hoàn thành Đạt</span>`,
+      `<span><strong>${tasks.filter((task) => getDueStatus(task) === "Quá hạn").length}</strong> quá hạn</span>`,
+      `<span><strong>${row.participants}</strong> cán bộ tham gia</span>`,
+    ]),
+  });
+}
+
+function dashboardAnalyticsNumber(value) {
+  return Math.max(0, Number(value) || 0);
+}
+
+function dashboardAnalyticsPercent(value, total) {
+  const divisor = dashboardAnalyticsNumber(total);
+  return divisor ? clamp((dashboardAnalyticsNumber(value) / divisor) * 100, 0, 100) : 0;
+}
+
+function dashboardAnalyticsOpenTask(task) {
+  return !taskCompletionIsApproved(task) && !taskCompletionNeedsReview(task) && normalizeTaskStatus(task?.status) !== TASK_STATUS_CLOSED;
+}
+
+function dashboardAnalyticsInProgressTask(task) {
+  return dashboardAnalyticsOpenTask(task) && normalizeTaskStatus(task?.status) !== TASK_STATUS_PREPARING;
+}
+
+function dashboardAnalyticsTrendBuckets(tasks, scope = currentTaskDisplayScope()) {
+  const normalizedScope = normalizeTaskDisplayScope(scope);
+  const currentPeriod = taskDisplayScopePeriod();
+  let buckets = [];
+  if (normalizedScope === "all") {
+    const cursor = new Date(`${currentPeriod}-01T12:00:00`);
+    buckets = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date(cursor.getFullYear(), cursor.getMonth() - (5 - index), 1, 12);
+      const period = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      return {
+        id: period,
+        label: formatMonthPeriod(period),
+        matches: (task) => taskPeriod(task) === period,
+      };
+    });
+  } else {
+    const [year, month] = currentPeriod.split("-").map(Number);
+    const lastDay = daysInMonth(year, month - 1);
+    const ranges = [[1, 7], [8, 14], [15, 21], [22, lastDay]];
+    buckets = ranges.map(([from, to], index) => ({
+      id: `${currentPeriod}-${index + 1}`,
+      label: `Tuần ${index + 1}`,
+      matches: (task) => {
+        if (taskPeriod(task) !== currentPeriod) return false;
+        const day = Number(String(task?.due || "").slice(8, 10));
+        return day >= from && day <= to;
+      },
+    }));
+  }
+  return buckets.map((bucket) => {
+    const items = tasks.filter(bucket.matches);
+    const approved = items.filter(taskCompletionIsApproved).length;
+    const pending = items.filter(taskCompletionNeedsReview).length;
+    return {
+      ...bucket,
+      total: items.length,
+      approved,
+      pending,
+      remaining: Math.max(0, items.length - approved - pending),
+    };
+  });
+}
+
+function dashboardAnalyticsOverdueAgeRows(tasks, now = new Date()) {
+  const rows = [
+    { id: "1-3", label: "1-3 ngày", value: 0, tone: "warning" },
+    { id: "4-7", label: "4-7 ngày", value: 0, tone: "warning" },
+    { id: "8-14", label: "8-14 ngày", value: 0, tone: "danger" },
+    { id: "over-14", label: "Trên 14 ngày", value: 0, tone: "danger" },
+  ];
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  tasks
+    .filter((task) => getDueStatus(task) === "Quá hạn")
+    .forEach((task) => {
+      const deadline = taskDeadlineDate(task)?.getTime();
+      if (!deadline) return;
+      const days = Math.max(1, Math.floor((startOfToday - deadline) / 86400000) + 1);
+      const row = days <= 3 ? rows[0] : days <= 7 ? rows[1] : days <= 14 ? rows[2] : rows[3];
+      row.value += 1;
+    });
+  return rows;
+}
+
+function dashboardAnalyticsTaskStatusRows(tasks) {
+  return [
+    { id: "preparing", label: "Chuẩn bị", value: tasks.filter((task) => normalizeTaskStatus(task.status) === TASK_STATUS_PREPARING && getDueStatus(task) !== "Quá hạn").length, tone: "neutral" },
+    { id: "active", label: "Đang thực hiện", value: tasks.filter((task) => dashboardAnalyticsInProgressTask(task) && getDueStatus(task) !== "Quá hạn").length, tone: "primary" },
+    { id: "pending", label: "Chờ phê duyệt", value: tasks.filter(taskCompletionNeedsReview).length, tone: "warning" },
+    { id: "approved", label: "Hoàn thành đạt", value: tasks.filter(taskCompletionIsApproved).length, tone: "success" },
+    { id: "overdue", label: "Quá hạn", value: tasks.filter((task) => getDueStatus(task) === "Quá hạn").length, tone: "danger" },
+  ];
+}
+
+function dashboardAnalyticsWorkloadRows(tasks) {
+  const rowsByPerson = new Map();
+  tasks.forEach((task) => {
+    if (taskCompletionIsApproved(task)) return;
     taskParticipantIds(task).forEach((personId) => {
       const person = personById(personId);
       if (!person) return;
-      const row = byPerson.get(personId) || { person, total: 0, overdue: 0, blocked: 0 };
+      const row = rowsByPerson.get(personId) || { person, total: 0, active: 0, pending: 0, overdue: 0, blocked: 0 };
       row.total += 1;
-      if (getDueStatus(task) === "Quá hạn") row.overdue += 1;
+      if (taskCompletionNeedsReview(task)) row.pending += 1;
+      else if (getDueStatus(task) === "Quá hạn") row.overdue += 1;
+      else row.active += 1;
       if (taskHasOpenBlocker(task)) row.blocked += 1;
-      byPerson.set(personId, row);
+      rowsByPerson.set(personId, row);
     });
   });
-  const rows = [...byPerson.values()]
-    .sort((left, right) => right.overdue - left.overdue || right.blocked - left.blocked || right.total - left.total || left.person.name.localeCompare(right.person.name, "vi"))
-  const departmentOptions = dashboardDepartmentFilterOptions(rows.map((row) => row.person));
-  fillSelect(workloadDepartmentFilter, [{ value: "", label: "Tất cả phòng" }, ...departmentOptions], dashboardWorkloadDepartmentFilter);
-  dashboardWorkloadDepartmentFilter = workloadDepartmentFilter.value;
-  const selectedDepartment = dashboardWorkloadDepartmentFilter
-    ? departmentById(dashboardWorkloadDepartmentFilter)
-    : null;
-  const filteredRows = selectedDepartment
-    ? rows.filter((row) => row.person.departmentId === selectedDepartment.id)
-    : rows;
-  byId("dashboardWorkloadSummary").textContent = filteredRows.length
-    ? `${filteredRows.length} nhân sự${selectedDepartment ? ` phòng ${selectedDepartment.name}` : ""} có công việc đang mở.`
-    : "Chưa có nhân sự có công việc đang mở.";
-  workload.classList.toggle("empty-state", !filteredRows.length);
-  workload.innerHTML = filteredRows.length
-    ? filteredRows.map((row) => `
-        <button class="dashboard-workload-row dashboard-link" data-dashboard-person-tasks="${escapeHtml(row.person.id)}" type="button" aria-label="Xem công việc của ${escapeHtml(row.person.name)}">
+  return [...rowsByPerson.values()]
+    .sort((left, right) => right.overdue - left.overdue || right.blocked - left.blocked || right.total - left.total || left.person.name.localeCompare(right.person.name, "vi"));
+}
+
+function dashboardAnalyticsTasksForDepartment(tasks, departmentId = "") {
+  return departmentId ? tasks.filter((task) => taskHasParticipantInDepartment(task, departmentId)) : tasks;
+}
+
+function dashboardAnalyticsKpiRows(context, departmentId = "") {
+  return dashboardKpiSummaryRows(state.activePeriod)
+    .filter(({ person }) => !departmentId || person.departmentId === departmentId)
+    .map(({ person, evaluation }) => {
+      const criteria = Object.values(evaluation?.criteriaScores || {});
+      return {
+        person,
+        plan: criteria.reduce((sum, item) => sum + dashboardAnalyticsNumber(item?.plan), 0),
+        actual: criteria.reduce((sum, item) => sum + dashboardAnalyticsNumber(item?.actual), 0),
+        score: hasRecordedKpiResult(evaluation) ? kpiResultScore(evaluation) : 0,
+      };
+    })
+    .filter((row) => row.plan > 0 || row.actual > 0 || row.score > 0)
+    .sort((left, right) => right.plan - left.plan || right.actual - left.actual || left.person.name.localeCompare(right.person.name, "vi"));
+}
+
+function dashboardAnalyticsCategoryRows(tasks) {
+  const counts = new Map();
+  tasks.forEach((task) => {
+    const category = String(task?.category || "").trim() || "Chưa phân loại";
+    counts.set(category, (counts.get(category) || 0) + 1);
+  });
+  const rows = [...counts.entries()]
+    .map(([label, value]) => ({ label, value, tone: "primary" }))
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, "vi"));
+  if (rows.length <= 6) return rows;
+  const visibleRows = rows.slice(0, 5);
+  visibleRows.push({ label: "Danh mục khác", value: rows.slice(5).reduce((sum, row) => sum + row.value, 0), tone: "neutral" });
+  return visibleRows;
+}
+
+function dashboardAnalyticsDepartmentRows(tasks) {
+  return visibleDepartmentsForDepartmentEvaluations().map((department) => {
+    const departmentTasks = tasks.filter((task) => taskHasParticipantInDepartment(task, department.id));
+    const approvedTasks = departmentTasks.filter(taskCompletionIsApproved);
+    const onTime = approvedTasks.filter((task) => !taskIsLateCompletion(task));
+    const pending = departmentTasks.filter(taskCompletionNeedsReview).length;
+    const overdue = departmentTasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
+    const active = departmentTasks.filter((task) => dashboardAnalyticsInProgressTask(task) && getDueStatus(task) !== "Quá hạn").length;
+    return {
+      department,
+      tasks: departmentTasks,
+      total: departmentTasks.length,
+      approved: approvedTasks.length,
+      onTime: onTime.length,
+      pending,
+      overdue,
+      active,
+      completionRate: dashboardAnalyticsPercent(approvedTasks.length, departmentTasks.length),
+      onTimeRate: dashboardAnalyticsPercent(onTime.length, departmentTasks.length),
+    };
+  });
+}
+
+function dashboardAnalyticsRoleGroup(person) {
+  const roleName = String(roleById(person?.roleId)?.name || "").toLocaleLowerCase("vi");
+  if (roleName.includes("trưởng phòng") || roleName.includes("phó phòng")) return "Lãnh đạo phòng";
+  if (roleName.includes("trưởng bộ phận") || roleName.includes("trưởng nhóm")) return "Trưởng BP/Nhóm";
+  if (roleName.includes("tổ trưởng")) return "Tổ trưởng";
+  return "Nhân viên";
+}
+
+function dashboardAnalyticsHeatmapRows(tasks, departmentRows = dashboardAnalyticsDepartmentRows(tasks)) {
+  const groups = ["Nhân viên", "Tổ trưởng", "Trưởng BP/Nhóm", "Lãnh đạo phòng"];
+  return departmentRows.map((row) => {
+    const values = Object.fromEntries(groups.map((group) => [group, 0]));
+    row.tasks.forEach((task) => {
+      if (!dashboardAnalyticsOpenTask(task) && !taskCompletionNeedsReview(task)) return;
+      taskParticipantIds(task).forEach((personId) => {
+        const person = personById(personId);
+        if (person?.departmentId !== row.department.id) return;
+        const group = dashboardAnalyticsRoleGroup(person);
+        values[group] += 1;
+      });
+    });
+    return { ...row, values };
+  });
+}
+
+function dashboardAnalyticsBarRowsHtml(rows, emptyText) {
+  const availableRows = rows.filter((row) => dashboardAnalyticsNumber(row.value) > 0);
+  if (!availableRows.length) return `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
+  const max = Math.max(...availableRows.map((row) => dashboardAnalyticsNumber(row.value)), 1);
+  return availableRows.map((row) => {
+    const value = dashboardAnalyticsNumber(row.value);
+    const width = clamp((value / max) * 100, 2, 100);
+    return `
+      <div class="dashboard-analytics-bar-row">
+        <span>${escapeHtml(row.label)}</span>
+        <div class="dashboard-analytics-bar-track" aria-label="${escapeHtml(row.label)}: ${formatScore(value)} công việc">
+          <span class="dashboard-analytics-bar is-${escapeHtml(row.tone || "primary")}" style="--dashboard-chart-size:${formatScore(width)}%"></span>
+        </div>
+        <strong>${formatScore(value)}</strong>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderDashboardAnalyticsTrend(tasks) {
+  const rows = dashboardAnalyticsTrendBuckets(tasks);
+  const chart = byId("dashboardTrendChart");
+  const note = byId("dashboardTrendNote");
+  if (!chart || !note) return;
+  note.textContent = currentTaskDisplayScope() === "all" ? "Theo 6 tháng gần nhất" : `Theo tuần ${formatMonthPeriod(currentMonth())}`;
+  if (!rows.some((row) => row.total)) {
+    chart.classList.add("empty-state");
+    chart.textContent = "Chưa có công việc theo mốc hoàn thành trong phạm vi được xem.";
+    return;
+  }
+  const max = Math.max(...rows.flatMap((row) => [row.total, row.approved, row.remaining]), 1);
+  chart.classList.remove("empty-state");
+  chart.innerHTML = `
+    <div class="dashboard-trend-legend">
+      <span><i class="is-plan"></i>Kế hoạch</span>
+      <span><i class="is-approved"></i>Hoàn thành đạt</span>
+      <span><i class="is-remaining"></i>Chưa đạt</span>
+    </div>
+    <div class="dashboard-trend-columns">
+      ${rows.map((row) => `
+        <div class="dashboard-trend-column">
+          <div class="dashboard-trend-bars" aria-label="${escapeHtml(row.label)}: ${row.total} kế hoạch, ${row.approved} hoàn thành đạt, ${row.remaining} chưa đạt">
+            <span class="is-plan" style="--dashboard-chart-size:${formatScore(clamp((row.total / max) * 100, 0, 100))}%"><b>${row.total}</b></span>
+            <span class="is-approved" style="--dashboard-chart-size:${formatScore(clamp((row.approved / max) * 100, 0, 100))}%"><b>${row.approved}</b></span>
+            <span class="is-remaining" style="--dashboard-chart-size:${formatScore(clamp((row.remaining / max) * 100, 0, 100))}%"><b>${row.remaining}</b></span>
+          </div>
+          <strong>${escapeHtml(row.label)}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderDashboardAnalyticsFunnel(tasks) {
+  const chart = byId("dashboardFunnelChart");
+  if (!chart) return;
+  const total = tasks.length;
+  if (!total) {
+    chart.classList.add("empty-state");
+    chart.textContent = "Chưa có dữ liệu công việc trong phạm vi được xem.";
+    return;
+  }
+  const rows = [
+    { label: "Tổng kế hoạch", value: total, tone: "neutral" },
+    { label: "Chuẩn bị thực hiện", value: tasks.filter((task) => normalizeTaskStatus(task.status) === TASK_STATUS_PREPARING && getDueStatus(task) !== "Quá hạn").length, tone: "neutral" },
+    { label: "Đang xử lý", value: tasks.filter(dashboardAnalyticsInProgressTask).length, tone: "primary" },
+    { label: "Chờ phê duyệt", value: tasks.filter(taskCompletionNeedsReview).length, tone: "warning" },
+    { label: "Hoàn thành đạt", value: tasks.filter(taskCompletionIsApproved).length, tone: "success" },
+  ];
+  chart.classList.remove("empty-state");
+  chart.innerHTML = rows.map((row) => `
+    <div class="dashboard-funnel-row">
+      <span>${escapeHtml(row.label)}</span>
+      <div class="dashboard-funnel-track" aria-label="${escapeHtml(row.label)}: ${row.value} công việc">
+        <span class="is-${row.tone}" style="--dashboard-chart-size:${formatScore(dashboardAnalyticsPercent(row.value, total))}%"></span>
+      </div>
+      <strong>${formatScore(row.value)}</strong>
+    </div>
+  `).join("");
+}
+
+function renderDashboardAnalyticsPeople(tasks, kpiContext) {
+  const selectedDepartmentId = departmentById(dashboardWorkloadDepartmentFilter)?.id || "";
+  const selectedDepartment = selectedDepartmentId ? departmentById(selectedDepartmentId) : null;
+  const scopedTasks = dashboardAnalyticsTasksForDepartment(tasks, selectedDepartmentId);
+  const workloadRows = dashboardAnalyticsWorkloadRows(scopedTasks);
+  const workloadChart = byId("dashboardPersonLoadChart");
+  const workloadNote = byId("dashboardPersonLoadNote");
+  if (workloadNote) workloadNote.textContent = selectedDepartment ? selectedDepartment.name : "Toàn Ban";
+  if (workloadChart) {
+    if (!workloadRows.length) {
+      workloadChart.classList.add("empty-state");
+      workloadChart.textContent = "Chưa có nhân sự có công việc đang mở trong phạm vi được xem.";
+    } else {
+      const visibleRows = workloadRows.slice(0, 10);
+      const max = Math.max(...visibleRows.map((row) => row.total), 1);
+      workloadChart.classList.remove("empty-state");
+      workloadChart.innerHTML = visibleRows.map((row) => `
+        <div class="dashboard-person-load-row">
           <strong>${escapeHtml(row.person.name)}</strong>
-          <span>${row.total} việc liên quan</span>
-          <span class="${row.blocked ? "is-warning" : ""}">${row.blocked} trở ngại</span>
-          <span class="${row.overdue ? "is-danger" : ""}">${row.overdue} quá hạn</span>
+          <div class="dashboard-person-load-track" aria-label="${escapeHtml(row.person.name)}: ${row.active} đang xử lý, ${row.pending} chờ phê duyệt, ${row.overdue} quá hạn">
+            <span class="is-primary" style="--dashboard-chart-size:${formatScore((row.active / max) * 100)}%"></span>
+            <span class="is-warning" style="--dashboard-chart-size:${formatScore((row.pending / max) * 100)}%"></span>
+            <span class="is-danger" style="--dashboard-chart-size:${formatScore((row.overdue / max) * 100)}%"></span>
+          </div>
+          <span>${row.total} việc mở</span>
+        </div>
+      `).join("");
+    }
+  }
+
+  const kpiRows = dashboardAnalyticsKpiRows(kpiContext, selectedDepartmentId).slice(0, 8);
+  const kpiChart = byId("dashboardPersonalKpiChart");
+  if (kpiChart) {
+    if (!kpiRows.length) {
+      kpiChart.classList.add("empty-state");
+      kpiChart.textContent = "Chưa có chỉ số kế hoạch và thực hiện KPI trong kỳ đánh giá.";
+    } else {
+      const max = Math.max(...kpiRows.flatMap((row) => [row.plan, row.actual]), 1);
+      kpiChart.classList.remove("empty-state");
+      kpiChart.innerHTML = kpiRows.map((row) => `
+        <div class="dashboard-kpi-comparison-row">
+          <strong>${escapeHtml(row.person.name)}</strong>
+          <div class="dashboard-kpi-comparison-bars" aria-label="${escapeHtml(row.person.name)}: kế hoạch ${formatScore(row.plan)}, thực hiện ${formatScore(row.actual)}">
+            <div class="dashboard-comparison-value-row is-plan">
+              <span class="dashboard-comparison-value-label"><em>Kế hoạch</em><b>${formatScore(row.plan)}</b></span>
+              <span class="dashboard-comparison-track" aria-hidden="true"><span class="is-plan" style="--dashboard-chart-size:${formatScore((row.plan / max) * 100)}%"></span></span>
+            </div>
+            <div class="dashboard-comparison-value-row is-actual">
+              <span class="dashboard-comparison-value-label"><em>Thực hiện</em><b>${formatScore(row.actual)}</b></span>
+              <span class="dashboard-comparison-track" aria-hidden="true"><span class="is-actual" style="--dashboard-chart-size:${formatScore((row.actual / max) * 100)}%"></span></span>
+            </div>
+          </div>
+        </div>
+      `).join("");
+    }
+  }
+
+  const categoryChart = byId("dashboardKpiCategoryChart");
+  if (categoryChart) {
+    const rows = dashboardAnalyticsCategoryRows(scopedTasks);
+    categoryChart.classList.toggle("empty-state", !rows.length);
+    categoryChart.innerHTML = rows.length
+      ? dashboardAnalyticsBarRowsHtml(rows, "Chưa có danh mục KPI trong phạm vi được xem.")
+      : "Chưa có danh mục KPI trong phạm vi được xem.";
+  }
+
+  const attentionChart = byId("dashboardAttentionChart");
+  if (attentionChart) {
+    const rows = workloadRows
+      .filter((row) => row.total > 0)
+      .map((row) => ({ ...row, overdueRate: dashboardAnalyticsPercent(row.overdue, row.total) }))
+      .sort((left, right) => right.overdueRate - left.overdueRate || right.total - left.total || left.person.name.localeCompare(right.person.name, "vi"))
+      .slice(0, 8);
+    if (!rows.length) {
+      attentionChart.classList.add("empty-state");
+      attentionChart.textContent = "Không có nhân sự có việc cần theo dõi.";
+    } else {
+      attentionChart.classList.remove("empty-state");
+      attentionChart.innerHTML = rows.map((row) => `
+        <div class="dashboard-attention-row">
+          <strong>${escapeHtml(row.person.name)}</strong>
+          <div class="dashboard-attention-track" aria-label="${escapeHtml(row.person.name)}: ${formatScore(row.overdueRate)}% việc mở quá hạn">
+            <span class="${row.overdueRate >= 50 ? "is-danger" : "is-warning"}" style="--dashboard-chart-size:${formatScore(row.overdueRate)}%"></span>
+          </div>
+          <span>${formatScore(row.overdueRate)}%</span>
+        </div>
+      `).join("");
+    }
+  }
+}
+
+function dashboardAnalyticsProjectRows(tasks, departmentId = "") {
+  const scopedTasks = dashboardAnalyticsTasksForDepartment(tasks, departmentId);
+  const rowsByProject = new Map();
+  scopedTasks.forEach((task) => {
+    const key = dashboardWorkloadProjectKey(task);
+    const row = rowsByProject.get(key) || {
+      key,
+      name: dashboardWorkloadProjectName(task),
+      tasks: [],
+    };
+    row.tasks.push(task);
+    rowsByProject.set(key, row);
+  });
+  return [...rowsByProject.values()]
+    .map((row) => {
+      const approvedTasks = row.tasks.filter(taskCompletionIsApproved);
+      const onTime = approvedTasks.filter((task) => !taskIsLateCompletion(task)).length;
+      const people = uniquePersonIds(row.tasks.flatMap(taskParticipantIds))
+        .filter((personId) => !departmentId || personById(personId)?.departmentId === departmentId);
+      const pending = row.tasks.filter(taskCompletionNeedsReview).length;
+      const overdue = row.tasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
+      const active = row.tasks.filter((task) => dashboardAnalyticsOpenTask(task) && getDueStatus(task) !== "Quá hạn").length;
+      return {
+        ...row,
+        total: row.tasks.length,
+        approved: approvedTasks.length,
+        pending,
+        overdue,
+        active,
+        people: people.length,
+        completionRate: dashboardAnalyticsPercent(approvedTasks.length, row.tasks.length),
+        onTimeRate: dashboardAnalyticsPercent(onTime, approvedTasks.length),
+      };
+    })
+    .sort((left, right) => right.total - left.total || right.overdue - left.overdue || left.name.localeCompare(right.name, "vi"));
+}
+
+function dashboardProjectTimelineStatus(tasks) {
+  const overdue = tasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
+  if (overdue) return { tone: "is-overdue", label: "Quá hạn", value: overdue };
+  const pending = tasks.filter(taskCompletionNeedsReview).length;
+  if (pending) return { tone: "is-risk", label: "Chờ duyệt", value: pending };
+  const active = tasks.filter(dashboardAnalyticsOpenTask).length;
+  if (active) return { tone: "is-active", label: "Đang xử lý", value: active };
+  const approved = tasks.filter(taskCompletionIsApproved).length;
+  return approved
+    ? { tone: "is-complete", label: "Đã đạt", value: approved }
+    : { tone: "is-none", label: "-", value: 0 };
+}
+
+function dashboardProjectTrendSvg(buckets) {
+  const width = 720;
+  const height = 236;
+  const left = 54;
+  const right = 694;
+  const top = 24;
+  const bottom = 184;
+  const max = Math.max(...buckets.flatMap((bucket) => [bucket.total, bucket.approved]), 1);
+  const xAt = (index) => buckets.length > 1 ? left + ((right - left) * index) / (buckets.length - 1) : (left + right) / 2;
+  const yAt = (value) => bottom - ((bottom - top) * value) / max;
+  const pathFor = (key) => buckets.map((bucket, index) => `${index ? "L" : "M"}${formatScore(xAt(index))} ${formatScore(yAt(bucket[key]))}`).join(" ");
+  const points = (key, tone) => buckets.map((bucket, index) => `<circle class="dashboard-project-trend-point ${tone}" cx="${formatScore(xAt(index))}" cy="${formatScore(yAt(bucket[key]))}" r="4"></circle>`).join("");
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const y = bottom - ((bottom - top) * ratio);
+    return `<line class="dashboard-project-trend-grid" x1="${left}" x2="${right}" y1="${formatScore(y)}" y2="${formatScore(y)}"></line><text class="dashboard-project-trend-axis" x="${left - 10}" y="${formatScore(y + 4)}" text-anchor="end">${formatScore(max * ratio)}</text>`;
+  }).join("");
+  const labels = buckets.map((bucket, index) => `<text class="dashboard-project-trend-axis" x="${formatScore(xAt(index))}" y="${bottom + 28}" text-anchor="middle">${escapeHtml(bucket.label)}</text>`).join("");
+  return `<svg class="dashboard-project-trend-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Đường kế hoạch và hoàn thành theo từng mốc"><g>${grid}</g><path class="dashboard-project-trend-line is-plan" d="${pathFor("total")}"></path><path class="dashboard-project-trend-line is-complete" d="${pathFor("approved")}"></path>${points("total", "is-plan")}${points("approved", "is-complete")}${labels}</svg>`;
+}
+
+function renderDashboardAnalyticsProjects(tasks) {
+  const selectedDepartmentId = departmentById(dashboardWorkloadDepartmentFilter)?.id || "";
+  const selectedDepartment = selectedDepartmentId ? departmentById(selectedDepartmentId) : null;
+  const rows = dashboardAnalyticsProjectRows(tasks, selectedDepartmentId);
+  const contextLabel = selectedDepartment ? selectedDepartment.name : "Toàn Ban";
+  const healthNote = byId("dashboardProjectHealthNote");
+  if (healthNote) healthNote.textContent = contextLabel;
+
+  const healthChart = byId("dashboardProjectHealthChart");
+  if (healthChart) {
+    if (!rows.length) {
+      healthChart.classList.add("empty-state");
+      healthChart.textContent = "Chưa có công việc gắn dự án trong phạm vi được xem.";
+    } else {
+      healthChart.classList.remove("empty-state");
+      healthChart.innerHTML = rows.map((row) => `
+        <button class="dashboard-project-health-row dashboard-link" data-dashboard-project-analytics="${escapeHtml(row.key)}" type="button" aria-label="Xem sức khỏe dự án ${escapeHtml(row.name)}">
+          <span class="dashboard-project-health-name"><strong>${escapeHtml(row.name)}</strong><small>${row.people} cán bộ tham gia</small></span>
+          <span class="dashboard-project-health-progress"><span><b>Hoàn thành đạt</b><strong>${row.approved}/${row.total} việc (${formatScore(row.completionRate)}%)</strong></span><span class="dashboard-project-health-track" aria-label="${escapeHtml(row.name)}: ${row.approved} hoàn thành đạt, ${row.pending} chờ duyệt, ${row.active} đang thực hiện, ${row.overdue} quá hạn"><i class="is-complete" style="--dashboard-project-size:${formatScore(dashboardAnalyticsPercent(row.approved, row.total))}%"></i><i class="is-pending" style="--dashboard-project-size:${formatScore(dashboardAnalyticsPercent(row.pending, row.total))}%"></i><i class="is-active" style="--dashboard-project-size:${formatScore(dashboardAnalyticsPercent(row.active, row.total))}%"></i><i class="is-overdue" style="--dashboard-project-size:${formatScore(dashboardAnalyticsPercent(row.overdue, row.total))}%"></i></span></span>
+          <span class="dashboard-project-health-metrics"><span class="is-good">Đúng hạn<b>${row.approved ? `${formatScore(row.onTimeRate)}%` : "-"}</b></span><span>Đang mở<b>${row.active + row.pending + row.overdue} việc</b></span><span>Chờ duyệt<b>${row.pending} việc</b></span><span class="is-overdue">Quá hạn<b>${row.overdue} việc</b></span></span>
         </button>
-      `).join("")
-    : selectedDepartment
-      ? `Chưa có nhân sự phòng ${escapeHtml(selectedDepartment.name)} có công việc đang mở.`
-      : "Chưa có dữ liệu tải việc.";
+      `).join("");
+    }
+  }
+
+  const trendChart = byId("dashboardProjectTrendChart");
+  const trendNote = byId("dashboardProjectTrendNote");
+  const trendFilter = byId("dashboardProjectTrendFilter");
+  if (trendChart) {
+    if (!rows.length) {
+      dashboardProjectTrendKey = "";
+      if (trendFilter) {
+        fillSelect(trendFilter, [], "", "Chưa có dự án");
+        trendFilter.disabled = true;
+      }
+      if (trendNote) trendNote.textContent = `${contextLabel} - chưa có dữ liệu tiến độ theo dự án`;
+      trendChart.classList.add("empty-state");
+      trendChart.textContent = "Chưa có dữ liệu tiến độ theo dự án.";
+    } else {
+      dashboardProjectTrendKey = rows.some((row) => row.key === dashboardProjectTrendKey) ? dashboardProjectTrendKey : rows[0].key;
+      if (trendFilter) {
+        trendFilter.disabled = false;
+        fillSelect(trendFilter, rows.map((row) => ({ value: row.key, label: row.name })), dashboardProjectTrendKey);
+        dashboardProjectTrendKey = trendFilter.value || rows[0].key;
+      }
+      const selectedTrendRow = rows.find((row) => row.key === dashboardProjectTrendKey) || rows[0];
+      const buckets = dashboardAnalyticsTrendBuckets(selectedTrendRow.tasks);
+      const planned = buckets.reduce((sum, bucket) => sum + bucket.total, 0);
+      if (trendNote) trendNote.textContent = `${contextLabel} - ${selectedTrendRow.name}: ${selectedTrendRow.approved}/${planned} việc hoàn thành đạt theo hạn hoàn thành`;
+      trendChart.classList.remove("empty-state");
+      trendChart.innerHTML = `<div class="dashboard-project-trend-legend"><span><i class="is-plan"></i>Kế hoạch theo hạn hoàn thành</span><span><i class="is-complete"></i>Hoàn thành đạt</span></div>${dashboardProjectTrendSvg(buckets)}`;
+    }
+  }
+
+  const timelineChart = byId("dashboardProjectTimelineChart");
+  const timelineNote = byId("dashboardProjectTimelineNote");
+  const timelineBuckets = dashboardAnalyticsTrendBuckets(tasks);
+  if (timelineNote) timelineNote.textContent = `${contextLabel} - bấm một ô để xem danh sách công việc`;
+  if (timelineChart) {
+    if (!rows.length || !timelineBuckets.length) {
+      timelineChart.classList.add("empty-state");
+      timelineChart.textContent = "Chưa có mốc công việc theo dự án trong phạm vi được xem.";
+    } else {
+      timelineChart.classList.remove("empty-state");
+      timelineChart.innerHTML = `<div class="dashboard-project-timeline-grid" style="--dashboard-project-timeline-columns:${timelineBuckets.length}"><div class="dashboard-project-timeline-head"><span>Dự án / mốc</span>${timelineBuckets.map((bucket) => `<span>${escapeHtml(bucket.label)}</span>`).join("")}</div>${rows.map((row) => `<div class="dashboard-project-timeline-row"><span class="dashboard-project-timeline-name"><strong>${escapeHtml(row.name)}</strong><small>${row.overdue ? `${row.overdue} việc quá hạn` : `${row.active + row.pending} việc đang xử lý`}</small></span>${timelineBuckets.map((bucket) => { const bucketTasks = row.tasks.filter(bucket.matches); const status = dashboardProjectTimelineStatus(bucketTasks); return `<button class="dashboard-project-timeline-cell ${status.tone}" data-dashboard-project-timeline="${escapeHtml(row.key)}" data-dashboard-project-bucket="${escapeHtml(bucket.id)}" type="button" aria-label="${escapeHtml(row.name)} - ${escapeHtml(bucket.label)}: ${status.value} ${status.label}">${status.label}</button>`; }).join("")}</div>`).join("")}</div>`;
+    }
+  }
+
+  const resourceChart = byId("dashboardProjectResourceChart");
+  if (resourceChart) {
+    if (!rows.length) {
+      resourceChart.classList.add("empty-state");
+      resourceChart.textContent = "Chưa có dữ liệu nguồn lực theo dự án.";
+    } else {
+      const maxOpen = Math.max(...rows.map((row) => row.active + row.pending + row.overdue), 1);
+      resourceChart.classList.remove("empty-state");
+      resourceChart.innerHTML = `<div class="dashboard-project-resource-head"><span>Dự án</span><span>Khối lượng đang mở</span><span>Cán bộ</span></div>${rows.map((row) => `<button class="dashboard-project-resource-row dashboard-link" data-dashboard-project-analytics="${escapeHtml(row.key)}" type="button" aria-label="Xem nguồn lực dự án ${escapeHtml(row.name)}"><span class="dashboard-project-resource-name"><strong>${escapeHtml(row.name)}</strong><small>${row.active + row.pending + row.overdue} việc đang mở, ${row.overdue} quá hạn</small></span><span class="dashboard-project-resource-track" aria-label="${escapeHtml(row.name)}: ${row.active} đang xử lý, ${row.pending} chờ duyệt, ${row.overdue} quá hạn"><i class="is-active" style="--dashboard-project-size:${formatScore((row.active / maxOpen) * 100)}%"></i><i class="is-pending" style="--dashboard-project-size:${formatScore((row.pending / maxOpen) * 100)}%"></i><i class="is-overdue" style="--dashboard-project-size:${formatScore((row.overdue / maxOpen) * 100)}%"></i></span><span class="dashboard-project-resource-people"><b>${row.people}</b> cán bộ</span></button>`).join("")}`;
+    }
+  }
+}
+
+function openDashboardAnalyticsProjectTasks(projectKey) {
+  if (!projectKey || !canAccessView("tasks")) return;
+  const selectedDepartmentId = departmentById(dashboardWorkloadDepartmentFilter)?.id || "";
+  const row = dashboardAnalyticsProjectRows(dashboardTasksForPeriod(), selectedDepartmentId).find((item) => item.key === projectKey);
+  if (!row) return;
+  openTaskStatusDetailDialog("", {
+    tasks: row.tasks,
+    title: `Công việc dự án: ${row.name}`,
+    subtitle: `Toàn bộ công việc của dự án trong phạm vi ${taskDisplayScopeLabel()}.`,
+    contextHtml: dashboardTaskContextHtml(row.tasks, [
+      `<span><strong>${row.approved}</strong> hoàn thành Đạt</span>`,
+      `<span><strong>${row.pending}</strong> chờ phê duyệt</span>`,
+      `<span><strong>${row.overdue}</strong> quá hạn</span>`,
+      `<span><strong>${row.people}</strong> cán bộ tham gia</span>`,
+    ]),
+  });
+}
+
+function openDashboardAnalyticsProjectTimelineTasks(projectKey, bucketId) {
+  if (!projectKey || !bucketId || !canAccessView("tasks")) return;
+  const selectedDepartmentId = departmentById(dashboardWorkloadDepartmentFilter)?.id || "";
+  const row = dashboardAnalyticsProjectRows(dashboardTasksForPeriod(), selectedDepartmentId).find((item) => item.key === projectKey);
+  const bucket = row ? dashboardAnalyticsTrendBuckets(row.tasks).find((item) => item.id === bucketId) : null;
+  if (!row || !bucket) return;
+  const bucketTasks = row.tasks.filter(bucket.matches);
+  if (!bucketTasks.length) return;
+  const status = dashboardProjectTimelineStatus(bucketTasks);
+  openTaskStatusDetailDialog("", {
+    tasks: bucketTasks,
+    title: `${row.name}: ${bucket.label}`,
+    subtitle: `Mốc theo hạn hoàn thành trong ${taskDisplayScopeLabel()}. Trạng thái ưu tiên: ${status.label}.`,
+    contextHtml: dashboardTaskContextHtml(bucketTasks, [
+      `<span><strong>${bucketTasks.filter(taskCompletionIsApproved).length}</strong> hoàn thành Đạt</span>`,
+      `<span><strong>${bucketTasks.filter(taskCompletionNeedsReview).length}</strong> chờ phê duyệt</span>`,
+      `<span><strong>${bucketTasks.filter((task) => getDueStatus(task) === "Quá hạn").length}</strong> quá hạn</span>`,
+    ]),
+  });
+}
+
+function renderDashboardAnalyticsDepartments(tasks) {
+  const departmentRows = dashboardAnalyticsDepartmentRows(tasks);
+  const comparisonChart = byId("dashboardDepartmentComparisonChart");
+  if (comparisonChart) {
+    if (!departmentRows.length) {
+      comparisonChart.classList.add("empty-state");
+      comparisonChart.textContent = "Chưa có phòng áp dụng KPI để thống kê.";
+    } else {
+      comparisonChart.classList.remove("empty-state");
+      comparisonChart.innerHTML = departmentRows.map((row) => `
+        <div class="dashboard-department-comparison-row">
+          <strong>${escapeHtml(row.department.name)}</strong>
+          <div class="dashboard-department-comparison-bars" aria-label="${escapeHtml(row.department.name)}: ${formatScore(row.completionRate)}% hoàn thành đạt, ${formatScore(row.onTimeRate)}% đúng hạn">
+            <div class="dashboard-comparison-value-row is-success">
+              <span class="dashboard-comparison-value-label"><em>Hoàn thành đạt</em><b>${formatScore(row.completionRate)}%</b></span>
+              <span class="dashboard-comparison-track" aria-hidden="true"><span class="is-success" style="--dashboard-chart-size:${formatScore(row.completionRate)}%"></span></span>
+            </div>
+            <div class="dashboard-comparison-value-row is-primary">
+              <span class="dashboard-comparison-value-label"><em>Đúng hạn</em><b>${formatScore(row.onTimeRate)}%</b></span>
+              <span class="dashboard-comparison-track" aria-hidden="true"><span class="is-primary" style="--dashboard-chart-size:${formatScore(row.onTimeRate)}%"></span></span>
+            </div>
+          </div>
+        </div>
+      `).join("");
+    }
+  }
+
+  const heatmapChart = byId("dashboardHeatmapChart");
+  if (heatmapChart) {
+    const heatmapRows = dashboardAnalyticsHeatmapRows(tasks, departmentRows);
+    const groups = ["Nhân viên", "Tổ trưởng", "Trưởng BP/Nhóm", "Lãnh đạo phòng"];
+    const max = Math.max(...heatmapRows.flatMap((row) => groups.map((group) => row.values[group])), 1);
+    if (!heatmapRows.length) {
+      heatmapChart.classList.add("empty-state");
+      heatmapChart.textContent = "Chưa có phòng áp dụng KPI để thống kê.";
+    } else {
+      heatmapChart.classList.remove("empty-state");
+      heatmapChart.innerHTML = `
+        <div class="dashboard-heatmap-grid" style="--dashboard-heatmap-columns:${groups.length}">
+          <span></span>
+          ${groups.map((group) => `<strong>${escapeHtml(group)}</strong>`).join("")}
+          ${heatmapRows.map((row) => `
+            <strong class="dashboard-heatmap-label">${escapeHtml(row.department.name)}</strong>
+            ${groups.map((group) => {
+              const value = dashboardAnalyticsNumber(row.values[group]);
+              const level = value === 0 ? "is-none" : value / max >= .75 ? "is-critical" : value / max >= .45 ? "is-high" : value / max >= .2 ? "is-mid" : "is-low";
+              return `<span class="dashboard-heatmap-cell ${level}" aria-label="${escapeHtml(row.department.name)} - ${escapeHtml(group)}: ${value} việc mở">${value}</span>`;
+            }).join("")}
+          `).join("")}
+        </div>
+      `;
+    }
+  }
+
+  const backlogChart = byId("dashboardDepartmentBacklogChart");
+  const backlogNote = byId("dashboardDepartmentBacklogNote");
+  const buckets = dashboardAnalyticsTrendBuckets(tasks);
+  if (backlogNote) backlogNote.textContent = currentTaskDisplayScope() === "all" ? "Theo 6 tháng gần nhất" : `Theo tuần ${formatMonthPeriod(currentMonth())}`;
+  if (backlogChart) {
+    const rows = departmentRows
+      .map((row) => ({
+        ...row,
+        values: buckets.map((bucket) => row.tasks.filter((task) => bucket.matches(task) && !taskCompletionIsApproved(task)).length),
+      }))
+      .filter((row) => row.values.some(Boolean))
+      .sort((left, right) => right.values.reduce((sum, value) => sum + value, 0) - left.values.reduce((sum, value) => sum + value, 0))
+      .slice(0, 5);
+    const max = Math.max(...rows.flatMap((row) => row.values), 1);
+    if (!rows.length) {
+      backlogChart.classList.add("empty-state");
+      backlogChart.textContent = "Không có công việc tồn chưa đạt theo mốc hoàn thành.";
+    } else {
+      backlogChart.classList.remove("empty-state");
+      backlogChart.innerHTML = `
+        <div class="dashboard-backlog-axis">${buckets.map((bucket) => `<span>${escapeHtml(bucket.label)}</span>`).join("")}</div>
+        ${rows.map((row) => `
+          <div class="dashboard-backlog-row">
+            <strong>${escapeHtml(row.department.name)}</strong>
+            <div class="dashboard-backlog-bars" aria-label="${escapeHtml(row.department.name)}: ${row.values.join(", ")} việc tồn chưa đạt">
+              ${row.values.map((value) => `<span style="--dashboard-chart-size:${formatScore((value / max) * 100)}%"><b>${value}</b></span>`).join("")}
+            </div>
+          </div>
+        `).join("")}
+      `;
+    }
+  }
+
+  const statusChart = byId("dashboardDepartmentStatusChart");
+  if (statusChart) {
+    const rows = departmentRows.filter((row) => row.active || row.pending || row.overdue);
+    const max = Math.max(...rows.map((row) => row.active + row.pending + row.overdue), 1);
+    if (!rows.length) {
+      statusChart.classList.add("empty-state");
+      statusChart.textContent = "Không có công việc đang mở theo phòng trong phạm vi được xem.";
+    } else {
+      statusChart.classList.remove("empty-state");
+      statusChart.innerHTML = rows.map((row) => `
+        <div class="dashboard-department-status-chart-row">
+          <strong>${escapeHtml(row.department.name)}</strong>
+          <div class="dashboard-department-status-chart-track" aria-label="${escapeHtml(row.department.name)}: ${row.active} đang xử lý, ${row.pending} chờ phê duyệt, ${row.overdue} quá hạn">
+            <span class="is-primary" style="--dashboard-chart-size:${formatScore((row.active / max) * 100)}%"></span>
+            <span class="is-warning" style="--dashboard-chart-size:${formatScore((row.pending / max) * 100)}%"></span>
+            <span class="is-danger" style="--dashboard-chart-size:${formatScore((row.overdue / max) * 100)}%"></span>
+          </div>
+          <span>${row.active + row.pending + row.overdue} việc</span>
+        </div>
+      `).join("");
+    }
+  }
+}
+
+function setDashboardAnalyticsTab(tab) {
+  const allowed = ["operations", "people", "projects", "departments"];
+  dashboardAnalyticsActiveTab = allowed.includes(tab) ? tab : "operations";
+  document.querySelectorAll("[data-dashboard-analytics-tab]").forEach((button) => {
+    const active = button.dataset.dashboardAnalyticsTab === dashboardAnalyticsActiveTab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  ["operations", "people", "projects", "departments"].forEach((id) => {
+    const panel = byId(`dashboardAnalytics${id[0].toUpperCase()}${id.slice(1)}`);
+    if (!panel) return;
+    const active = id === dashboardAnalyticsActiveTab;
+    panel.classList.toggle("is-hidden", !active);
+    panel.hidden = !active;
+  });
+}
+
+function renderDashboardAnalytics(tasks, kpiContext) {
+  const summary = byId("dashboardAnalyticsSummary");
+  if (!summary) return;
+  const approved = tasks.filter(taskCompletionIsApproved).length;
+  const pending = tasks.filter(taskCompletionNeedsReview).length;
+  const overdue = tasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
+  summary.textContent = tasks.length
+    ? `${tasks.length} công việc ${taskDisplayScopeLabel()}: ${approved} hoàn thành đạt, ${pending} chờ phê duyệt, ${overdue} quá hạn.`
+    : `Chưa có công việc ${taskDisplayScopeLabel()}.`;
+  setDashboardAnalyticsTab(dashboardAnalyticsActiveTab);
+  if (dashboardAnalyticsActiveTab === "operations") {
+    renderDashboardAnalyticsTrend(tasks);
+    renderDashboardAnalyticsFunnel(tasks);
+    const overdueAgeChart = byId("dashboardOverdueAgeChart");
+    if (overdueAgeChart) {
+      const rows = dashboardAnalyticsOverdueAgeRows(tasks);
+      overdueAgeChart.classList.toggle("empty-state", !rows.some((row) => row.value));
+      overdueAgeChart.innerHTML = rows.some((row) => row.value)
+        ? dashboardAnalyticsBarRowsHtml(rows, "Không có việc quá hạn trong phạm vi được xem.")
+        : "Không có việc quá hạn trong phạm vi được xem.";
+    }
+    const statusChart = byId("dashboardTaskStatusChart");
+    if (statusChart) {
+      const rows = dashboardAnalyticsTaskStatusRows(tasks);
+      statusChart.classList.toggle("empty-state", !rows.some((row) => row.value));
+      statusChart.innerHTML = rows.some((row) => row.value)
+        ? dashboardAnalyticsBarRowsHtml(rows, "Chưa có dữ liệu công việc.")
+        : "Chưa có dữ liệu công việc.";
+    }
+    return;
+  }
+  if (dashboardAnalyticsActiveTab === "people") {
+    renderDashboardAnalyticsPeople(tasks, kpiContext);
+    return;
+  }
+  if (dashboardAnalyticsActiveTab === "projects") {
+    renderDashboardAnalyticsProjects(tasks);
+    return;
+  }
+  renderDashboardAnalyticsDepartments(tasks);
 }
 
 function renderDashboard(options = {}) {
@@ -11197,6 +12294,7 @@ function renderDashboard(options = {}) {
   renderGradeDistribution(periodEvaluations, visiblePeople);
   renderDashboardDepartmentStatus(state.activePeriod);
   renderDashboardOperations(visibleTasks);
+  renderDashboardAnalytics(periodTasks, kpiContext);
 
   const ranking = [...periodEvaluations]
     .sort((a, b) => kpiResultScore(b) - kpiResultScore(a))
@@ -14285,6 +15383,7 @@ function populateAccountForm(account) {
   byId("accountCanSaveArchive").checked = grants.archiveWrite;
   byId("accountCanViewSystemContent").checked = grants.viewSystemContent;
   byId("accountCanManageCalendar").checked = grants.calendarWrite;
+  byId("accountCanManagePeople").checked = grants.peopleWrite;
   updateAccountFormAccess();
   renderCustomFieldsForScope("accounts");
   applyFieldCustomizations();
@@ -14342,6 +15441,7 @@ function updateAccountFormAccess() {
   byId("accountCanSaveArchive").disabled = !canManageGrants;
   byId("accountCanViewSystemContent").disabled = !canManageGrants;
   byId("accountCanManageCalendar").disabled = !canManageGrants;
+  byId("accountCanManagePeople").disabled = !canManageGrants;
 }
 
 function syncMobileNavigationAccess(activeViewId = document.querySelector(".view.is-active")?.id || "") {
@@ -15674,6 +16774,9 @@ function renderApplicationIdentity() {
 }
 
 renderApplicationIdentity();
+if (byId("dashboardDailyReportDate") && !byId("dashboardDailyReportDate").value) {
+  byId("dashboardDailyReportDate").value = dailyReportDateValue();
+}
 
 // Passwords from earlier releases were kept only to support an
 // offline re-login shortcut. A valid server session already provides that
@@ -15747,6 +16850,36 @@ window.addEventListener("storage", (event) => {
 });
 
 byId("dashboard").addEventListener("click", (event) => {
+  const workloadView = event.target.closest("[data-dashboard-workload-view]");
+  if (workloadView) {
+    dashboardWorkloadView = workloadView.dataset.dashboardWorkloadView === "people" ? "people" : "projects";
+    renderDashboardOperations(dashboardOperationalTasks());
+    return;
+  }
+  const analyticsTab = event.target.closest("[data-dashboard-analytics-tab]");
+  if (analyticsTab) {
+    setDashboardAnalyticsTab(analyticsTab.dataset.dashboardAnalyticsTab);
+    renderDashboardAnalytics(dashboardTasksForPeriod(state.activePeriod), cachedDashboardKpiContext(state.activePeriod));
+    return;
+  }
+  const workloadProject = event.target.closest("[data-dashboard-project-workload]");
+  if (workloadProject) {
+    openDashboardWorkloadProjectTasks(workloadProject.dataset.dashboardProjectWorkload);
+    return;
+  }
+  const analyticsProjectTimeline = event.target.closest("[data-dashboard-project-timeline]");
+  if (analyticsProjectTimeline) {
+    openDashboardAnalyticsProjectTimelineTasks(
+      analyticsProjectTimeline.dataset.dashboardProjectTimeline,
+      analyticsProjectTimeline.dataset.dashboardProjectBucket,
+    );
+    return;
+  }
+  const analyticsProject = event.target.closest("[data-dashboard-project-analytics]");
+  if (analyticsProject) {
+    openDashboardAnalyticsProjectTasks(analyticsProject.dataset.dashboardProjectAnalytics);
+    return;
+  }
   const operationDetail = event.target.closest("[data-dashboard-operation]");
   if (operationDetail) {
     openDashboardOperationDetail(operationDetail.dataset.dashboardOperation);
@@ -16820,6 +17953,7 @@ byId("accountForm").addEventListener("submit", (event) => {
           archiveWrite: byId("accountCanSaveArchive").checked,
           viewSystemContent: byId("accountCanViewSystemContent").checked,
           calendarWrite: byId("accountCanManageCalendar").checked,
+          peopleWrite: byId("accountCanManagePeople").checked,
         }
       : existing?.accessGrants || {},
     customFields: collectCustomFieldValues("accounts", existing?.customFields),
@@ -17618,7 +18752,13 @@ byId("dashboardDetailDialog").addEventListener("change", (event) => {
 byId("dashboardWorkloadDepartmentFilter").addEventListener("change", (event) => {
   dashboardWorkloadDepartmentFilter = event.target.value;
   renderDashboardOperations(dashboardOperationalTasks());
+  renderDashboardAnalytics(dashboardTasksForPeriod(state.activePeriod), cachedDashboardKpiContext(state.activePeriod));
 });
+byId("dashboardProjectTrendFilter")?.addEventListener("change", (event) => {
+  dashboardProjectTrendKey = event.target.value;
+  renderDashboardAnalyticsProjects(dashboardTasksForPeriod());
+});
+
 byId("dashboardTaskScope").addEventListener("change", (event) => setTaskDisplayScope(event.target.value));
 byId("closeTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
 byId("cancelTaskCompletionReview").addEventListener("click", closeTaskCompletionReviewDialog);
@@ -18111,6 +19251,7 @@ byId("historyTimeline").addEventListener("keydown", (event) => {
 });
 
 byId("seedDemo").addEventListener("click", seedDemoData);
+byId("exportDailyWorkReportPdf")?.addEventListener("click", exportDailyWorkReportPdf);
 
 byId("printReport").addEventListener("click", openPrintDialog);
 

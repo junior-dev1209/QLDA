@@ -24,6 +24,24 @@ const WorkCalendar = (() => {
     return Math.ceil((((utc - new Date(Date.UTC(utc.getUTCFullYear(), 0, 1))) / 86400000) + 1) / 7);
   };
   const ids = (value) => [...new Set((Array.isArray(value) ? value : []).map(String).filter(Boolean))];
+  const recurrence = (value) => ["daily", "weekly"].includes(value) ? value : "none";
+  const reminderEnabled = (event) => event?.reminderEnabled !== false;
+  const occurrences = (event, week) => {
+    const start = parseDate(week);
+    const anchor = parseDate(event?.date);
+    if (!start || !anchor) return [];
+    const end = parseDate(addDays(week, 6));
+    if (!end || anchor > end) return [];
+    const recurrenceMode = recurrence(event?.recurrence);
+    if (recurrenceMode === "none") return anchor >= start ? [event] : [];
+    const recurrenceDays = recurrenceMode === "daily" ? 1 : 7;
+    const occurrenceOffset = Math.max(0, Math.ceil((start.getTime() - anchor.getTime()) / (recurrenceDays * 86400000)));
+    const output = [];
+    for (let occurrenceDate = addDays(event.date, occurrenceOffset * recurrenceDays); occurrenceDate && occurrenceDate <= dateKey(end); occurrenceDate = addDays(occurrenceDate, recurrenceDays)) {
+      output.push({ ...event, date: occurrenceDate, occurrenceDate, recurrenceSourceId: event.id });
+    }
+    return output;
+  };
   const searchable = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase();
   const isMine = (event, account, personId) => Boolean(account && (event.allHands || event.createdById === account.id || (personId && [...ids(event.leaderIds), ...ids(event.participantIds)].includes(personId))));
   const canManage = (account, calendarWrite = false) => Boolean(account
@@ -33,16 +51,16 @@ const WorkCalendar = (() => {
     const time = now.getTime();
     return events.filter((event) => {
       const start = new Date(`${event.date}T${event.time}:00+07:00`).getTime();
-      return isMine(event, account, personId) && Number.isFinite(start) && start >= time - 60000 && start <= time + minutes * 60000;
+      return reminderEnabled(event) && isMine(event, account, personId) && Number.isFinite(start) && start >= time - 60000 && start <= time + minutes * 60000;
     }).sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
   };
   const validate = (event) => {
-    if (!String(event.title || "").trim() || event.title.length > 500) return "Nhập nội dung cuộc họp (tối đa 500 ký tự).";
+    if (!String(event.title || "").trim()) return "Nhập nội dung công việc hoặc cuộc họp.";
     if (!parseDate(event.date)) return "Ngày họp không hợp lệ.";
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(event.time || "")) return "Chọn giờ bắt đầu hợp lệ.";
     if (event.endTime && (!/^([01]\d|2[0-3]):[0-5]\d$/.test(event.endTime) || event.endTime <= event.time)) return "Giờ kết thúc phải sau giờ bắt đầu trong cùng ngày.";
     if (!String(event.location || "").trim() || event.location.length > 300) return "Nhập địa điểm (tối đa 300 ký tự).";
-    if (!ids(event.departmentIds).length) return "Chọn ít nhất một phòng chuẩn bị.";
+    if (!["none", "daily", "weekly"].includes(String(event.recurrence || "none"))) return "Chu kỳ lặp lại không hợp lệ.";
     return "";
   };
   const filter = (events, options) => {
@@ -77,10 +95,10 @@ const WorkCalendar = (() => {
     });
     return [...lines, "END:VCALENDAR"].map(foldLine).join("\r\n") + "\r\n";
   };
-  return { dateKey, parseDate, addDays, weekStart, weekNumber, ids, searchable, isMine, canManage, upcoming, validate, filter, toIcs };
+  return { dateKey, parseDate, addDays, weekStart, weekNumber, ids, recurrence, reminderEnabled, occurrences, searchable, isMine, canManage, upcoming, validate, filter, toIcs };
 })();
 
-const calendarUi = { week: WorkCalendar.weekStart(WorkCalendar.dateKey(new Date())), tab: "all", leaderId: "", editId: "", editBase: "", formBase: "", mode: "edit", returnFocus: null };
+const calendarUi = { week: WorkCalendar.weekStart(WorkCalendar.dateKey(new Date())), tab: "all", leaderId: "", editId: "", editBase: "", formBase: "", mode: "edit", returnFocus: null, detailId: "", detailReturnFocus: null };
 let calendarTaskSourceId = "";
 
 function calendarDirectory() {
@@ -88,7 +106,27 @@ function calendarDirectory() {
 }
 
 function calendarLeaders() {
-  return calendarDirectory().filter((person) => person.departmentId === "ban-giam-doc" || /^(pho-)?giam-doc-/.test(person.roleId || ""));
+  return calendarDirectory().filter((person) => {
+    const role = typeof roleById === "function" ? roleById(person.roleId) : null;
+    const accountRole = String(role?.accountRole || "");
+    const roleId = String(person.roleId || "");
+    const roleName = String(role?.name || "").toLocaleLowerCase("vi");
+    return person.departmentId === "ban-giam-doc"
+      || ["director", "manager", "deputy_manager"].includes(accountRole)
+      || /^(pho-)?giam-doc-|^(truong|pho)-phong-/.test(roleId)
+      || roleName.includes("trưởng phòng") || roleName.includes("phó phòng");
+  });
+}
+
+function calendarFilterLeaders() {
+  return calendarDirectory().filter((person) => {
+    const role = typeof roleById === "function" ? roleById(person.roleId) : null;
+    const accountRole = String(role?.accountRole || "");
+    const roleId = String(person.roleId || "");
+    return person.departmentId === "ban-giam-doc"
+      || accountRole === "director"
+      || /^(pho-)?giam-doc-/.test(roleId);
+  });
 }
 
 function calendarPersonName(id) {
@@ -113,12 +151,21 @@ function canManageCalendarEvent() {
 }
 
 function calendarFilteredEvents() {
-  return WorkCalendar.filter(state.calendarEvents || [], {
+  return WorkCalendar.filter(calendarOccurrencesForWeek(), {
     week: calendarUi.week, tab: calendarUi.tab, leaderId: calendarUi.leaderId,
     departmentId: byId("calendarDepartment").value, search: byId("calendarSearch").value,
     account: currentAccount(), personId: currentPerson()?.id || "",
     names: (event) => [...WorkCalendar.ids(event.departmentIds).map(calendarDepartmentName), ...WorkCalendar.ids(event.leaderIds).map(calendarPersonName)],
   });
+}
+
+function calendarOccurrencesForWeek(week = calendarUi.week) {
+  return (state.calendarEvents || []).flatMap((event) => WorkCalendar.occurrences(event, week));
+}
+
+function calendarRecurrenceLabel(event) {
+  const recurrence = WorkCalendar.recurrence(event?.recurrence);
+  return recurrence === "daily" ? "Lặp lại hàng ngày" : recurrence === "weekly" ? "Lặp lại hàng tuần" : "Không lặp lại";
 }
 
 function calendarConclusionTasks(event) {
@@ -129,6 +176,11 @@ function calendarLeaderBadges(event) {
   if (event.allHands) return '<span class="calendar-person-chip tone-1">Toàn thể</span>';
   const leaders = calendarLeaders();
   return WorkCalendar.ids(event.leaderIds).map((id) => `<span class="calendar-person-chip tone-${Math.max(0, leaders.findIndex((person) => person.id === id)) % 4}">${escapeHtml(calendarPersonName(id))}</span>`).join("") || "-";
+}
+
+function calendarParticipantBadges(event) {
+  if (event.allHands) return '<span class="calendar-person-chip tone-1">Toàn thể</span>';
+  return WorkCalendar.ids(event.participantIds).map((id) => `<span class="calendar-person-chip">${escapeHtml(calendarPersonName(id))}</span>`).join("") || "-";
 }
 
 function calendarEntries() {
@@ -148,10 +200,10 @@ function calendarRenderRows() {
     if (!rows.length) return `<tr class="${today ? "calendar-today" : ""}">${dayCell}<td colspan="6" class="calendar-empty">Không có ${calendarUi.tab === "conclusions" ? "công việc từ kết luận" : "lịch"}</td></tr>`;
     return rows.map(({ event, task }, index) => `<tr class="${today ? "calendar-today" : ""}">
       ${index === 0 ? dayCell : ""}<td><strong>${escapeHtml(event.time)}</strong>${event.endTime ? `<span class="calendar-row-note">${escapeHtml(event.endTime)}</span>` : ""}</td>
-      <td><button type="button" class="calendar-row-title" ${task ? `data-calendar-task="${escapeHtml(task.id)}"` : `data-calendar-open="${escapeHtml(event.id)}"`}>${escapeHtml(task?.title || event.title)}</button>
-        ${task ? `<span class="calendar-row-note">${escapeHtml(getDueStatus(task))} · ${formatScore(task.progress || 0)}% · ${escapeHtml(taskOwnerName(task))}</span><span class="calendar-row-note">${escapeHtml(event.title)}</span>` : (event.conclusion ? '<span class="calendar-row-note">Đã có kết luận</span>' : "")}</td>
-      <td>${escapeHtml(event.location)}</td><td>${calendarLeaderBadges(event)}</td><td>${WorkCalendar.ids(event.departmentIds).map((id) => escapeHtml(calendarDepartmentName(id))).join("<br>")}</td>
-      <td><button type="button" class="ghost calendar-icon" data-calendar-open="${escapeHtml(event.id)}" title="Chi tiết cuộc họp" aria-label="Chi tiết: ${escapeHtml(event.title)}">···</button></td></tr>`).join("");
+      <td><button type="button" class="calendar-row-title" ${task ? `data-calendar-task="${escapeHtml(task.id)}"` : `data-calendar-detail="${escapeHtml(event.id)}"`}>${escapeHtml(task?.title || event.title)}</button>
+        ${task ? `<span class="calendar-row-note">${escapeHtml(getDueStatus(task))} · ${formatScore(task.progress || 0)}% · ${escapeHtml(taskOwnerName(task))}</span><span class="calendar-row-note">${escapeHtml(event.title)}</span>` : `${event.conclusion ? '<span class="calendar-row-note">Đã có kết luận</span>' : ""}${WorkCalendar.recurrence(event.recurrence) !== "none" ? `<span class="calendar-row-note calendar-recurrence-note">${escapeHtml(calendarRecurrenceLabel(event))}</span>` : ""}`}</td>
+      <td>${escapeHtml(event.location)}</td><td>${calendarLeaderBadges(event)}</td><td>${WorkCalendar.ids(event.departmentIds).map((id) => escapeHtml(calendarDepartmentName(id))).join("<br>") || "-"}</td>
+      <td>${calendarParticipantBadges(event)}</td></tr>`).join("");
   }).join("");
 }
 
@@ -166,10 +218,9 @@ function calendarRenderMobileRows() {
     if (!rows.length) return `<section class="calendar-mobile-day${today ? " calendar-today" : ""}"><h3>${escapeHtml(heading)}</h3><p class="calendar-mobile-empty">Không có ${calendarUi.tab === "conclusions" ? "công việc từ kết luận" : "lịch"}</p></section>`;
     return `<section class="calendar-mobile-day${today ? " calendar-today" : ""}"><h3>${escapeHtml(heading)}</h3>${rows.map(({ event, task }) => `<article class="calendar-mobile-card">
       <div class="calendar-mobile-time"><strong>${escapeHtml(event.time)}</strong>${event.endTime ? `<span>${escapeHtml(event.endTime)}</span>` : ""}</div>
-      <div class="calendar-mobile-content"><button type="button" class="calendar-row-title" ${task ? `data-calendar-task="${escapeHtml(task.id)}"` : `data-calendar-open="${escapeHtml(event.id)}"`}>${escapeHtml(task?.title || event.title)}</button>
-        <p>${escapeHtml(event.location)}</p>${task ? `<p>${escapeHtml(getDueStatus(task))} · ${formatScore(task.progress || 0)}% · ${escapeHtml(taskOwnerName(task))}</p><p class="calendar-row-note">${escapeHtml(event.title)}</p>` : (event.conclusion ? '<p class="calendar-row-note">Đã có kết luận</p>' : "")}
-        <div class="calendar-mobile-meta">${calendarLeaderBadges(event)}<span>${WorkCalendar.ids(event.departmentIds).map((id) => escapeHtml(calendarDepartmentName(id))).join(", ")}</span></div></div>
-      <button type="button" class="ghost calendar-icon" data-calendar-open="${escapeHtml(event.id)}" title="Chi tiết cuộc họp" aria-label="Chi tiết: ${escapeHtml(event.title)}">···</button>
+      <div class="calendar-mobile-content"><button type="button" class="calendar-row-title" ${task ? `data-calendar-task="${escapeHtml(task.id)}"` : `data-calendar-detail="${escapeHtml(event.id)}"`}>${escapeHtml(task?.title || event.title)}</button>
+        <p>${escapeHtml(event.location)}</p>${task ? `<p>${escapeHtml(getDueStatus(task))} · ${formatScore(task.progress || 0)}% · ${escapeHtml(taskOwnerName(task))}</p><p class="calendar-row-note">${escapeHtml(event.title)}</p>` : `${event.conclusion ? '<p class="calendar-row-note">Đã có kết luận</p>' : ""}${WorkCalendar.recurrence(event.recurrence) !== "none" ? `<p class="calendar-row-note calendar-recurrence-note">${escapeHtml(calendarRecurrenceLabel(event))}</p>` : ""}`}
+        <div class="calendar-mobile-meta">${calendarLeaderBadges(event)}${calendarParticipantBadges(event)}<span>${WorkCalendar.ids(event.departmentIds).map((id) => escapeHtml(calendarDepartmentName(id))).join(", ") || "Không áp dụng phòng chuẩn bị"}</span></div></div>
     </article>`).join("")}</section>`;
   }).join("");
 }
@@ -186,7 +237,7 @@ function renderCalendarView() {
   notice.textContent = calendarWritesAvailable() ? "" : "Máy chủ chưa hỗ trợ lưu Lịch công việc. Cần cập nhật kpi-sync trước khi thêm hoặc sửa lịch online.";
   const selectedDepartment = byId("calendarDepartment").value;
   fillSelect(byId("calendarDepartment"), [{ value: "", label: "Tất cả phòng" }, ...departments.map((department) => ({ value: department.id, label: department.name }))], selectedDepartment);
-  const leaders = calendarLeaders();
+  const leaders = calendarFilterLeaders();
   if (!leaders.some((person) => person.id === calendarUi.leaderId)) calendarUi.leaderId = "";
   byId("calendarLeaderFilter").innerHTML = [{ id: "", name: "Tất cả" }, ...leaders].map((person) => `<button type="button" data-calendar-leader="${escapeHtml(person.id)}" aria-pressed="${calendarUi.leaderId === person.id}">${escapeHtml(person.name)}</button>`).join("");
   document.querySelectorAll("[data-calendar-tab]").forEach((button) => {
@@ -213,56 +264,114 @@ function calendarSelectedIds(containerId) {
 }
 
 function openCalendarDialog(id = "", mode = id ? "detail" : "edit") {
+  if (id && mode === "detail") {
+    openCalendarDetailDialog(id);
+    return;
+  }
   if (!canAccessView("calendar")) return;
   const event = (state.calendarEvents || []).find((item) => item.id === id);
   if (id && !event) return;
-  if ((!id || mode === "edit") && !canManageCalendarEvent()) return;
+  if (!canManageCalendarEvent()) return;
   calendarUi.editId = id;
-  calendarUi.mode = event && mode === "detail" ? "detail" : "edit";
+  calendarUi.mode = "edit";
   calendarUi.editBase = event ? JSON.stringify(event) : "";
   calendarUi.returnFocus = document.activeElement;
   byId("calendarForm").reset();
-  const canEdit = canManageCalendarEvent(event);
-  const editable = !event || (calendarUi.mode === "edit" && canEdit);
-  byId("calendarDialogTitle").textContent = event ? (editable ? "Cập nhật cuộc họp" : "Chi tiết cuộc họp") : "Thêm cuộc họp";
+  byId("calendarDialogTitle").textContent = event ? "Cập nhật cuộc họp" : "Thêm cuộc họp";
   const today = WorkCalendar.dateKey(new Date());
   byId("calendarTitle").value = event?.title || "";
   byId("calendarDate").value = event?.date || (WorkCalendar.weekStart(today) === calendarUi.week ? today : calendarUi.week);
   byId("calendarTime").value = event?.time || "08:00";
   byId("calendarEndTime").value = event?.endTime || "";
   byId("calendarLocation").value = event?.location || "";
+  byId("calendarRecurrence").value = WorkCalendar.recurrence(event?.recurrence);
+  byId("calendarReminderEnabled").checked = WorkCalendar.reminderEnabled(event);
   byId("calendarNote").value = event?.note || "";
   byId("calendarConclusion").value = event?.conclusion || "";
   byId("calendarAllHands").checked = event?.allHands === true;
   calendarCheckboxes("calendarLeaders", calendarLeaders(), event?.leaderIds);
-  calendarCheckboxes("calendarDepartments", departments, event?.departmentIds || [currentDepartmentId()]);
+  calendarCheckboxes("calendarDepartments", departments, event?.departmentIds || []);
   calendarCheckboxes("calendarParticipants", calendarDirectory(), event?.participantIds);
-  byId("calendarForm").querySelectorAll("input, textarea, select").forEach((input) => { input.disabled = !editable; });
-  byId("calendarParticipantSearch").disabled = !editable;
-  byId("calendarEdit").classList.toggle("is-hidden", !event || !canEdit || editable);
-  byId("calendarSave").classList.toggle("is-hidden", !editable);
-  byId("calendarDelete").classList.toggle("is-hidden", !event || !editable);
-  byId("calendarCreateTask").classList.toggle("is-hidden", !event || !editable || !canAccessView("tasks") || !canCreateRegularTasks());
+  byId("calendarForm").querySelectorAll("input, textarea, select").forEach((input) => { input.disabled = false; });
+  byId("calendarParticipantSearch").disabled = false;
+  byId("calendarSave").classList.remove("is-hidden");
+  byId("calendarDelete").classList.toggle("is-hidden", !event);
+  byId("calendarCreateTask").classList.toggle("is-hidden", !event || !canAccessView("tasks") || !canCreateRegularTasks());
   const linked = event ? calendarConclusionTasks(event) : [];
   byId("calendarLinkedTasks").innerHTML = linked.length ? linked.map((task) => `<button type="button" class="calendar-linked-task" data-calendar-task="${escapeHtml(task.id)}">${escapeHtml(task.title)}<span class="calendar-row-note">${escapeHtml(taskOwnerName(task))} · ${escapeHtml(getDueStatus(task))} · ${formatScore(task.progress || 0)}%</span></button>`).join("") : '<p class="muted">Chưa có công việc từ kết luận.</p>';
   byId("calendarAudit").textContent = event ? `Tạo bởi ${event.createdBy || "-"} · ${formatDateTime(event.createdAt)}${event.updatedAt ? ` · Cập nhật ${formatDateTime(event.updatedAt)}` : ""}` : "";
   byId("calendarFormError").textContent = "";
   calendarUi.formBase = JSON.stringify(calendarReadForm());
   openModal("calendarDialog");
-  (editable ? byId("calendarTitle") : (!byId("calendarEdit").classList.contains("is-hidden") ? byId("calendarEdit") : byId("calendarClose"))).focus();
+  byId("calendarTitle").focus();
 }
 
-function closeCalendarDialog() {
+function closeCalendarDialog({ restoreFocus = true } = {}) {
   closeModal("calendarDialog");
-  calendarUi.returnFocus?.focus?.();
+  if (restoreFocus) calendarUi.returnFocus?.focus?.();
+}
+
+function openCalendarDetailDialog(id) {
+  if (!canAccessView("calendar")) return;
+  const event = (state.calendarEvents || []).find((item) => item.id === id);
+  if (!event) return;
+  calendarUi.detailId = id;
+  calendarUi.detailReturnFocus = document.activeElement;
+  const leaders = event.allHands ? "Toàn thể" : WorkCalendar.ids(event.leaderIds).map(calendarPersonName).join(", ") || "Chưa chọn";
+  const participants = event.allHands ? "Toàn thể" : WorkCalendar.ids(event.participantIds).map(calendarPersonName).join(", ") || "Chưa chọn";
+  const departmentsText = WorkCalendar.ids(event.departmentIds).map(calendarDepartmentName).join(", ") || "Không áp dụng";
+  const linked = calendarConclusionTasks(event);
+  byId("calendarDetailTitle").textContent = "Chi tiết nội dung công việc";
+  byId("calendarDetailContent").innerHTML = `
+    <section class="calendar-detail-overview">
+      <h3>${escapeHtml(event.title)}</h3>
+      <div class="calendar-detail-grid">
+        <div><span>Thời gian</span><strong>${escapeHtml(formatDate(event.date))} · ${escapeHtml(event.time)}${event.endTime ? ` - ${escapeHtml(event.endTime)}` : ""}</strong></div>
+        <div><span>Lặp lại</span><strong>${escapeHtml(calendarRecurrenceLabel(event))}</strong></div>
+        <div><span>Địa điểm</span><strong>${escapeHtml(event.location || "Chưa cập nhật")}</strong></div>
+        <div><span>Nhắc lịch</span><strong>${WorkCalendar.reminderEnabled(event) ? "Bật" : "Tắt"}</strong></div>
+        <div><span>Phòng chuẩn bị</span><strong>${escapeHtml(departmentsText)}</strong></div>
+        <div class="calendar-detail-wide"><span>Lãnh đạo</span><strong>${escapeHtml(leaders)}</strong></div>
+        <div class="calendar-detail-wide"><span>Thành phần tham dự</span><strong>${escapeHtml(participants)}</strong></div>
+      </div>
+    </section>
+    <section class="calendar-detail-section"><h3>Ghi chú / nội dung chuẩn bị</h3><p>${escapeHtml(event.note || "Chưa cập nhật")}</p></section>
+    <section class="calendar-detail-section"><h3>Kết luận cuộc họp</h3><p>${escapeHtml(event.conclusion || "Chưa cập nhật")}</p></section>
+    <section class="calendar-detail-section"><h3>Công việc từ kết luận</h3><div id="calendarDetailLinkedTasks">${linked.length ? linked.map((task) => `<button type="button" class="calendar-linked-task" data-calendar-task="${escapeHtml(task.id)}">${escapeHtml(task.title)}<span class="calendar-row-note">${escapeHtml(taskOwnerName(task))} · ${escapeHtml(getDueStatus(task))} · ${formatScore(task.progress || 0)}%</span></button>`).join("") : '<p class="muted">Chưa có công việc từ kết luận.</p>'}</div></section>
+    <p class="muted calendar-detail-audit">Tạo bởi ${escapeHtml(event.createdBy || "-")} · ${escapeHtml(formatDateTime(event.createdAt) || "Chưa cập nhật")}${event.updatedAt ? ` · Cập nhật ${escapeHtml(formatDateTime(event.updatedAt))}` : ""}</p>
+  `;
+  byId("calendarDetailEdit").classList.toggle("is-hidden", !canManageCalendarEvent(event));
+  openModal("calendarDetailDialog");
+  (byId("calendarDetailEdit").classList.contains("is-hidden") ? byId("calendarDetailClose") : byId("calendarDetailEdit")).focus();
+}
+
+function closeCalendarDetailDialog({ restoreFocus = true } = {}) {
+  closeModal("calendarDetailDialog");
+  if (restoreFocus) calendarUi.detailReturnFocus?.focus?.();
+  calendarUi.detailId = "";
 }
 
 function calendarReadForm() {
-  return { title: byId("calendarTitle").value.trim(), date: byId("calendarDate").value,
+  return { title: calendarTitleWithCapitalizedFirstLetter(byId("calendarTitle").value).trim(), date: byId("calendarDate").value,
     time: byId("calendarTime").value, endTime: byId("calendarEndTime").value,
     location: byId("calendarLocation").value.trim(), leaderIds: calendarSelectedIds("calendarLeaders"),
     departmentIds: calendarSelectedIds("calendarDepartments"), participantIds: calendarSelectedIds("calendarParticipants"),
+    recurrence: WorkCalendar.recurrence(byId("calendarRecurrence").value), reminderEnabled: byId("calendarReminderEnabled").checked,
     allHands: byId("calendarAllHands").checked, note: byId("calendarNote").value.trim(), conclusion: byId("calendarConclusion").value.trim() };
+}
+
+function calendarTitleWithCapitalizedFirstLetter(value) {
+  return String(value || "").replace(/^(\s*)(\S)/u, (_, prefix, first) => `${prefix}${first.toLocaleUpperCase("vi")}`);
+}
+
+function normalizeCalendarTitleInput() {
+  const input = byId("calendarTitle");
+  const value = calendarTitleWithCapitalizedFirstLetter(input.value);
+  if (value === input.value) return;
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  input.value = value;
+  if (Number.isInteger(start) && Number.isInteger(end)) input.setSelectionRange(start, end);
 }
 
 function saveCalendarEvent(event) {
@@ -301,8 +410,8 @@ function exportCalendarExcel() {
   const events = calendarFilteredEvents();
   const title = `${calendarUi.tab === "conclusions" ? "Việc từ kết luận" : "Lịch công việc"} tuần ${WorkCalendar.weekNumber(calendarUi.week)}`;
   const common = (event) => [formatDate(event.date), event.time, event.endTime || "", event.title, event.location,
-    event.allHands ? "Toàn thể" : WorkCalendar.ids(event.leaderIds).map(calendarPersonName).join(", "), WorkCalendar.ids(event.departmentIds).map(calendarDepartmentName).join(", ")];
-  const headers = ["Ngày", "Bắt đầu", "Kết thúc", "Nội dung cuộc họp", "Địa điểm", "Lãnh đạo", "Phòng chuẩn bị"];
+    event.allHands ? "Toàn thể" : WorkCalendar.ids(event.leaderIds).map(calendarPersonName).join(", "), WorkCalendar.ids(event.departmentIds).map(calendarDepartmentName).join(", "), calendarRecurrenceLabel(event)];
+  const headers = ["Ngày", "Bắt đầu", "Kết thúc", "Nội dung cuộc họp", "Địa điểm", "Lãnh đạo", "Phòng chuẩn bị", "Lặp lại"];
   const rows = calendarUi.tab === "conclusions"
     ? events.flatMap((event) => calendarConclusionTasks(event).map((task) => [...common(event), task.title, taskOwnerName(task), getDueStatus(task), `${formatScore(task.progress || 0)}%`, formatDate(task.due)]))
     : events.map((event) => [...common(event), event.allHands ? "Toàn thể" : WorkCalendar.ids(event.participantIds).map(calendarPersonName).join(", "), event.note || "", event.conclusion || ""]);
@@ -350,7 +459,7 @@ function checkCalendarReminders() {
   try { stored = JSON.parse(localStorage.getItem(key) || "{}"); } catch { /* Memory deduplication still works when storage is unavailable. */ }
   const now = new Date();
   const delivered = { ...(stored && typeof stored === "object" ? stored : {}), ...calendarReminders.delivered };
-  const upcoming = WorkCalendar.upcoming(state.calendarEvents || [], account, currentPerson()?.id || "", minutes, now);
+  const upcoming = WorkCalendar.upcoming(calendarOccurrencesForWeek(WorkCalendar.weekStart(WorkCalendar.dateKey(now))), account, currentPerson()?.id || "", minutes, now);
   const signature = (event) => `${event.id}|${event.date}|${event.time}`;
   const newEvents = upcoming.filter((event) => !delivered[signature(event)]);
   const stillUpcoming = new Set(upcoming.map(signature));
@@ -388,13 +497,18 @@ document.addEventListener("DOMContentLoaded", () => {
   byId("calendarNext").addEventListener("click", () => { calendarUi.week = WorkCalendar.addDays(calendarUi.week, 7); renderCalendarView(); });
   byId("calendarToday").addEventListener("click", () => { calendarUi.week = WorkCalendar.weekStart(WorkCalendar.dateKey(new Date())); renderCalendarView(); });
   byId("calendarAdd").addEventListener("click", () => openCalendarDialog());
-  byId("calendarEdit").addEventListener("click", () => {
-    if (!calendarUi.editId || !canManageCalendarEvent()) return;
-    openCalendarDialog(calendarUi.editId, "edit");
-  });
   byId("calendarClose").addEventListener("click", closeCalendarDialog);
+  byId("calendarDetailClose").addEventListener("click", closeCalendarDetailDialog);
+  byId("calendarDetailEdit").addEventListener("click", () => {
+    const id = calendarUi.detailId;
+    if (!id || !canManageCalendarEvent()) return;
+    closeCalendarDetailDialog({ restoreFocus: false });
+    openCalendarDialog(id, "edit");
+  });
   byId("calendarForm").addEventListener("submit", saveCalendarEvent);
   byId("calendarDelete").addEventListener("click", deleteCalendarEvent);
+  byId("calendarTitle").addEventListener("input", normalizeCalendarTitleInput);
+  byId("calendarTitle").addEventListener("paste", () => requestAnimationFrame(normalizeCalendarTitleInput));
   byId("calendarDepartment").addEventListener("change", calendarRenderRows);
   byId("calendarSearch").addEventListener("input", calendarRenderRows);
   byId("calendarLeaderFilter").addEventListener("click", (event) => { const button = event.target.closest("[data-calendar-leader]"); if (button) { calendarUi.leaderId = button.dataset.calendarLeader; renderCalendarView(); } });
@@ -419,13 +533,20 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   const openLinked = (event) => {
     const taskId = event.target.closest("[data-calendar-task]")?.dataset.calendarTask;
-    const meetingId = event.target.closest("[data-calendar-open]")?.dataset.calendarOpen;
-    if (taskId) { const task = state.tasks.find((item) => item.id === taskId); if (task && canViewTaskRecord(task)) { closeCalendarDialog(); openTaskDetailDialog(taskId); } }
-    else if (meetingId) openCalendarDialog(meetingId);
+    const meetingId = event.target.closest("[data-calendar-detail]")?.dataset.calendarDetail;
+    if (taskId) {
+      const task = state.tasks.find((item) => item.id === taskId);
+      if (task && canViewTaskRecord(task)) {
+        closeCalendarDialog({ restoreFocus: false });
+        closeCalendarDetailDialog({ restoreFocus: false });
+        openTaskDetailDialog(taskId);
+      }
+    } else if (meetingId) openCalendarDetailDialog(meetingId);
   };
   byId("calendarRows").addEventListener("click", openLinked);
   byId("calendarMobileRows").addEventListener("click", openLinked);
   byId("calendarLinkedTasks").addEventListener("click", openLinked);
+  byId("calendarDetailContent").addEventListener("click", openLinked);
   byId("calendarCreateTask").addEventListener("click", () => {
     const event = (state.calendarEvents || []).find((item) => item.id === calendarUi.editId);
     if (!event || calendarUi.mode !== "edit" || !canManageCalendarEvent() || !canCreateRegularTasks() || !canAccessView("tasks")) return;
@@ -443,15 +564,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!events.length) { alert("Không có lịch để xuất."); return; }
     downloadBlobFile(new Blob([WorkCalendar.toIcs(events)], { type: "text/calendar;charset=utf-8" }), `lich-cong-viec-${calendarUi.week}.ics`);
   });
-  byId("calendarDialog").addEventListener("keydown", (event) => {
-    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeCalendarDialog(); }
+  const trapCalendarModalFocus = (dialogId, close) => byId(dialogId).addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
     if (event.key === "Tab") {
-      const focusable = [...byId("calendarDialog").querySelectorAll("button, input, textarea, [tabindex='0']")].filter((element) => !element.disabled && element.getClientRects().length);
+      const focusable = [...byId(dialogId).querySelectorAll("button, input, textarea, select, [tabindex='0']")].filter((element) => !element.disabled && element.getClientRects().length);
       const first = focusable[0], last = focusable.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   });
+  trapCalendarModalFocus("calendarDialog", closeCalendarDialog);
+  trapCalendarModalFocus("calendarDetailDialog", closeCalendarDetailDialog);
   byId("calendarReminderMinutes").addEventListener("change", () => {
     try { localStorage.setItem(`calendar-reminder-minutes-${currentAccount()?.id || ""}`, byId("calendarReminderMinutes").value); }
     catch { alert("Không lưu được thiết lập nhắc trên thiết bị này."); }
@@ -468,7 +591,7 @@ document.addEventListener("DOMContentLoaded", () => {
   byId("calendarDismissReminders").addEventListener("click", clearCalendarReminders);
   byId("calendarReminderList").addEventListener("click", (event) => {
     const id = event.target.closest("[data-calendar-reminder]")?.dataset.calendarReminder;
-    if (id) { clearCalendarReminders(); openCalendarDialog(id); }
+    if (id) { clearCalendarReminders(); openCalendarDetailDialog(id); }
   });
   window.setInterval(checkCalendarReminders, 30000);
   window.addEventListener("focus", checkCalendarReminders);

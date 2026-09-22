@@ -1,5 +1,5 @@
-const RELEASE_VERSION = "3.0.81";
-const CACHE_NAME = "phuc-thinh-kpi-v372";
+const RELEASE_VERSION = "3.0.95";
+const CACHE_NAME = "phuc-thinh-kpi-v386";
 const APP_SHELL = [
   "index.html",
   "styles.css",
