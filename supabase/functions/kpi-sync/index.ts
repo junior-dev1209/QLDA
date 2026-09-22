@@ -16,7 +16,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.09.10.1";
+const deploymentVersion = "2026.09.18.2";
 const passwordHashAlgorithm = "pbkdf2-sha256-v1";
 const passwordHashIterations = 310_000;
 const passwordSaltBytes = 16;
@@ -1124,13 +1124,14 @@ function isAdmin(account: JsonRecord): boolean {
   return accountRole(account) === "admin";
 }
 
-function accountAccessGrants(account: JsonRecord | undefined): { bulletinPublish: boolean; archiveWrite: boolean; viewSystemContent: boolean; calendarWrite: boolean } {
+function accountAccessGrants(account: JsonRecord | undefined): { bulletinPublish: boolean; archiveWrite: boolean; viewSystemContent: boolean; calendarWrite: boolean; peopleWrite: boolean } {
   const grants: JsonRecord = account && isRecord(account.accessGrants) ? account.accessGrants : {};
   return {
     bulletinPublish: grants.bulletinPublish === true,
     archiveWrite: grants.archiveWrite === true,
     viewSystemContent: grants.viewSystemContent === true,
     calendarWrite: grants.calendarWrite === true,
+    peopleWrite: grants.peopleWrite === true,
   };
 }
 
@@ -1193,6 +1194,7 @@ function moduleIsAvailableToAccount(state: JsonRecord, account: JsonRecord, modu
   const settings = normalizeModuleSettings(state.moduleSettings);
   const setting = settings[moduleId];
   if (!isRecord(setting) || setting.enabled === false || !isRecord(setting.roles)) return false;
+  if (moduleId === "people" && accountAccessGrants(account).peopleWrite) return true;
   return setting.roles[role] === true;
 }
 
@@ -1693,18 +1695,26 @@ function validCalendarEvent(state: JsonRecord, event: JsonRecord): boolean {
   const people = new Set(records(state, "people").map(recordId));
   const departments = new Set((Array.isArray(state.departments) ? state.departments : []).filter(isRecord).map(recordId));
   const departmentIds = calendarIds(event.departmentIds);
-  return typeof event.title === "string" && Boolean(event.title.trim()) && event.title.length <= 500
+  const recurrence = String(event.recurrence || "none");
+  return typeof event.title === "string" && Boolean(event.title.trim())
     && validDate && validTime(event.time) && (!event.endTime || (validTime(event.endTime) && String(event.endTime) > String(event.time)))
     && typeof event.location === "string" && Boolean(event.location.trim()) && event.location.length <= 300
+    && ["none", "daily", "weekly"].includes(recurrence)
+    && (event.reminderEnabled === undefined || typeof event.reminderEnabled === "boolean")
     && typeof event.allHands === "boolean" && String(event.note || "").length <= 10000 && String(event.conclusion || "").length <= 20000
     && [event.leaderIds, event.participantIds, event.departmentIds].every(Array.isArray)
-    && departmentIds.length > 0 && departmentIds.every((id) => departments.has(id))
+    && departmentIds.every((id) => departments.has(id))
     && [...calendarIds(event.leaderIds), ...calendarIds(event.participantIds)].every((id) => people.has(id));
 }
 
 function canManageCalendarEvent(state: JsonRecord, actor: JsonRecord): boolean {
   if (!moduleIsAvailableToAccount(state, actor, "calendar")) return false;
   return isAdmin(actor) || isDirector(actor) || accountAccessGrants(actor).calendarWrite;
+}
+
+function canManagePeople(state: JsonRecord, actor: JsonRecord): boolean {
+  return moduleIsAvailableToAccount(state, actor, "people")
+    && (isAdmin(actor) || isDirector(actor) || accountAccessGrants(actor).peopleWrite);
 }
 
 function calendarPublicDirectory(state: JsonRecord): JsonRecord[] {
@@ -1722,7 +1732,7 @@ function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionN
     if (!previous && !canManageCalendarEvent(state, actor)) return false;
   }
   if (isAdmin(actor)) return true;
-  if (collection === "people") return moduleIsAvailableToAccount(state, actor, "people") && isDirector(actor);
+  if (collection === "people") return canManagePeople(state, actor);
   if (collection === "accounts") return moduleIsAvailableToAccount(state, actor, "accounts") && accountChangeAllowed(actor, previous, next);
   if (collection === "bulletins") {
     return moduleIsAvailableToAccount(state, actor, "bulletin") && canUpdateOwnedRecord(actor, previous, next, "bulletinPublish");
@@ -1747,7 +1757,7 @@ function canDelete(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   if (isAdmin(actor)) return true;
   if (collection === "activityLog") return false;
   if (collection === "projectCatalog") return moduleIsAvailableToAccount(state, actor, "tasks") && (isAdmin(actor) || hasDepartmentManagement(actor) || accountRole(actor) === "section_head");
-  if (collection === "people") return moduleIsAvailableToAccount(state, actor, "people") && isDirector(actor);
+  if (collection === "people") return canManagePeople(state, actor);
   if (collection === "accounts") return moduleIsAvailableToAccount(state, actor, "accounts") && isDirector(actor);
   if (collection === "bulletins" || collection === "archiveRecords" || collection === "supportRequests") return false;
   if (collection === "tasks") return false;
@@ -1908,9 +1918,44 @@ function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch):
     currentTotal += currentCount;
     deletedTotal += deleteCount;
     if (["people", "tasks", "accounts"].includes(collection) && currentCount > 0 && deleteCount >= currentCount) return true;
+    // SAFE guard: critical shared collections must never lose a large portion
+    // of their records in a single client mutation. This is intentionally
+    // stricter than the general 35% protection below.
+    if (["people", "tasks", "accounts"].includes(collection) && currentCount >= 8 && deleteCount / currentCount >= 0.25) return true;
     if (currentCount >= 5 && deleteCount / currentCount > 0.35) return true;
   }
   return currentTotal >= 5 && deletedTotal / currentTotal > 0.35;
+}
+
+function patchDeletesLastAdmin(current: JsonRecord, patch: StatePatch): boolean {
+  const currentAccounts = records(current, "accounts");
+  const adminIds = new Set(currentAccounts.filter(isAdmin).map(recordId).filter(Boolean));
+  if (!adminIds.size) return false;
+  const deletedAdminIds = new Set((patch.collections?.accounts?.deletes || [])
+    .map((entry) => String(entry.id || "").trim())
+    .filter((id) => adminIds.has(id)));
+  if (!deletedAdminIds.size) return false;
+
+  // Account upserts in the same patch may preserve or add an Admin.
+  const survivingAdminIds = new Set([...adminIds].filter((id) => !deletedAdminIds.has(id)));
+  for (const entry of patch.collections?.accounts?.upserts || []) {
+    const id = String(entry.id || "").trim();
+    if (!id) continue;
+    if (isAdmin(entry)) survivingAdminIds.add(id);
+    else survivingAdminIds.delete(id);
+  }
+  return survivingAdminIds.size === 0;
+}
+
+function mutationAuditSummary(patch: StatePatch): JsonRecord {
+  const collectionsSummary: JsonRecord = {};
+  for (const collection of collections) {
+    const change = patch.collections?.[collection];
+    const upserts = Array.isArray(change?.upserts) ? change.upserts.length : 0;
+    const deletes = Array.isArray(change?.deletes) ? change.deletes.length : 0;
+    if (upserts || deletes) collectionsSummary[collection] = { upserts, deletes };
+  }
+  return { collections: collectionsSummary, fields: Array.isArray(patch.fields) ? patch.fields.length : 0 };
 }
 
 function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number): void {
@@ -2760,7 +2805,18 @@ Deno.serve(async (request) => {
     action = url.searchParams.get("action") || "";
     if (action === "status") {
       const current = await snapshot();
-      const recordProjection = await recordProjectionHealth(current.revision);
+      let recordProjection = await recordProjectionHealth(current.revision);
+      // A previous interrupted deploy or write can leave the record tables one
+      // revision behind. Repair from the authoritative shared state before a
+      // client relies on the projection health result.
+      if (recordProjection.available === true && recordProjection.synchronized !== true && current.revision > 0) {
+        try {
+          await syncAllRecordProjections(current.state, current.revision);
+          recordProjection = await recordProjectionHealth(current.revision);
+        } catch (projectionError) {
+          console.error("Unable to repair record projections.", projectionError);
+        }
+      }
       const configuredOrigins = (Deno.env.get("KPI_ALLOWED_ORIGIN") || "")
         .split(",")
         .map((value) => value.trim())
@@ -2927,9 +2983,12 @@ Deno.serve(async (request) => {
       const body = await readJsonPayload(request);
       if (!validPatch(body?.patch)) return json(request, { error: "Invalid mutation payload." }, 422);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
-      if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
+      const audit = mutationAuditSummary(body.patch);
+      if (patchRemovesUnsafeAmountOfData(current.state, body.patch) || patchDeletesLastAdmin(current.state, body.patch)) {
+        console.warn("kpi-sync destructive mutation blocked", { accountId, revision: current.revision, ...audit });
         return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
       }
+      console.log("kpi-sync mutation audit", { accountId, revision: current.revision, ...audit });
       const result = await updateWithRetry(accountId, body.patch);
       const responseAccount = accountForId(result.snapshot.state, accountId) || accountForId(current.state, accountId);
       if (!responseAccount) return json(request, { error: "Authentication required." }, 401);
