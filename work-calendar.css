@@ -33,7 +33,7 @@
 .calendar-export { position: relative; margin-left: auto; }
 .calendar-reminder-setting { display: flex; gap: 6px; align-items: center; font-size: 13px; }
 .calendar-reminder-setting select { width: auto; min-width: 95px; }
-.calendar-reminder-toast { position: fixed; bottom: 24px; right: 24px; z-index: 1800; width: min(390px, calc(100vw - 32px)); max-height: 50vh; overflow-y: auto; background: #fff; border: 1px solid #aacdc8; border-left: 4px solid #247f71; border-radius: 8px; box-shadow: 0 8px 25px #1c353226; padding: 14px; }
+.calendar-reminder-toast { position: fixed; bottom: 24px; left: 24px; right: auto; z-index: 1800; width: min(390px, calc(100vw - 32px)); max-height: 50vh; overflow-y: auto; background: #fff; border: 1px solid #aacdc8; border-left: 4px solid #247f71; border-radius: 8px; box-shadow: 0 8px 25px #1c353226; padding: 14px; }
 .calendar-reminder-toast > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 body:not(.is-authenticated) .calendar-reminder-toast { display: none; }
 .calendar-export summary { cursor: pointer; padding: 8px 12px; border: 1px solid #cbd9e4; border-radius: 6px; font-weight: 600; }
@@ -124,7 +124,7 @@ body:not(.is-authenticated) .calendar-reminder-toast { display: none; }
   .calendar-form > fieldset, .calendar-form > .calendar-leader-field, .calendar-form > .calendar-department-field { grid-column: 1 / -1; }
   .calendar-form > .calendar-recurrence-field, .calendar-form > .calendar-reminder-field, .calendar-form > .calendar-leader-field { grid-row: auto; }
   .calendar-participants { grid-template-columns: 1fr; }
-  .calendar-reminder-toast { bottom: 85px; right: 16px; }
+  .calendar-reminder-toast { bottom: 85px; left: 16px; right: auto; }
   #taskForm .status-choice { padding: 8px 6px; gap: 5px; font-size: 13px; }
 }
 @media (max-width: 700px) {

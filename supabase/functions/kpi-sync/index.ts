@@ -16,13 +16,13 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.09.18.2";
+const deploymentVersion = "2026.10.09.1";
 const passwordHashAlgorithm = "pbkdf2-sha256-v1";
 const passwordHashIterations = 310_000;
 const passwordSaltBytes = 16;
 const passwordHashBytes = 32;
 
-const collections = ["people", "calendarEvents", "tasks", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "activityLog"] as const;
+const collections = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "nhanVienTongHopGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "kpiPeriodLocks", "deletedIds"] as const;
 const moduleAccessRoles = ["director", "manager", "deputy_manager", "section_head", "employee"] as const;
 const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "calendar", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
@@ -44,7 +44,7 @@ const moduleSettingsVersion = 3;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log";
+type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -105,10 +105,26 @@ type KpiCatalogUpdate = {
   kpiParameters: JsonRecord;
 };
 
+type EmployeeHandoverAssignment = {
+  taskId: string;
+  successorPersonId: string;
+};
+
+type EmployeeHandoverUpdate = {
+  personId: string;
+  handoverDate: string;
+  note: string;
+  taskAssignments: EmployeeHandoverAssignment[];
+  recurrenceAssignments: EmployeeHandoverAssignment[];
+  removeFromCollaborations: boolean;
+};
+
 const projectionTableByCollection: Partial<Record<CollectionName, RecordProjectionTable>> = {
   people: "people",
   tasks: "tasks",
+  gpmbWorkflows: "gpmb_workflows",
   evaluations: "evaluations",
+  notifications: "notifications",
   activityLog: "activity_log",
 };
 const kpiCatalogScalarFields: ScalarField[] = [
@@ -485,6 +501,31 @@ function validKpiCatalogUpdate(value: unknown): value is KpiCatalogUpdate {
   return departmentsValid && rolesValid && behaviorValid && parametersValid;
 }
 
+function validEmployeeHandoverUpdate(value: unknown): value is EmployeeHandoverUpdate {
+  if (!isRecord(value) || !Array.isArray(value.taskAssignments) || !Array.isArray(value.recurrenceAssignments) || typeof value.removeFromCollaborations !== "boolean") return false;
+  const personId = String(value.personId || "").trim();
+  const handoverDate = String(value.handoverDate || "").trim();
+  const parsedDate = new Date(`${handoverDate}T12:00:00Z`);
+  const validAssignments = (assignments: unknown[]): boolean => {
+    if (assignments.length > 1000) return false;
+    const taskIds = assignments.map((assignment) => isRecord(assignment) ? String(assignment.taskId || "").trim() : "");
+    const successorIds = assignments.map((assignment) => isRecord(assignment) ? String(assignment.successorPersonId || "").trim() : "");
+    return taskIds.every(Boolean)
+      && successorIds.every(Boolean)
+      && taskIds.every((taskId) => taskId.length <= 128)
+      && successorIds.every((personId) => personId.length <= 128)
+      && new Set(taskIds).size === taskIds.length;
+  };
+  return Boolean(personId)
+    && personId.length <= 128
+    && /^\d{4}-\d{2}-\d{2}$/.test(handoverDate)
+    && !Number.isNaN(parsedDate.getTime())
+    && parsedDate.toISOString().slice(0, 10) === handoverDate
+    && String(value.note || "").length <= 1000
+    && validAssignments(value.taskAssignments)
+    && validAssignments(value.recurrenceAssignments);
+}
+
 function remapKpiIndexedValues(value: unknown, previousCriteria: unknown, nextCriteria: unknown): unknown {
   if (!isRecord(value) || !Array.isArray(previousCriteria) || !Array.isArray(nextCriteria)) return value;
   const nextIndexesByName = new Map(
@@ -704,6 +745,7 @@ function defaultState(): JsonRecord {
     activePeriod: currentPeriod(),
     people: [],
     tasks: [],
+    gpmbWorkflows: [],
     calendarEvents: [],
     projectCatalog: [],
     bulletins: [],
@@ -712,6 +754,7 @@ function defaultState(): JsonRecord {
     departmentEvaluations: [],
     accounts: bootstrapAccounts(),
     supportRequests: [],
+    notifications: [],
     moduleSettings: {},
     systemCustomization: {},
     departments: [],
@@ -732,7 +775,7 @@ function validState(state: unknown): state is JsonRecord {
   // projectCatalog and supportRequests were added after the first production
   // snapshots. Keep older central data readable until their next update.
   return isRecord(state) && collections
-    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents")
+    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents" && key !== "notifications" && key !== "gpmbWorkflows")
     .every((key) => Array.isArray(state[key]));
 }
 
@@ -749,6 +792,8 @@ async function prepareInitialState(incoming: JsonRecord, actor: JsonRecord): Pro
   if (!Array.isArray(next.projectCatalog)) next.projectCatalog = [];
   if (!Array.isArray(next.supportRequests)) next.supportRequests = [];
   if (!Array.isArray(next.calendarEvents)) next.calendarEvents = [];
+  if (!Array.isArray(next.notifications)) next.notifications = [];
+  if (!Array.isArray(next.gpmbWorkflows)) next.gpmbWorkflows = [];
   if (!Array.isArray(next.deletedIds)) next.deletedIds = [];
   const accounts = records(next, "accounts");
   let restoredActor = accounts.find((account) => recordId(account) === recordId(actor));
@@ -844,6 +889,7 @@ async function snapshot(): Promise<StateSnapshot> {
   if (!Array.isArray(state.projectCatalog)) state.projectCatalog = [];
   if (!Array.isArray(state.supportRequests)) state.supportRequests = [];
   if (!Array.isArray(state.calendarEvents)) state.calendarEvents = [];
+  if (!Array.isArray(state.notifications)) state.notifications = [];
   const current = {
     revision: Number(data.revision) || 0,
     updatedAt: String(data.updated_at || ""),
@@ -1047,6 +1093,10 @@ function personForId(state: JsonRecord, id: string): JsonRecord | undefined {
   return records(state, "people").find((person) => String(person.id || "") === id);
 }
 
+function personIsActive(person: JsonRecord | undefined): boolean {
+  return Boolean(person) && !["left", "suspended"].includes(String(person.employmentStatus || "active"));
+}
+
 function accountRole(account: JsonRecord): string {
   return String(account.role || "");
 }
@@ -1200,6 +1250,10 @@ function moduleIsAvailableToAccount(state: JsonRecord, account: JsonRecord, modu
 
 function isDirector(account: JsonRecord): boolean {
   return accountRole(account) === "director";
+}
+
+function canViewMonthlyWorkReport(account: JsonRecord): boolean {
+  return isAdmin(account) || isDirector(account);
 }
 
 function canViewSystemContent(account: JsonRecord): boolean {
@@ -1390,6 +1444,31 @@ function taskProgressFields(allowCollaboratorChanges = false): string[] {
 
 function isBlankTaskField(value: unknown): boolean {
   return String(value ?? "").trim() === "";
+}
+
+const taskOriginAuditFields = ["createdAt", "createdBy", "createdById"] as const;
+
+function preserveTaskOriginAudit(previous: JsonRecord, candidate: JsonRecord): JsonRecord {
+  const normalized = clone(candidate);
+  taskOriginAuditFields.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(previous, field)) normalized[field] = previous[field];
+    else delete normalized[field];
+  });
+  return normalized;
+}
+
+function stampTaskAudit(previous: JsonRecord | undefined, candidate: JsonRecord, actor: JsonRecord): JsonRecord {
+  const timestamp = new Date().toISOString();
+  const saved = clone(candidate);
+  if (!previous) {
+    saved.createdAt = timestamp;
+    saved.createdBy = String(actor.displayName || actor.username || "Tai khoan");
+    saved.createdById = String(actor.id || "");
+  }
+  saved.updatedAt = timestamp;
+  saved.updatedBy = String(actor.displayName || actor.username || "Tai khoan");
+  saved.updatedById = String(actor.id || "");
+  return saved;
 }
 
 function normalizeTaskCompletionLifecycle(next: JsonRecord): JsonRecord {
@@ -1721,7 +1800,391 @@ function calendarPublicDirectory(state: JsonRecord): JsonRecord[] {
   return records(state, "people").map((person) => ({ id: person.id, name: person.name, departmentId: person.departmentId, roleId: person.roleId }));
 }
 
+const notificationMutableFields = ["readAt", "dismissedAt", "updatedAt"];
+const notificationAcknowledgementFields = ["id", "notificationType", "sourceNotificationId", "recipientAccountId", "readAt", "dismissedAt", "updatedAt"];
+
+function notificationDateIsValid(value: unknown): boolean {
+  return !String(value || "") || Number.isFinite(new Date(String(value)).getTime());
+}
+
+function taskNotificationRecipientAccountIds(state: JsonRecord, task: JsonRecord): string[] {
+  const recipientIds = new Set<string>();
+  taskParticipantValues(task).forEach((participant) => {
+    const directAccount = accountForTaskParticipant(state, participant);
+    if (directAccount && !Boolean(directAccount.disabled)) recipientIds.add(recordId(directAccount));
+    const person = taskParticipantPerson(state, participant);
+    if (!person) return;
+    records(state, "accounts")
+      .filter((account) => !Boolean(account.disabled) && String(account.personId || "") === recordId(person))
+      .forEach((account) => recipientIds.add(recordId(account)));
+  });
+  [task.assignedById, task.createdById].forEach((accountId) => {
+    const account = accountForId(state, String(accountId || ""));
+    if (account && !Boolean(account.disabled)) recipientIds.add(recordId(account));
+  });
+  return [...recipientIds].filter(Boolean);
+}
+
+function taskDeadlineNotificationForAccount(state: JsonRecord, account: JsonRecord, task: JsonRecord): JsonRecord | null {
+  const due = String(task.due || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due) || completedTaskStatus(task.status) || ["Đã kết thúc", "Da ket thuc"].includes(String(task.status || "")) || String(task.completionReviewStatus || "") === "pending") return null;
+  if (!taskNotificationRecipientAccountIds(state, task).includes(recordId(account))) return null;
+  const today = vietnamDateKey();
+  if (due > today) return null;
+  const acknowledgement = records(state, "notifications").find((notification) => (
+    String(notification.notificationType || "") === "acknowledgement"
+    && String(notification.recipientAccountId || "") === recordId(account)
+    && String(notification.sourceNotificationId || "") === `task-deadline:${recordId(task)}:${due}`
+  ));
+  const overdue = due < today;
+  return {
+    id: `task-deadline:${recordId(task)}:${due}`,
+    notificationType: "derived",
+    derived: true,
+    recipientAccountId: recordId(account),
+    category: "task",
+    priority: overdue ? "danger" : "warning",
+    title: overdue ? "Công việc đã quá hạn" : "Công việc đến hạn hôm nay",
+    message: String(task.title || "Công việc chưa có tên"),
+    createdAt: `${due}T08:00:00+07:00`,
+    scheduledAt: `${due}T23:59:59+07:00`,
+    targetType: "task",
+    targetId: recordId(task),
+    readAt: String(acknowledgement?.readAt || ""),
+    dismissedAt: String(acknowledgement?.dismissedAt || ""),
+  };
+}
+
+function notificationFeedForAccount(state: JsonRecord, account: JsonRecord): JsonRecord[] {
+  const accountId = recordId(account);
+  const stored = records(state, "notifications")
+    .filter((notification) => String(notification.recipientAccountId || "") === accountId)
+    .filter((notification) => String(notification.notificationType || "") !== "acknowledgement");
+  const storedIds = new Set(stored.map(recordId));
+  const deadlines = records(state, "tasks")
+    .map((task) => taskDeadlineNotificationForAccount(state, account, task))
+    .filter((notification): notification is JsonRecord => notification !== null)
+    .filter((notification) => !storedIds.has(recordId(notification)));
+  return [...stored, ...deadlines]
+    .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+}
+
+function notificationSourceIsKnownForAccount(state: JsonRecord, account: JsonRecord, sourceId: string): boolean {
+  return records(state, "tasks").some((task) => recordId(taskDeadlineNotificationForAccount(state, account, task)) === sourceId);
+}
+
+function notificationAcknowledgementIsValid(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, next: JsonRecord): boolean {
+  const actorId = recordId(actor);
+  if (!actorId || String(next.recipientAccountId || "") !== actorId) return false;
+  if (!notificationDateIsValid(next.readAt) || !notificationDateIsValid(next.dismissedAt) || !notificationDateIsValid(next.updatedAt)) return false;
+  if (previous) {
+    if (String(previous.notificationType || "") === "acknowledgement") {
+      if (!sameJson(withoutKeys(previous, notificationMutableFields), withoutKeys(next, notificationMutableFields))) return false;
+      return String(previous.recipientAccountId || "") === actorId;
+    }
+    if (String(previous.notificationType || "") !== "event") return false;
+    return String(previous.recipientAccountId || "") === actorId
+      && sameJson(withoutKeys(previous, notificationMutableFields), withoutKeys(next, notificationMutableFields));
+  }
+  if (String(next.notificationType || "") !== "acknowledgement") return false;
+  if (!Object.keys(next).every((field) => notificationAcknowledgementFields.includes(field))) return false;
+  const sourceId = String(next.sourceNotificationId || "").trim();
+  return Boolean(sourceId)
+    && String(next.id || "") === `notification-ack:${sourceId}`
+    && notificationSourceIsKnownForAccount(state, actor, sourceId);
+}
+
+function appendSystemNotification(state: JsonRecord, recipientAccountId: string, notification: JsonRecord): string {
+  if (!recipientAccountId || !accountForId(state, recipientAccountId)) return "";
+  const timestamp = new Date().toISOString();
+  const record = {
+    id: `notification-${crypto.randomUUID()}`,
+    notificationType: "event",
+    recipientAccountId,
+    category: String(notification.category || "system"),
+    priority: String(notification.priority || "info"),
+    title: String(notification.title || "Thông báo hệ thống"),
+    message: String(notification.message || ""),
+    createdAt: timestamp,
+    targetType: String(notification.targetType || ""),
+    targetId: String(notification.targetId || ""),
+    readAt: "",
+    dismissedAt: "",
+    updatedAt: timestamp,
+  };
+  const existing = records(state, "notifications");
+  // Retain acknowledgements for derived deadline notices, while bounding the
+  // server-generated event stream so snapshots remain responsive.
+  const events = existing.filter((item) => String(item.notificationType || "") === "event");
+  const acknowledgements = existing.filter((item) => String(item.notificationType || "") === "acknowledgement");
+  state.notifications = [...acknowledgements, ...[...events, record].slice(-3000)];
+  return record.id;
+}
+
+function taskNotificationChanged(previous: JsonRecord, next: JsonRecord): boolean {
+  return ["status", "progress", "blockerStatus", "blockerNote", "completionReviewStatus", "qualityPercent", "updatedAt", "progressReports"]
+    .some((field) => !sameJson(previous[field], next[field]));
+}
+
+function appendTaskChangeNotifications(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, next: JsonRecord): string[] {
+  const actorId = recordId(actor);
+  const taskTitle = String(next.title || "Công việc chưa có tên");
+  const participantRecipients = taskNotificationRecipientAccountIds(state, next).filter((accountId) => accountId && accountId !== actorId);
+  const createdIds: string[] = [];
+  const emit = (recipientIds: string[], details: JsonRecord) => recipientIds.forEach((recipientId) => {
+    const id = appendSystemNotification(state, recipientId, { ...details, targetType: "task", targetId: recordId(next) });
+    if (id) createdIds.push(id);
+  });
+  if (!previous) {
+    emit(participantRecipients, { category: "task", priority: "info", title: "Bạn có công việc mới", message: taskTitle });
+    return createdIds;
+  }
+  if (!taskNotificationChanged(previous, next)) return createdIds;
+  const wasCompleted = completedTaskStatus(previous.status);
+  const isCompleted = completedTaskStatus(next.status);
+  const previousReview = String(previous.completionReviewStatus || "");
+  const nextReview = String(next.completionReviewStatus || "");
+  if (isCompleted && nextReview === "pending" && (!wasCompleted || previousReview !== "pending")) {
+    const reviewers = records(state, "accounts")
+      .filter((account) => !Boolean(account.disabled) && recordId(account) !== actorId && canReviewTaskCompletion(state, account, next))
+      .map(recordId);
+    emit(reviewers, { category: "task", priority: "warning", title: "Công việc chờ đánh giá hoàn thành", message: taskTitle });
+    return createdIds;
+  }
+  if (nextReview === "passed" && previousReview !== "passed") {
+    emit(participantRecipients, { category: "task", priority: "success", title: "Công việc đã được đánh giá đạt", message: taskTitle });
+    return createdIds;
+  }
+  if (nextReview === "failed" && previousReview !== "failed") {
+    emit(participantRecipients, { category: "task", priority: "warning", title: "Công việc cần tiếp tục thực hiện", message: taskTitle });
+    return createdIds;
+  }
+  emit(participantRecipients, { category: "task", priority: "info", title: "Công việc có cập nhật mới", message: taskTitle });
+  return createdIds;
+}
+
+const gpmbWorkflowCategory = "Quy tr\u00ecnh GPMB";
+const gpmbWorkflowTemplate = [
+  { id: "plan", title: "X\u00e2y d\u1ef1ng k\u1ebf ho\u1ea1ch thu h\u1ed3i \u0111\u1ea5t", documents: "K\u1ebf ho\u1ea1ch thu h\u1ed3i \u0111\u1ea5t", days: 7 },
+  { id: "meeting", title: "T\u1ed5 ch\u1ee9c h\u1ecdp ph\u1ed5 bi\u1ebfn v\u00e0 ti\u1ebfp nh\u1eadn \u00fd ki\u1ebfn", documents: "K\u1ebf ho\u1ea1ch h\u1ecdp, bi\u00ean b\u1ea3n v\u00e0 danh s\u00e1ch tham d\u1ef1", days: 3 },
+  { id: "notice", title: "Ban h\u00e0nh, g\u1eedi v\u00e0 ni\u00eam y\u1ebft th\u00f4ng b\u00e1o thu h\u1ed3i \u0111\u1ea5t", documents: "Th\u00f4ng b\u00e1o, b\u1eb1ng ch\u1ee9ng g\u1eedi v\u00e0 ni\u00eam y\u1ebft", days: 10 },
+  { id: "survey", title: "\u0110i\u1ec1u tra, kh\u1ea3o s\u00e1t, \u0111o \u0111\u1ea1c v\u00e0 ki\u1ec3m \u0111\u1ebfm", documents: "Bi\u00ean b\u1ea3n ki\u1ec3m \u0111\u1ebfm v\u00e0 h\u1ed3 s\u01a1 ngu\u1ed3n g\u1ed1c \u0111\u1ea5t", days: 20 },
+  { id: "draft-plan", title: "L\u1eadp ph\u01b0\u01a1ng \u00e1n b\u1ed3i th\u01b0\u1eddng, h\u1ed7 tr\u1ee3 v\u00e0 t\u00e1i \u0111\u1ecbnh c\u01b0", documents: "D\u1ef1 th\u1ea3o ph\u01b0\u01a1ng \u00e1n v\u00e0 b\u1ea3ng t\u00ednh", days: 15 },
+  { id: "disclosure", title: "Ni\u00eam y\u1ebft c\u00f4ng khai d\u1ef1 th\u1ea3o ph\u01b0\u01a1ng \u00e1n", documents: "Th\u00f4ng b\u00e1o ni\u00eam y\u1ebft v\u00e0 bi\u00ean b\u1ea3n c\u00f4ng khai", days: 30 },
+  { id: "consultation", title: "L\u1ea5y \u00fd ki\u1ebfn, \u0111\u1ed1i tho\u1ea1i v\u00e0 ho\u00e0n thi\u1ec7n ph\u01b0\u01a1ng \u00e1n", documents: "\u00dd ki\u1ebfn, bi\u00ean b\u1ea3n \u0111\u1ed1i tho\u1ea1i v\u00e0 gi\u1ea3i tr\u00ecnh", days: 10, conditionalDays: 60, conditionKey: "noCooperation" },
+  { id: "appraisal", title: "Th\u1ea9m \u0111\u1ecbnh ph\u01b0\u01a1ng \u00e1n", documents: "H\u1ed3 s\u01a1 tr\u00ecnh v\u00e0 k\u1ebft qu\u1ea3 th\u1ea9m \u0111\u1ecbnh", days: 30 },
+  { id: "approval", title: "Ph\u00ea duy\u1ec7t ph\u01b0\u01a1ng \u00e1n", documents: "T\u1edd tr\u00ecnh v\u00e0 quy\u1ebft \u0111\u1ecbnh ph\u00ea duy\u1ec7t", days: 7 },
+  { id: "approval-disclosure", title: "C\u00f4ng khai quy\u1ebft \u0111\u1ecbnh ph\u00ea duy\u1ec7t", documents: "Th\u00f4ng b\u00e1o v\u00e0 bi\u00ean b\u1ea3n c\u00f4ng khai", days: 3 },
+  { id: "send-plan", title: "G\u1eedi ph\u01b0\u01a1ng \u00e1n \u0111\u00e3 ph\u00ea duy\u1ec7t \u0111\u1ebfn ng\u01b0\u1eddi c\u00f3 \u0111\u1ea5t thu h\u1ed3i", documents: "Danh s\u00e1ch g\u1eedi, x\u00e1c nh\u1eadn ti\u1ebfp nh\u1eadn", days: 7 },
+  { id: "payment", title: "Chi tr\u1ea3 b\u1ed3i th\u01b0\u1eddng, h\u1ed7 tr\u1ee3 v\u00e0 b\u1ed1 tr\u00ed t\u00e1i \u0111\u1ecbnh c\u01b0", documents: "Ch\u1ee9ng t\u1eeb chi tr\u1ea3 v\u00e0 h\u1ed3 s\u01a1 b\u1ed1 tr\u00ed t\u00e1i \u0111\u1ecbnh c\u01b0", days: 20 },
+  { id: "recovery-decision", title: "Ban h\u00e0nh quy\u1ebft \u0111\u1ecbnh thu h\u1ed3i \u0111\u1ea5t", documents: "Quy\u1ebft \u0111\u1ecbnh thu h\u1ed3i \u0111\u1ea5t", days: 7 },
+  { id: "persuasion", title: "V\u1eadn \u0111\u1ed9ng, thuy\u1ebft ph\u1ee5c tr\u01b0\u1eddng h\u1ee3p ch\u01b0a \u0111\u1ed3ng thu\u1eadn", documents: "Bi\u00ean b\u1ea3n v\u1eadn \u0111\u1ed9ng v\u00e0 k\u1ebft qu\u1ea3 x\u1eed l\u00fd", days: 10, activationKey: "noCooperation" },
+  { id: "handover", title: "V\u1eadn \u0111\u1ed9ng b\u00e0n giao \u0111\u1ea5t v\u00e0 chu\u1ea9n b\u1ecb c\u01b0\u1ee1ng ch\u1ebf khi c\u1ea7n", documents: "Bi\u00ean b\u1ea3n v\u1eadn \u0111\u1ed9ng, h\u1ed3 s\u01a1 c\u01b0\u1ee1ng ch\u1ebf n\u1ebfu ph\u00e1t sinh", days: 10, activationKey: "noHandover" },
+  { id: "land-management", title: "Qu\u1ea3n l\u00fd di\u1ec7n t\u00edch \u0111\u1ea5t \u0111\u00e3 thu h\u1ed3i", documents: "Bi\u00ean b\u1ea3n b\u00e0n giao \u0111\u1ea5t v\u00e0 h\u1ed3 s\u01a1 qu\u1ea3n l\u00fd", days: 30 },
+] as const;
+
+function gpmbIsoDate(value: unknown): string {
+  const date = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "";
+}
+
+function gpmbAddDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function gpmbStepEnabled(step: typeof gpmbWorkflowTemplate[number], conditions: JsonRecord): boolean {
+  return !step.activationKey || conditions[step.activationKey] === true;
+}
+
+function gpmbStepDuration(step: typeof gpmbWorkflowTemplate[number], conditions: JsonRecord, requested: unknown): number {
+  const parsed = Number(requested);
+  if (Number.isFinite(parsed) && parsed >= 1) return Math.min(365, Math.round(parsed));
+  return step.conditionalDays && conditions[step.conditionKey || ""] === true ? step.conditionalDays : step.days;
+}
+
+function gpmbTaskId(workflowId: string, stepId: string): string {
+  return `gpmb-task-${workflowId.replace(/[^a-zA-Z0-9_-]/g, "")}-${stepId}`;
+}
+
+function canManageGpmbWorkflow(state: JsonRecord, actor: JsonRecord): boolean {
+  return moduleIsAvailableToAccount(state, actor, "tasks")
+    && (isAdmin(actor) || isDirector(actor) || hasDepartmentTaskAccess(actor));
+}
+
+function canAdjustGpmbWorkflowTimeline(actor: JsonRecord): boolean {
+  return isAdmin(actor) || isDirector(actor);
+}
+
+function gpmbCollaboratorIds(value: unknown, ownerId: unknown): string[] {
+  const owner = String(ownerId || "").trim();
+  const values = Array.isArray(value) ? value : String(value || "").split(",");
+  return [...new Set(values.map((item) => String(item || "").trim()).filter((item) => item && item !== owner))];
+}
+
+function gpmbCollaboratorsAreActive(state: JsonRecord, collaboratorIds: string[]): boolean {
+  return collaboratorIds.every((id) => personIsActive(personForId(state, id)));
+}
+
+function gpmbWorkflowManagedTask(task: JsonRecord | undefined): boolean {
+  return Boolean(task && String(task.gpmbWorkflowId || "") && String(task.gpmbStepId || ""));
+}
+
+function gpmbWorkflowTaskChangeAllowed(state: JsonRecord, actor: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
+  if (String(previous.gpmbWorkflowId || "") !== String(next.gpmbWorkflowId || "") || String(previous.gpmbStepId || "") !== String(next.gpmbStepId || "")) return false;
+  return (canUpdateTask(state, actor, previous, next) && taskProgressOnlyChange(previous, next, true))
+    || (canReviewTaskCompletion(state, actor, previous) && taskCompletionReviewChange(previous, next))
+    || (canAssessTaskQuality(state, actor, previous) && taskQualityOnlyChange(previous, next));
+}
+
+function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord | null {
+  const workflowId = recordId(candidate);
+  const canAdjustCore = !previous || isAdmin(actor);
+  const projectId = String(canAdjustCore ? candidate.projectId : previous?.projectId || "").trim();
+  const project = records(state, "projectCatalog").find((item) => recordId(item) === projectId);
+  const title = String(canAdjustCore ? candidate.title : previous?.title || "").trim().slice(0, 220);
+  const canAdjustTimeline = !previous || canAdjustGpmbWorkflowTimeline(actor);
+  const startDate = canAdjustTimeline
+    ? gpmbIsoDate(candidate.startDate)
+    : gpmbIsoDate(previous?.startDate);
+  if (!workflowId || !project || !title || !startDate) return null;
+  const requestedConditions = isRecord(candidate.conditions) ? candidate.conditions : {};
+  const candidateSteps = new Map((Array.isArray(candidate.steps) ? candidate.steps : []).filter(isRecord).map((step) => [String(step.id || ""), step]));
+  const priorSteps = new Map((Array.isArray(previous?.steps) ? previous?.steps : []).filter(isRecord).map((step) => [String(step.id || ""), step]));
+  if (candidateSteps.size && gpmbWorkflowTemplate.some((step) => !candidateSteps.has(step.id))) return null;
+  const conditions: JsonRecord = { noCooperation: requestedConditions.noCooperation === true, noHandover: requestedConditions.noHandover === true };
+  let cursor = startDate;
+  let activeAssigned = false;
+  let invalidParticipant = false;
+  const steps = gpmbWorkflowTemplate.map((template) => {
+    const requested = candidateSteps.get(template.id) || {};
+    const prior = priorSteps.get(template.id);
+    const enabled = gpmbStepEnabled(template, conditions);
+    if (prior?.taskId) {
+      const preserved = clone(prior);
+      const preservedDue = gpmbIsoDate(preserved.due);
+      if (preservedDue) cursor = gpmbAddDays(preservedDue, 1);
+      if (String(preserved.status || "") === "active") activeAssigned = true;
+      return preserved;
+    }
+    if (!enabled) return { id: template.id, title: template.title, documents: template.documents, activationKey: template.activationKey || "", days: template.days, startDate: "", due: "", ownerId: "", ownerName: "", collaboratorIds: [], collaboratorNames: [], status: "skipped", taskId: "", activatedAt: "", completedAt: "" };
+    const requestedStart = canAdjustTimeline
+      ? gpmbIsoDate(requested.startDate)
+      : gpmbIsoDate(prior?.startDate);
+    const start = requestedStart && requestedStart >= cursor ? requestedStart : cursor;
+    const days = gpmbStepDuration(template, conditions, canAdjustTimeline ? requested.days : prior?.days);
+    const ownerId = String(requested.ownerId || "").trim();
+    const owner = personForId(state, ownerId);
+    const collaboratorIds = gpmbCollaboratorIds(requested.collaboratorIds ?? prior?.collaboratorIds, ownerId);
+    if (!personIsActive(owner) || !gpmbCollaboratorsAreActive(state, collaboratorIds)) invalidParticipant = true;
+    const status = activeAssigned ? "waiting" : "active";
+    activeAssigned ||= true;
+    const due = gpmbAddDays(start, days - 1);
+    cursor = gpmbAddDays(due, 1);
+    return { id: template.id, title: template.title, documents: template.documents, activationKey: template.activationKey || "", days, startDate: start, due, ownerId, ownerName: String(owner?.name || ""), collaboratorIds, collaboratorNames: collaboratorIds.map((id) => String(personForId(state, id)?.name || "")), status, taskId: "", activatedAt: "", completedAt: "" };
+  });
+  if (invalidParticipant) return null;
+  const current = steps.find((step) => String(step.status || "") === "active");
+  return {
+    ...clone(candidate),
+    title,
+    projectId,
+    projectName: String(project.name || ""),
+    startDate,
+    conditions,
+    status: current ? "active" : "completed",
+    currentStepId: String(current?.id || ""),
+    steps,
+    createdAt: previous?.createdAt || new Date().toISOString(),
+    createdBy: previous?.createdBy || candidate.createdBy || "",
+    createdById: previous?.createdById || candidate.createdById || "",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function advanceGpmbWorkflows(state: JsonRecord, actor: JsonRecord): { taskIds: string[]; workflowIds: string[]; notificationIds: string[] } {
+  const tasks = recordMap(state, "tasks");
+  const taskIds: string[] = [];
+  const workflowIds: string[] = [];
+  const notificationIds: string[] = [];
+  const workflows = records(state, "gpmbWorkflows");
+  workflows.forEach((workflow) => {
+    const steps = Array.isArray(workflow.steps) ? workflow.steps.filter(isRecord).map(clone) : [];
+    let activeIndex = steps.findIndex((step) => String(step.status || "") === "active");
+    let mutated = false;
+    if (activeIndex >= 0) {
+      const active = steps[activeIndex];
+      const activeTask = tasks.get(String(active.taskId || ""));
+      if (activeTask && completedTaskStatus(activeTask.status) && String(activeTask.completionReviewStatus || "") === "passed") {
+        steps[activeIndex] = { ...active, status: "completed", completedAt: new Date().toISOString() };
+        activeIndex += 1;
+        while (activeIndex < steps.length) {
+          const template = gpmbWorkflowTemplate.find((item) => item.id === String(steps[activeIndex].id || ""));
+          if (template && gpmbStepEnabled(template, isRecord(workflow.conditions) ? workflow.conditions : {})) break;
+          steps[activeIndex] = { ...steps[activeIndex], status: "skipped", startDate: "", due: "", taskId: "" };
+          activeIndex += 1;
+        }
+        if (activeIndex < steps.length) steps[activeIndex] = { ...steps[activeIndex], status: "active", activatedAt: new Date().toISOString() };
+        mutated = true;
+      }
+    }
+    if (activeIndex >= 0 && activeIndex < steps.length) {
+      const active = steps[activeIndex];
+      const taskId = gpmbTaskId(recordId(workflow), String(active.id || ""));
+      if (!String(active.taskId || "")) {
+        const previousStep = steps[activeIndex - 1];
+        const generated = stampTaskAudit(undefined, {
+          id: taskId,
+          title: `GPMB · Bước ${String(activeIndex + 1).padStart(2, "0")} · ${String(active.title || "")}`,
+          projectId: workflow.projectId,
+          projectName: workflow.projectName,
+          ownerId: active.ownerId,
+          collaboratorIds: gpmbCollaboratorIds(active.collaboratorIds, active.ownerId),
+          collaboratorNames: Array.isArray(active.collaboratorNames)
+            ? active.collaboratorNames.map((value) => String(value || "").trim()).filter(Boolean)
+            : gpmbCollaboratorIds(active.collaboratorIds, active.ownerId).map((id) => String(personForId(state, id)?.name || "")),
+          category: gpmbWorkflowCategory,
+          kind: "regular",
+          workType: "arising",
+          priority: "high",
+          recurrence: "none",
+          startDate: active.startDate,
+          due: active.due,
+          dueTime: "",
+          status: "Chuẩn bị thực hiện",
+          progress: 0,
+          qualityPercent: "",
+          note: `${String(workflow.title || "")}\n${String(active.documents || "")}`,
+          dependencyIds: previousStep?.taskId ? [String(previousStep.taskId)] : [],
+          attachments: [], progressReports: [], completionReviewStatus: "", completionReviewedAt: "", completionReviewedById: "", completionReviewedByName: "", completionReviewNote: "", completedAt: "", completedById: "", completedByName: "", lateCompletion: false, blockerStatus: "none", blockerNote: "", followUpDate: "",
+          gpmbWorkflowId: recordId(workflow), gpmbStepId: active.id, gpmbStepIndex: activeIndex + 1, gpmbGenerated: true, gpmbGeneratedAt: new Date().toISOString(), gpmbOwnerLabel: active.ownerName || "",
+        }, actor);
+        if (!tasks.has(taskId)) {
+          tasks.set(taskId, generated);
+          taskIds.push(taskId);
+          notificationIds.push(...appendTaskChangeNotifications(state, actor, undefined, generated));
+        }
+        steps[activeIndex] = { ...active, taskId, activatedAt: active.activatedAt || new Date().toISOString() };
+        mutated = true;
+      }
+    }
+    const completed = activeIndex >= steps.length || !steps.some((step) => String(step.status || "") === "active");
+    if (mutated) {
+      Object.assign(workflow, { steps, currentStepId: completed ? "" : String(steps[activeIndex]?.id || ""), status: completed ? "completed" : "active", updatedAt: new Date().toISOString(), updatedBy: String(actor.displayName || actor.username || ""), updatedById: String(actor.id || "") });
+      workflowIds.push(recordId(workflow));
+    }
+  });
+  state.tasks = records(state, "tasks").filter((task) => !taskIds.includes(recordId(task))).concat(taskIds.map((id) => tasks.get(id)!).filter(Boolean));
+  return { taskIds, workflowIds, notificationIds };
+}
+
 function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionName, previous: JsonRecord | undefined, next: JsonRecord): boolean {
+  if (collection === "notifications") return notificationAcknowledgementIsValid(state, actor, previous, next);
+  if (collection === "gpmbWorkflows") return canManageGpmbWorkflow(state, actor);
+  if (collection === "tasks" && typeof gpmbWorkflowManagedTask === "function" && (gpmbWorkflowManagedTask(previous) || gpmbWorkflowManagedTask(next))) {
+    return Boolean(previous) && gpmbWorkflowTaskChangeAllowed(state, actor, previous, next);
+  }
   if (collection === "calendarEvents") {
     return validCalendarEvent(state, next) && canManageCalendarEvent(state, actor)
       && (!previous || (next.createdById === previous.createdById && next.createdAt === previous.createdAt))
@@ -1751,13 +2214,27 @@ function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   return false;
 }
 
+function personHasRetainedReferences(state: JsonRecord, personId: string): boolean {
+  if (!personId) return false;
+  if (records(state, "tasks").some((task) => taskParticipantValues(task).includes(personId))) return true;
+  if (records(state, "evaluations").some((evaluation) => String(evaluation.personId || "") === personId)) return true;
+  if (records(state, "accounts").some((account) => String(account.personId || "") === personId)) return true;
+  if (records(state, "activityLog").some((entry) => String(entry.personId || "") === personId)) return true;
+  return records(state, "calendarEvents").some((event) => [
+    ...calendarIds(event.leaderIds),
+    ...calendarIds(event.participantIds),
+  ].includes(personId));
+}
+
 function canDelete(state: JsonRecord, actor: JsonRecord, collection: CollectionName, previous: JsonRecord): boolean {
+  if (collection === "notifications") return false;
+  if (collection === "gpmbWorkflows") return false;
   if (collection === "calendarEvents") return canManageCalendarEvent(state, actor)
     && !records(state, "tasks").some((task) => task.sourceCalendarEventId === previous.id);
+  if (collection === "people") return canManagePeople(state, actor) && !personHasRetainedReferences(state, recordId(previous));
   if (isAdmin(actor)) return true;
   if (collection === "activityLog") return false;
   if (collection === "projectCatalog") return moduleIsAvailableToAccount(state, actor, "tasks") && (isAdmin(actor) || hasDepartmentManagement(actor) || accountRole(actor) === "section_head");
-  if (collection === "people") return canManagePeople(state, actor);
   if (collection === "accounts") return moduleIsAvailableToAccount(state, actor, "accounts") && isDirector(actor);
   if (collection === "bulletins" || collection === "archiveRecords" || collection === "supportRequests") return false;
   if (collection === "tasks") return false;
@@ -1805,6 +2282,8 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
   if (canViewSystemContent(account)) {
     const output = sanitizedState(state);
     Object.assign(output, calendarState);
+    if (!canManageGpmbWorkflow(state, account)) output.gpmbWorkflows = [];
+    output.notifications = notificationFeedForAccount(state, account);
     // Support conversations are private to the reporter and Admin, even when
     // a non-Admin account is granted broad read access for operational data.
     if (!isAdmin(account)) {
@@ -1818,8 +2297,12 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
   const personId = accountPersonId(state, account);
   const departmentId = accountDepartmentId(state, account);
   const departmentScoped = hasDepartmentManagement(account) || accountRole(account) === "section_head";
+  const gpmbWorkflowAllowed = canManageGpmbWorkflow(state, account);
   const visibleTasks = records(state, "tasks").filter((task) =>
-    departmentScoped ? taskHasParticipantInDepartment(state, task, departmentId) : taskParticipant(state, task, personId) || taskAssigner(task, account),
+    (gpmbWorkflowAllowed && gpmbWorkflowManagedTask(task))
+      || (departmentScoped
+        ? taskHasParticipantInDepartment(state, task, departmentId)
+        : taskParticipant(state, task, personId) || taskAssigner(task, account)),
   );
   const primaryPeople = departmentScoped
     ? records(state, "people").filter((person) => String(person.departmentId || "") === departmentId)
@@ -1828,8 +2311,9 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
     ...state,
     ...calendarState,
     accounts: [resolvedPersonnelAccount(state, account)],
-    people: taskParticipantDirectory(state, visibleTasks, primaryPeople),
+    people: gpmbWorkflowAllowed ? records(state, "people") : taskParticipantDirectory(state, visibleTasks, primaryPeople),
     tasks: visibleTasks,
+    gpmbWorkflows: gpmbWorkflowAllowed ? records(state, "gpmbWorkflows") : [],
     evaluations: records(state, "evaluations").filter((evaluation) =>
       departmentScoped
         ? String(personForId(state, String(evaluation.personId || ""))?.departmentId || "") === departmentId
@@ -1854,7 +2338,9 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
             String(item.personId || "") === personId,
         ),
   };
-  return sanitizedState(output);
+  const sanitized = sanitizedState(output);
+  sanitized.notifications = notificationFeedForAccount(state, account);
+  return sanitized;
 }
 
 function recordReferencesFile(record: JsonRecord, field: string, key: string): boolean {
@@ -1918,44 +2404,9 @@ function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch):
     currentTotal += currentCount;
     deletedTotal += deleteCount;
     if (["people", "tasks", "accounts"].includes(collection) && currentCount > 0 && deleteCount >= currentCount) return true;
-    // SAFE guard: critical shared collections must never lose a large portion
-    // of their records in a single client mutation. This is intentionally
-    // stricter than the general 35% protection below.
-    if (["people", "tasks", "accounts"].includes(collection) && currentCount >= 8 && deleteCount / currentCount >= 0.25) return true;
     if (currentCount >= 5 && deleteCount / currentCount > 0.35) return true;
   }
   return currentTotal >= 5 && deletedTotal / currentTotal > 0.35;
-}
-
-function patchDeletesLastAdmin(current: JsonRecord, patch: StatePatch): boolean {
-  const currentAccounts = records(current, "accounts");
-  const adminIds = new Set(currentAccounts.filter(isAdmin).map(recordId).filter(Boolean));
-  if (!adminIds.size) return false;
-  const deletedAdminIds = new Set((patch.collections?.accounts?.deletes || [])
-    .map((entry) => String(entry.id || "").trim())
-    .filter((id) => adminIds.has(id)));
-  if (!deletedAdminIds.size) return false;
-
-  // Account upserts in the same patch may preserve or add an Admin.
-  const survivingAdminIds = new Set([...adminIds].filter((id) => !deletedAdminIds.has(id)));
-  for (const entry of patch.collections?.accounts?.upserts || []) {
-    const id = String(entry.id || "").trim();
-    if (!id) continue;
-    if (isAdmin(entry)) survivingAdminIds.add(id);
-    else survivingAdminIds.delete(id);
-  }
-  return survivingAdminIds.size === 0;
-}
-
-function mutationAuditSummary(patch: StatePatch): JsonRecord {
-  const collectionsSummary: JsonRecord = {};
-  for (const collection of collections) {
-    const change = patch.collections?.[collection];
-    const upserts = Array.isArray(change?.upserts) ? change.upserts.length : 0;
-    const deletes = Array.isArray(change?.deletes) ? change.deletes.length : 0;
-    if (upserts || deletes) collectionsSummary[collection] = { upserts, deletes };
-  }
-  return { collections: collectionsSummary, fields: Array.isArray(patch.fields) ? patch.fields.length : 0 };
 }
 
 function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number): void {
@@ -1976,10 +2427,11 @@ function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number
   state.activityLog = activityLog.slice(-5000);
 }
 
-function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): { state: JsonRecord; denied: DeniedMutation[]; changed: number } {
+function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): { state: JsonRecord; denied: DeniedMutation[]; changed: number; serverNotificationIds: string[]; serverGeneratedTaskIds: string[]; serverUpdatedGpmbWorkflowIds: string[] } {
   const next = clone(current);
   next.moduleSettings = normalizeModuleSettings(next.moduleSettings);
   const denied: DeniedMutation[] = [];
+  const serverNotificationIds: string[] = [];
   let changed = purgeRetiredAssignmentTasks(next);
 
   collections.forEach((collection) => {
@@ -1996,9 +2448,25 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       }
       const serverValue = collection === "accounts" && previous ? sanitizedAccount(previous) : previous;
       let candidate = value;
-      const taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
+      let taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
-      if (collection === "tasks") candidate = normalizeTaskCompletionLifecycle(candidate);
+      if (collection === "tasks") {
+        candidate = normalizeTaskCompletionLifecycle(candidate);
+        if (previous) {
+          // Older imports may not have origin metadata. It is immutable and
+          // never participates in a progress permission decision.
+          candidate = preserveTaskOriginAudit(previous, candidate);
+          if (taskBaseValue) taskBaseValue = preserveTaskOriginAudit(previous, taskBaseValue);
+        }
+      }
+      if (collection === "gpmbWorkflows") {
+        const normalized = normalizeGpmbWorkflow(next, actor, previous, candidate);
+        if (!normalized) {
+          denied.push({ scope: collection, id, reason: "Invalid GPMB workflow." });
+          return;
+        }
+        candidate = normalized;
+      }
       if (
         collection === "tasks"
         && previous
@@ -2008,9 +2476,10 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         // Progress reporters may only change progress data. Clear stale review data before authorization.
         candidate = normalizeTaskProgressLifecycle(candidate);
       }
-      if (previous && !sameJson(operation.baseValue, serverValue)) {
-        const rebased = collection === "tasks" && isRecord(operation.baseValue)
-          ? rebaseTaskProgressChange(previous, operation.baseValue, candidate)
+      const comparisonBaseValue = collection === "tasks" && taskBaseValue ? taskBaseValue : operation.baseValue;
+      if (previous && !sameJson(comparisonBaseValue, serverValue)) {
+        const rebased = collection === "tasks" && taskBaseValue
+          ? rebaseTaskProgressChange(previous, taskBaseValue, candidate)
           : collection === "supportRequests" && supportRequestBaseValue
             ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
           : null;
@@ -2024,7 +2493,11 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         denied.push({ scope: collection, id, reason: "Permission denied." });
         return;
       }
-      const saved = collection === "accounts" ? mergeAccountPassword(previous, candidate) : clone(candidate);
+      const saved = collection === "accounts"
+        ? mergeAccountPassword(previous, candidate)
+        : collection === "tasks"
+          ? stampTaskAudit(previous, candidate, actor)
+          : clone(candidate);
       if (collection === "calendarEvents") {
         const timestamp = new Date().toISOString();
         saved.createdById = previous?.createdById || actor.id;
@@ -2036,6 +2509,11 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       }
       values.set(id, saved);
       changed += 1;
+      if (collection === "tasks") {
+        const notificationIds = appendTaskChangeNotifications(next, actor, previous, saved);
+        serverNotificationIds.push(...notificationIds);
+        changed += notificationIds.length;
+      }
     });
     (changes.deletes || []).forEach((operation) => {
       const id = String(operation?.id || "").trim();
@@ -2079,8 +2557,21 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
     changed += 1;
   });
 
+  // GPMB is a server-owned state machine. A task is generated only when the
+  // preceding task has both been completed and passed its completion review.
+  const gpmbAdvance = advanceGpmbWorkflows(next, actor);
+  changed += gpmbAdvance.taskIds.length + gpmbAdvance.workflowIds.length + gpmbAdvance.notificationIds.length;
+  serverNotificationIds.push(...gpmbAdvance.notificationIds);
+
   addServerActivity(next, actor, changed);
-  return { state: next, denied, changed };
+  return {
+    state: next,
+    denied,
+    changed,
+    serverNotificationIds,
+    serverGeneratedTaskIds: gpmbAdvance.taskIds,
+    serverUpdatedGpmbWorkflowIds: gpmbAdvance.workflowIds,
+  };
 }
 
 async function activeSessionAccountId(request: Request): Promise<string | null> {
@@ -2157,6 +2648,32 @@ async function loginActivityRows(
       lastLoginAt: String(row.last_login_at || ""),
     }))
     .filter((row) => Boolean(row.accountId && /^\d{4}-\d{2}$/.test(row.period)));
+}
+
+function monthlyWorkReportAccountIsIncluded(state: JsonRecord, account: JsonRecord): boolean {
+  const person = linkedPersonForAccount(state, account);
+  if (!person) return false;
+  const departmentId = String(person.departmentId || "");
+  const department = records(state, "departments").find((item) => recordId(item) === departmentId);
+  return departmentId !== "ban-giam-doc" && !Boolean(department?.leadershipOnly);
+}
+
+async function monthlyLoginReportSummary(current: StateSnapshot, period: string): Promise<Record<string, unknown>> {
+  const periodStart = monthStartIsoForKey(period);
+  const nextPeriodStart = monthStartIsoForKey(monthKeyOffset(period, 1));
+  const loginRows = await loginActivityRows(periodStart, nextPeriodStart, nextPeriodStart, nextPeriodStart);
+  const activeAccountIds = new Set(
+    records(current.state, "accounts")
+      .filter((account) => recordId(account) && !Boolean(account.disabled) && monthlyWorkReportAccountIsIncluded(current.state, account))
+      .map(recordId),
+  );
+  return {
+    available: true,
+    period,
+    accounts: loginRows
+      .filter((row) => row.period === period && activeAccountIds.has(row.accountId) && row.loginCount > 0)
+      .map((row) => ({ accountId: row.accountId, loginCount: row.loginCount })),
+  };
 }
 
 async function dailyLoginVisitRows(historyStart: string): Promise<{ rows: DailyLoginVisitRow[]; available: boolean }> {
@@ -2518,12 +3035,12 @@ async function updateRecordProjectionMarker(revision: number): Promise<void> {
 
 async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch, revision: number): Promise<void> {
   const changedCollections = patch.collections || {};
-  for (const collection of ["people", "tasks", "evaluations", "activityLog"] as CollectionName[]) {
+  for (const collection of ["people", "tasks", "gpmbWorkflows", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
     const changes = changedCollections[collection];
     if (!changes) continue;
     const table = projectionTableByCollection[collection];
     if (!table) continue;
-    const ids = (changes.upserts || []).map((entry) => String(entry.id || "")).filter(Boolean);
+    const ids = [...new Set((changes.upserts || []).map((entry) => String(entry.id || "")).filter(Boolean))];
     const source = recordMap(state, collection);
     const recordsToProject = ids
       .map((id) => source.get(id))
@@ -2595,8 +3112,10 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
 async function syncAllRecordProjections(state: JsonRecord, revision: number): Promise<void> {
   await upsertProjectionRows("people", projectionRecordRows(records(state, "people"), revision));
   await upsertProjectionRows("tasks", projectionRecordRows(records(state, "tasks"), revision));
+  await upsertProjectionRows("gpmb_workflows", projectionRecordRows(records(state, "gpmbWorkflows"), revision));
   await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
   await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
+  await upsertProjectionRows("notifications", projectionRecordRows(records(state, "notifications"), revision));
   await upsertProjectionRows("activity_log", projectionRecordRows(records(state, "activityLog"), revision));
   const reports = records(state, "tasks").flatMap((task) => taskProgressProjectionRows(task, revision));
   await upsertProjectionRows("task_progress_reports", reports);
@@ -2638,7 +3157,40 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
       // staged migration.  A projection issue must not roll back an already
       // committed authorised command; the next command or deploy can repair it.
       try {
-        await syncRecordProjectionForPatch(result.state, patch, nextSnapshot.snapshot.revision);
+        const projectionPatch: StatePatch = {
+          ...patch,
+          collections: {
+            ...patch.collections,
+            ...(result.serverNotificationIds.length ? {
+              notifications: {
+                upserts: [
+                  ...(patch.collections?.notifications?.upserts || []),
+                  ...result.serverNotificationIds.map((id) => ({ id })),
+                ],
+                deletes: patch.collections?.notifications?.deletes || [],
+              },
+            } : {}),
+            ...(result.serverGeneratedTaskIds.length ? {
+              tasks: {
+                upserts: [
+                  ...(patch.collections?.tasks?.upserts || []),
+                  ...result.serverGeneratedTaskIds.map((id) => ({ id })),
+                ],
+                deletes: patch.collections?.tasks?.deletes || [],
+              },
+            } : {}),
+            ...(result.serverUpdatedGpmbWorkflowIds.length ? {
+              gpmbWorkflows: {
+                upserts: [
+                  ...(patch.collections?.gpmbWorkflows?.upserts || []),
+                  ...result.serverUpdatedGpmbWorkflowIds.map((id) => ({ id })),
+                ],
+                deletes: patch.collections?.gpmbWorkflows?.deletes || [],
+              },
+            } : {}),
+          },
+        };
+        await syncRecordProjectionForPatch(result.state, projectionPatch, nextSnapshot.snapshot.revision);
       } catch (projectionError) {
         console.error("Unable to mirror an authorised record command.", projectionError);
       }
@@ -2739,6 +3291,243 @@ async function updateKpiCatalogWithRetry(actorId: string, requestedCatalog: KpiC
   throw new Error("Concurrent KPI catalog update limit reached.");
 }
 
+function taskOwnerForHandover(state: JsonRecord, task: JsonRecord): string {
+  const ownerId = String(task.ownerId || "").trim();
+  return String(taskParticipantPerson(state, ownerId)?.id || ownerId);
+}
+
+function taskFinishedForHandover(task: JsonRecord): boolean {
+  const status = String(task.status || "").trim();
+  return completedTaskStatus(status) || status === "Đã kết thúc" || status === "Da ket thuc";
+}
+
+function openTaskIdsForHandover(state: JsonRecord, personId: string): string[] {
+  return records(state, "tasks")
+    .filter((task) => taskOwnerForHandover(state, task) === personId && !taskFinishedForHandover(task))
+    .map(recordId)
+    .filter(Boolean)
+    .sort();
+}
+
+function removePersonFromTaskCollaboration(state: JsonRecord, task: JsonRecord, personId: string): JsonRecord {
+  const rawCollaborators = Array.isArray(task.collaboratorIds)
+    ? task.collaboratorIds.map((value) => String(value || "").trim())
+    : String(task.collaboratorIds || "").split(",").map((value) => value.trim());
+  const collaboratorIds = rawCollaborators.filter((value) => {
+    if (!value) return false;
+    return String(taskParticipantPerson(state, value)?.id || value) !== personId;
+  });
+  const legacyCollaboratorId = String(task.collaboratorId || "").trim();
+  const retainedLegacyCollaborator = String(taskParticipantPerson(state, legacyCollaboratorId)?.id || legacyCollaboratorId) === personId
+    ? collaboratorIds[0] || ""
+    : legacyCollaboratorId;
+  return { ...task, collaboratorIds, collaboratorId: retainedLegacyCollaborator };
+}
+
+function taskHasCollaborator(state: JsonRecord, task: JsonRecord, personId: string): boolean {
+  const rawCollaborators = Array.isArray(task.collaboratorIds)
+    ? task.collaboratorIds
+    : String(task.collaboratorIds || "").split(",");
+  return [...rawCollaborators, task.collaboratorId]
+    .map((value) => String(taskParticipantPerson(state, value)?.id || value || "").trim())
+    .includes(personId);
+}
+
+function recurringTaskSourceForHandover(state: JsonRecord, task: JsonRecord, personId: string): boolean {
+  if (String(task.recurrenceSourceId || "").trim()) return false;
+  if (assignedTask(task)) return false;
+  if (taskOwnerForHandover(state, task) !== personId) return false;
+  const recurrence = String(task.recurrence || task.periodicity || "").trim().toLowerCase();
+  return ["daily", "weekly", "monthly", "quarterly", "hàng ngày", "hàng tuần", "hàng tháng", "hàng quý", "hang ngay", "hang tuan", "hang thang", "hang quy"].includes(recurrence);
+}
+
+function handoverActivity(state: JsonRecord, actor: JsonRecord, departing: JsonRecord, successors: JsonRecord[], handover: EmployeeHandoverUpdate, handoverId: string): void {
+  const successorNames = successors.map((person) => String(person.name || "")).filter(Boolean);
+  const activityLog = records(state, "activityLog");
+  activityLog.push({
+    id: `server-sync-${crypto.randomUUID()}`,
+    action: "Bàn giao",
+    module: "Nhân sự",
+    targetType: "employee-handover",
+    targetId: handoverId,
+    personId: String(departing.id || ""),
+    departmentId: String(departing.departmentId || ""),
+    title: `${String(departing.name || "Nhân sự")} nghỉ việc${successorNames.length ? `, bàn giao cho ${successorNames.length} nhân sự` : ""}`,
+    details: `${handover.taskAssignments.length} công việc đang mở và ${handover.recurrenceAssignments.length} mẫu định kỳ đã được bàn giao cho ${successorNames.join(", ") || "không có người tiếp quản"}${handover.removeFromCollaborations ? "; đã gỡ khỏi vai trò phối hợp của các việc đang mở" : ""}${handover.note ? `; ${handover.note}` : ""}`,
+    createdAt: new Date().toISOString(),
+    createdBy: String(actor.displayName || actor.username || "Tài khoản"),
+    createdById: String(actor.id || ""),
+  });
+  state.activityLog = activityLog.slice(-5000);
+}
+
+function canHandoverEmployee(state: JsonRecord, actor: JsonRecord, departing: JsonRecord, successors: JsonRecord[]): boolean {
+  if (!canManagePeople(state, actor)) return false;
+  if (isAdmin(actor)) return true;
+  const isSameDepartment = successors.every((successor) => String(successor.departmentId || "") === String(departing.departmentId || ""));
+  if (isDirector(actor)) return isSameDepartment;
+  return hasDepartmentManagement(actor)
+    && String(departing.departmentId || "") === accountDepartmentId(state, actor)
+    && isSameDepartment;
+}
+
+async function revokeHandoverSessions(accountIds: string[]): Promise<void> {
+  const uniqueIds = [...new Set(accountIds.filter(Boolean))];
+  if (!uniqueIds.length) return;
+  const { error } = await admin.from("kpi_sync_sessions").delete().in("account_id", uniqueIds);
+  if (error) throw error;
+}
+
+async function handoverEmployeeWithRetry(actorId: string, handover: EmployeeHandoverUpdate): Promise<{ snapshot: StateSnapshot; transferredCount: number }> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const current = await snapshot();
+    if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
+    const actor = accountForId(current.state, actorId);
+    const departing = personForId(current.state, handover.personId);
+    if (!actor || !departing) throw new Error("Personnel record was not found.");
+    if (!personIsActive(departing)) throw new Error("The personnel record is already inactive.");
+    const expectedTaskIds = openTaskIdsForHandover(current.state, String(departing.id || ""));
+    const taskSuccessorIds = new Map(handover.taskAssignments.map((assignment) => [String(assignment.taskId || ""), String(assignment.successorPersonId || "")]));
+    const submittedTaskIds = [...taskSuccessorIds.keys()].sort();
+    if (!sameJson(expectedTaskIds, submittedTaskIds)) {
+      throw new Error("The open task list has changed. Reload the handover dialog and verify it again.");
+    }
+    const departingId = String(departing.id || "");
+    const expectedRecurringIds = records(current.state, "tasks")
+      .filter((task) => recurringTaskSourceForHandover(current.state, task, departingId) && !expectedTaskIds.includes(recordId(task)))
+      .map(recordId)
+      .filter(Boolean)
+      .sort();
+    const recurrenceSuccessorIds = new Map(handover.recurrenceAssignments.map((assignment) => [String(assignment.taskId || ""), String(assignment.successorPersonId || "")]));
+    const submittedRecurringIds = [...recurrenceSuccessorIds.keys()].sort();
+    if (!sameJson(expectedRecurringIds, submittedRecurringIds)) {
+      throw new Error("The recurring task template list has changed. Reload the handover dialog and verify it again.");
+    }
+    const recipientIds = [...new Set([...taskSuccessorIds.values(), ...recurrenceSuccessorIds.values()])];
+    const successors = recipientIds.map((personId) => personForId(current.state, personId));
+    if (successors.length !== recipientIds.length || successors.some((successor) => !successor || !personIsActive(successor))) {
+      throw new Error("Every assignment requires an active successor.");
+    }
+    if (successors.some((successor) => String(successor?.id || "") === departingId)) {
+      throw new Error("The successor must be different from the departing person.");
+    }
+    const activeSuccessors = successors.filter((successor): successor is JsonRecord => Boolean(successor));
+    if (!canHandoverEmployee(current.state, actor, departing, activeSuccessors)) throw new Error("Permission denied.");
+
+    const nextState = clone(current.state);
+    const timestamp = new Date().toISOString();
+    const handoverId = `handover-${crypto.randomUUID()}`;
+    const successorsById = new Map(activeSuccessors.map((successor) => [recordId(successor), successor]));
+
+    nextState.tasks = records(nextState, "tasks").map((task) => {
+      const taskId = recordId(task);
+      const successor = successorsById.get(taskSuccessorIds.get(taskId) || "");
+      const transfersOwner = Boolean(successor) && taskOwnerForHandover(nextState, task) === departingId;
+      const maintainsRecurrence = recurringTaskSourceForHandover(nextState, task, departingId);
+      const recurrenceSuccessor = maintainsRecurrence
+        ? (successor || successorsById.get(recurrenceSuccessorIds.get(taskId) || ""))
+        : undefined;
+      const removesCollaboration = handover.removeFromCollaborations
+        && !taskFinishedForHandover(task)
+        && taskHasCollaborator(nextState, task, departingId);
+      if (!transfersOwner && !removesCollaboration && !maintainsRecurrence) return task;
+      let candidate = removesCollaboration ? removePersonFromTaskCollaboration(nextState, task, departingId) : clone(task);
+      const historyEntry = {
+        id: handoverId,
+        fromPersonId: departingId,
+        fromPersonName: String(departing.name || ""),
+        toPersonId: String((transfersOwner ? successor : recurrenceSuccessor)?.id || ""),
+        toPersonName: String((transfersOwner ? successor : recurrenceSuccessor)?.name || ""),
+        handoverAt: timestamp,
+        effectiveDate: handover.handoverDate,
+        note: handover.note,
+        actorId: String(actor.id || ""),
+        actorName: String(actor.displayName || actor.username || "Tài khoản"),
+      };
+      if (transfersOwner) {
+        const history = Array.isArray(candidate.handoverHistory) ? candidate.handoverHistory.filter(isRecord) : [];
+        candidate = {
+          ...candidate,
+          ownerId: String(successor?.id || ""),
+          ownerName: String(successor?.name || ""),
+          handoverHistory: [...history, historyEntry].slice(-50),
+        };
+      }
+      if (maintainsRecurrence) {
+        const recurrenceHistory = Array.isArray(candidate.recurrenceHandoverHistory) ? candidate.recurrenceHandoverHistory.filter(isRecord) : [];
+        candidate = { ...candidate, recurrenceHandoverHistory: [...recurrenceHistory, historyEntry].slice(-50) };
+      }
+      return stampTaskAudit(task, candidate, actor);
+    });
+    nextState.people = records(nextState, "people").map((person) => recordId(person) === departingId ? {
+      ...person,
+      employmentStatus: "left",
+      employmentEndedAt: handover.handoverDate,
+      employmentHandoverAt: timestamp,
+      employmentHandoverToId: recipientIds.length === 1 ? recipientIds[0] : "",
+      employmentHandoverRecipientIds: recipientIds,
+      employmentHandoverNote: handover.note,
+      updatedAt: timestamp,
+      updatedBy: String(actor.displayName || actor.username || "Tài khoản"),
+      updatedById: String(actor.id || ""),
+    } : person);
+    const departedAccountIds: string[] = [];
+    nextState.accounts = records(nextState, "accounts").map((account) => {
+      if (String(account.personId || "") !== departingId) return account;
+      const id = recordId(account);
+      if (id) departedAccountIds.push(id);
+      return {
+        ...account,
+        disabled: true,
+        disabledAt: timestamp,
+        disabledBy: String(actor.displayName || actor.username || "Tài khoản"),
+        disabledById: String(actor.id || ""),
+        disabledReason: "Nhân sự đã nghỉ việc và đã bàn giao công việc",
+        updatedAt: timestamp,
+        updatedBy: String(actor.displayName || actor.username || "Tài khoản"),
+        updatedById: String(actor.id || ""),
+      };
+    });
+    const nextDeparting = personForId(nextState, departingId) || departing;
+    const nextSuccessors = recipientIds
+      .map((personId) => personForId(nextState, personId))
+      .filter((successor): successor is JsonRecord => Boolean(successor));
+    handoverActivity(nextState, actor, nextDeparting, nextSuccessors, handover, handoverId);
+
+    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+      expected_revision: current.revision,
+      next_state: nextState,
+    });
+    if (error) throw error;
+    if (Array.isArray(data) && data.length) {
+      const updated = data[0] as { next_revision: number; next_updated_at: string };
+      const result: StateSnapshot = {
+        revision: Number(updated.next_revision),
+        updatedAt: String(updated.next_updated_at || ""),
+        state: nextState,
+      };
+      try {
+        await revokeHandoverSessions(departedAccountIds);
+      } catch (sessionError) {
+        // The disabled account is already rejected by every protected route;
+        // retrying a session cleanup later cannot restore access.
+        console.error("Unable to delete departed personnel sessions.", sessionError);
+      }
+      try {
+        await syncAllRecordProjections(result.state, result.revision);
+      } catch (projectionError) {
+        console.error("Unable to mirror an authorised employee handover.", projectionError);
+      }
+      return { snapshot: result, transferredCount: submittedTaskIds.length };
+    }
+    if (attempt < 7) {
+      const delay = Math.min(900, 60 * 2 ** attempt) + Math.round(Math.random() * 120);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Concurrent employee handover limit reached.");
+}
+
 async function initializeFromBackup(actorId: string, incoming: JsonRecord): Promise<StateSnapshot> {
   const current = await snapshot();
   if (current.revision > 0) throw new UnsafeBulkDeletionError("Central data has already been initialized.");
@@ -2833,6 +3622,8 @@ Deno.serve(async (request) => {
         recordProjection,
         releaseUpdates: false,
         calendarEvents: true,
+        notifications: true,
+        gpmbWorkflows: true,
         originRestricted: configuredOrigins.length > 0 && !configuredOrigins.includes("*"),
       });
     }
@@ -2938,6 +3729,17 @@ Deno.serve(async (request) => {
       return json(request, await accountUsageHistorySummary(current));
     }
 
+    if (action === "monthly-login-summary" && request.method === "GET") {
+      const period = String(url.searchParams.get("period") || "");
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) return json(request, { error: "A valid report period is required." }, 422);
+      const current = await snapshot();
+      const accountId = await requireSession(request, current);
+      if (accountId instanceof Response) return accountId;
+      const account = accountForId(current.state, accountId);
+      if (!account || !canViewMonthlyWorkReport(account)) return json(request, { error: "Forbidden." }, 403);
+      return json(request, await monthlyLoginReportSummary(current, period));
+    }
+
     if (action === "initialize" && request.method === "POST") {
       const current = await snapshot();
       const accountId = await requireSession(request, current);
@@ -2976,6 +3778,24 @@ Deno.serve(async (request) => {
       });
     }
 
+    if (action === "employee-handover" && request.method === "POST") {
+      const current = await snapshot();
+      const accountId = await requireSession(request, current);
+      if (accountId instanceof Response) return accountId;
+      if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
+      const body = await readJsonPayload(request);
+      if (!validEmployeeHandoverUpdate(body.handover)) return json(request, { error: "Invalid employee handover payload." }, 422);
+      const updated = await handoverEmployeeWithRetry(accountId, body.handover);
+      const responseAccount = accountForId(updated.snapshot.state, accountId);
+      if (!responseAccount || Boolean(responseAccount.disabled)) return json(request, { error: "Authentication required." }, 401);
+      return json(request, {
+        revision: updated.snapshot.revision,
+        updatedAt: updated.snapshot.updatedAt,
+        state: visibleState(updated.snapshot.state, responseAccount),
+        transferredCount: updated.transferredCount,
+      });
+    }
+
     if (action === "mutate" && ["PUT", "POST"].includes(request.method)) {
       const current = await snapshot();
       const accountId = await requireSession(request, current);
@@ -2983,12 +3803,9 @@ Deno.serve(async (request) => {
       const body = await readJsonPayload(request);
       if (!validPatch(body?.patch)) return json(request, { error: "Invalid mutation payload." }, 422);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
-      const audit = mutationAuditSummary(body.patch);
-      if (patchRemovesUnsafeAmountOfData(current.state, body.patch) || patchDeletesLastAdmin(current.state, body.patch)) {
-        console.warn("kpi-sync destructive mutation blocked", { accountId, revision: current.revision, ...audit });
+      if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
         return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
       }
-      console.log("kpi-sync mutation audit", { accountId, revision: current.revision, ...audit });
       const result = await updateWithRetry(accountId, body.patch);
       const responseAccount = accountForId(result.snapshot.state, accountId) || accountForId(current.state, accountId);
       if (!responseAccount) return json(request, { error: "Authentication required." }, 401);

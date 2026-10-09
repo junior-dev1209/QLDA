@@ -468,20 +468,13 @@ function checkCalendarReminders() {
     newEvents.forEach((event) => { delivered[signature(event)] = now.getTime(); });
     calendarReminders.delivered = Object.fromEntries(Object.entries(delivered).filter(([, time]) => Number(time) > now.getTime() - 2 * 86400000).slice(-500));
     try { localStorage.setItem(key, JSON.stringify(calendarReminders.delivered)); } catch { /* Keep the per-tab ledger. */ }
-    calendarReminders.visible.push(...newEvents);
-    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      newEvents.forEach((event) => {
-        try {
-          const notification = new Notification("Sắp đến lịch làm việc", { body: `${event.time} · ${event.title}\n${event.location}`, tag: signature(event), icon: "app-icon-phuc-thinh.png" });
-          notification.onclick = () => { if (currentAccount()?.id === account.id && canAccessView("calendar")) { window.focus(); openCalendarDialog(event.id); } notification.close(); };
-          notification.onclose = () => { calendarReminders.notifications = calendarReminders.notifications.filter((item) => item !== notification); };
-          calendarReminders.notifications.push(notification);
-        } catch { /* The in-app reminder remains available on unsupported browsers. */ }
-      });
-    }
+    // The unified notification center owns presentation and optional browser
+    // notifications. Keeping this detector here preserves the calendar's
+    // recurrence logic without showing a second, competing toast.
+    if (typeof ingestCalendarReminderNotifications === "function") ingestCalendarReminderNotifications(newEvents);
   }
-  byId("calendarReminderToast").classList.toggle("is-hidden", !calendarReminders.visible.length);
-  byId("calendarReminderList").innerHTML = calendarReminders.visible.map((event) => `<button type="button" class="calendar-linked-task" data-calendar-reminder="${escapeHtml(event.id)}">${escapeHtml(event.title)}<span class="calendar-row-note">${escapeHtml(event.time)} · ${escapeHtml(event.location)}</span></button>`).join("");
+  byId("calendarReminderToast")?.classList.add("is-hidden");
+  if (byId("calendarReminderList")) byId("calendarReminderList").textContent = "";
 }
 
 document.addEventListener("DOMContentLoaded", () => {

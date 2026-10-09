@@ -1,5 +1,5 @@
-const RELEASE_VERSION = "3.0.95";
-const CACHE_NAME = "phuc-thinh-kpi-v386";
+const RELEASE_VERSION = "3.4.1";
+const CACHE_NAME = "phuc-thinh-kpi-v341";
 const APP_SHELL = [
   "index.html",
   "styles.css",
@@ -11,6 +11,7 @@ const APP_SHELL = [
   "script.js",
   "manifest.webmanifest",
   "app-icon-phuc-thinh.png",
+  "assets/notification-bell-glass.png",
 ].map((asset) => `./${asset}?v=${encodeURIComponent(RELEASE_VERSION)}`);
 const APP_SHELL_URLS = new Set(APP_SHELL.map((asset) => new URL(asset, self.registration.scope).href));
 const NAVIGATION_FALLBACK = new URL(APP_SHELL[0], self.registration.scope).href;
