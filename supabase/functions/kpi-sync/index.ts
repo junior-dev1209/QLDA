@@ -2404,9 +2404,47 @@ function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch):
     currentTotal += currentCount;
     deletedTotal += deleteCount;
     if (["people", "tasks", "accounts"].includes(collection) && currentCount > 0 && deleteCount >= currentCount) return true;
+    // SAFE guard: for critical collections, block a single mutation that would
+    // delete 25% or more once the collection has at least 8 existing records.
+    if (["people", "tasks", "accounts"].includes(collection) && currentCount >= 8 && deleteCount / currentCount >= 0.25) return true;
     if (currentCount >= 5 && deleteCount / currentCount > 0.35) return true;
   }
   return currentTotal >= 5 && deletedTotal / currentTotal > 0.35;
+}
+
+function patchDeletesLastAdmin(current: JsonRecord, patch: StatePatch): boolean {
+  const currentAccounts = records(current, "accounts");
+  const currentActiveAdminIds = new Set(currentAccounts
+    .filter((account) => isAdmin(account) && !Boolean(account.disabled))
+    .map(recordId)
+    .filter(Boolean));
+  if (!currentActiveAdminIds.size) return false;
+
+  const deletedIds = new Set((patch.collections?.accounts?.deletes || [])
+    .map((entry) => String(entry.id || "").trim())
+    .filter(Boolean));
+  const accountUpserts = new Map((patch.collections?.accounts?.upserts || [])
+    .map((entry) => [String(entry.id || "").trim(), entry.value])
+    .filter(([id, value]) => Boolean(id) && isRecord(value)) as Array<[string, JsonRecord]>);
+
+  const survivingAdminIds = new Set(currentActiveAdminIds);
+  for (const id of deletedIds) survivingAdminIds.delete(id);
+  for (const [id, value] of accountUpserts) {
+    if (isAdmin(value) && !Boolean(value.disabled)) survivingAdminIds.add(id);
+    else survivingAdminIds.delete(id);
+  }
+  return survivingAdminIds.size === 0;
+}
+
+function mutationAuditSummary(patch: StatePatch): JsonRecord {
+  const collectionsSummary: JsonRecord = {};
+  for (const collection of collections) {
+    const change = patch.collections?.[collection];
+    const upserts = Array.isArray(change?.upserts) ? change.upserts.length : 0;
+    const deletes = Array.isArray(change?.deletes) ? change.deletes.length : 0;
+    if (upserts || deletes) collectionsSummary[collection] = { upserts, deletes };
+  }
+  return { collections: collectionsSummary, fields: Array.isArray(patch.fields) ? patch.fields.length : 0 };
 }
 
 function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number): void {
@@ -3132,7 +3170,12 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
     if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
-    if (patchRemovesUnsafeAmountOfData(current.state, patch)) {
+    if (patchRemovesUnsafeAmountOfData(current.state, patch) || patchDeletesLastAdmin(current.state, patch)) {
+      console.warn("kpi-sync destructive mutation blocked", {
+        accountId: actorId,
+        revision: current.revision,
+        ...mutationAuditSummary(patch),
+      });
       throw new UnsafeBulkDeletionError("Unsafe bulk deletion was blocked.");
     }
     const actor = accountForId(current.state, actorId);
@@ -3803,9 +3846,12 @@ Deno.serve(async (request) => {
       const body = await readJsonPayload(request);
       if (!validPatch(body?.patch)) return json(request, { error: "Invalid mutation payload." }, 422);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
-      if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
+      const audit = mutationAuditSummary(body.patch);
+      if (patchRemovesUnsafeAmountOfData(current.state, body.patch) || patchDeletesLastAdmin(current.state, body.patch)) {
+        console.warn("kpi-sync destructive mutation blocked", { accountId, revision: current.revision, ...audit });
         return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
       }
+      console.log("kpi-sync mutation audit", { accountId, revision: current.revision, ...audit });
       const result = await updateWithRetry(accountId, body.patch);
       const responseAccount = accountForId(result.snapshot.state, accountId) || accountForId(current.state, accountId);
       if (!responseAccount) return json(request, { error: "Authentication required." }, 401);
