@@ -6136,6 +6136,31 @@ td:last-child {
   align-items: center;
 }
 
+.task-progress-update-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 6px 13px;
+  border: 1px solid var(--primary);
+  border-radius: 7px;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.task-progress-update-button:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+}
+
+.task-progress-update-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary) 32%, transparent);
+  outline-offset: 2px;
+}
+
 .row-actions .task-icon-button,
 .task-detail-actions .task-icon-button {
   display: inline-flex;
@@ -8725,6 +8750,10 @@ td:last-child {
   align-items: center;
   gap: 8px;
   min-height: 36px;
+}
+
+.task-detail-actions .task-progress-update-button {
+  min-width: 104px;
 }
 
 .task-detail-actions .muted {
@@ -11553,19 +11582,20 @@ body {
   padding: 0;
 }
 
-/* 2. Thanh Topbar gộp thành 1 khối thống nhất, căn giữa chuẩn 1360px */
+/* 2. Thanh Topbar trải hết chiều ngang, giữ đệm an toàn ở hai mép */
 .topbar {
   background-color: #ffffff !important;
   border-bottom: 1px solid var(--line, #dfe7ef) !important;
   position: sticky !important;
   top: 0;
   z-index: 1000;
-  max-width: 1360px !important; /* Độ rộng bằng khung nội dung bên dưới */
-  margin: 0 auto !important;    /* Căn giữa thanh tiêu đề */
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
   display: flex !important;
   justify-content: space-between !important;
   align-items: center !important;
-  padding: 10px 24px !important;
+  padding: 10px 16px !important;
   box-sizing: border-box !important;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
 }
@@ -11578,18 +11608,21 @@ body {
   box-shadow: none !important;
 }
 
-/* 3. Khung Layout chứa Sidebar + Nội dung chính căn giữa liền khối */
+/* 3. Khung Layout trải hết chiều ngang, không để dải nền thừa ở desktop */
 .layout {
-  max-width: 1360px !important;
-  margin: 0 auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 12px 14px 18px !important;
+  box-sizing: border-box;
   background-color: #ffffff !important;
   min-height: calc(100vh - 60px);
   box-shadow: 0 0 20px rgba(0, 0, 0, 0.05);
 }
 
-/* 4. Đệm lề các Tab giao diện thoáng mắt */
+/* 4. Đệm lề gọn, đồng đều cho các Tab */
 .view {
-  padding: 16px 24px !important;
+  padding: 14px 16px !important;
 }
 
 /* 5. Giữ nguyên giao diện tràn viền mượt mượt khi xem trên Điện thoại */
@@ -14770,10 +14803,11 @@ html.is-authenticated #loginScreen,
     left: 10px !important;
     width: auto;
     max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
   }
 
   .notification-quick-toasts {
-    bottom: 79px;
+    bottom: calc(79px + env(safe-area-inset-bottom));
     left: 12px;
     width: min(390px, calc(100vw - 24px));
   }
@@ -14783,10 +14817,16 @@ html.is-authenticated #loginScreen,
   .notification-quick-toast { animation: none; }
 }
 
-/* Quy trình GPMB trong Công việc */
-.gpmb-workflow-panel { display: grid; gap: 14px; }
-.gpmb-workflow-panel-head { align-items: flex-start; }
-.gpmb-workflow-panel-head h3 { margin-bottom: 3px; }
+/* Lối tắt Quản lý dự án và GPMB trong Công việc */
+.task-management-shortcuts { display: flex; align-items: center; gap: 8px; margin: 8px 0 10px; }
+.task-management-shortcut { flex: 0 0 auto; margin: 0; padding: 0; }
+.task-management-shortcut.project-catalog-trigger { display: block; margin: 0; padding: 0; }
+.task-management-shortcut > button { min-height: 34px; padding: 6px 13px; white-space: nowrap; }
+.gpmb-workflow-manager-modal { width: min(1160px, calc(100vw - 28px)); max-height: min(870px, calc(100vh - 26px)); overflow: auto; }
+.gpmb-workflow-manager-head { align-items: flex-start; }
+.gpmb-workflow-manager-head-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.gpmb-workflow-manager-summary { margin: -4px 0 0; padding: 8px 10px; color: #4e6b75; border-left: 3px solid #2b7c8a; background: #f0f6f7; font-size: 0.8rem; line-height: 1.4; }
+.task-project-catalog-note { margin: 3px 0 0; }
 .gpmb-workflow-policy { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid #d7e4e6; border-radius: 7px; background: #f7faf9; }
 .gpmb-workflow-policy span { display: flex; gap: 8px; align-items: center; min-height: 49px; padding: 9px 12px; color: #385865; font-size: 0.82rem; line-height: 1.35; }
 .gpmb-workflow-policy span + span { border-left: 1px solid #d7e4e6; }
@@ -14802,7 +14842,11 @@ html.is-authenticated #loginScreen,
 .gpmb-workflow-card-current span { color: #607984; font-size: 0.76rem; }
 .gpmb-workflow-card-actions { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
 .gpmb-workflow-card-actions button { min-height: 31px; padding: 5px 9px; font-size: 0.76rem; }
-.gpmb-workflow-create-modal { width: min(730px, calc(100vw - 28px)); }
+.gpmb-workflow-create-modal { width: min(820px, calc(100vw - 28px)); }
+.gpmb-workflow-create-form { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+.gpmb-workflow-edit-modal { width: min(720px, calc(100vw - 28px)); }
+.gpmb-workflow-edit-form { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+.gpmb-workflow-edit-note { margin: 0; color: #5f7780; line-height: 1.45; }
 .gpmb-workflow-detail-modal { width: min(1360px, calc(100vw - 28px)); max-height: min(870px, calc(100vh - 26px)); overflow: auto; }
 .gpmb-workflow-dialog-head { align-items: flex-start; }
 .gpmb-workflow-dialog-head h2 { margin: 2px 0; }
@@ -14850,8 +14894,8 @@ html.is-authenticated #loginScreen,
 @media (max-width: 700px) {
   .gpmb-workflow-policy { grid-template-columns: 1fr; }
   .gpmb-workflow-policy span + span { border-top: 1px solid #d7e4e6; border-left: 0; }
-  .gpmb-workflow-panel-head { align-items: stretch; }
-  .gpmb-workflow-panel-head button { width: 100%; }
+  .gpmb-workflow-manager-head-actions { width: 100%; }
+  .gpmb-workflow-manager-head-actions button { flex: 1 1 0; min-width: 0; }
   .gpmb-workflow-step-row { grid-template-columns: 31px minmax(0, 1fr); gap: 8px; }
   .gpmb-workflow-step-summary { grid-column: 2; }
   .gpmb-workflow-step-row label, .gpmb-workflow-step-collaborators, .gpmb-workflow-step-state { grid-column: span 2; }
@@ -14859,4 +14903,15 @@ html.is-authenticated #loginScreen,
   .gpmb-workflow-card-main { gap: 8px; }
   .gpmb-workflow-card-main .badge { flex: 0 0 auto; }
   .gpmb-workflow-collaborator-list { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .gpmb-workflow-create-form { grid-template-columns: 1fr; }
+  .gpmb-workflow-edit-form { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 460px) {
+  .task-management-shortcuts { gap: 6px; }
+  .task-management-shortcut { flex: 1 1 0; min-width: 0; }
+  .task-management-shortcut > button { width: 100%; padding-inline: 8px; }
 }

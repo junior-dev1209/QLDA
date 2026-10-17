@@ -6,17 +6,17 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.4.1">
+  <meta name="application-version" content="3.4.10">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
-  <link rel="manifest" href="manifest.webmanifest?v=3.4.1">
-  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.4.1" type="image/png">
-  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.4.1">
-  <script src="supabase-config.js?v=3.4.1"></script>
-  <script src="auth-bootstrap.js?v=3.4.1"></script>
-  <link rel="stylesheet" href="styles.css?v=3.4.1">
-  <link rel="stylesheet" href="work-calendar.css?v=3.4.1">
+  <link rel="manifest" href="manifest.webmanifest?v=3.4.10">
+  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.4.10" type="image/png">
+  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.4.10">
+  <script src="supabase-config.js?v=3.4.10"></script>
+  <script src="auth-bootstrap.js?v=3.4.10"></script>
+  <link rel="stylesheet" href="styles.css?v=3.4.10">
+  <link rel="stylesheet" href="work-calendar.css?v=3.4.10">
 </head>
 <body>
   <section id="loginScreen" class="login-screen">
@@ -38,7 +38,7 @@
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.4.1</strong>
+          <strong data-app-version>Phiên bản 3.4.10</strong>
         </p>
       </form>
     </div>
@@ -62,7 +62,7 @@
           <span id="currentUserMeta"></span>
         </div>
         <button id="notificationBell" class="notification-bell" type="button" aria-label="Mở trung tâm thông báo" aria-haspopup="dialog" aria-expanded="false" title="Thông báo">
-          <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.1" alt="" aria-hidden="true" decoding="async">
+          <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.10" alt="" aria-hidden="true" decoding="async">
           <span id="notificationUnreadCount" class="notification-bell-count is-hidden" aria-label="0 thông báo chưa đọc">0</span>
         </button>
       </div>
@@ -762,31 +762,14 @@
             <button id="openTaskForm" type="button">Thêm công việc</button>
           </div>
         </div>
-        <section id="taskProjectCatalogPanel" class="project-catalog-trigger block is-hidden" aria-labelledby="taskProjectCatalogTitle">
-          <div>
-            <p class="eyebrow">Danh mục dự án</p>
-            <h3 id="taskProjectCatalogTitle">Quản lý tên dự án chuẩn</h3>
-            <p id="taskProjectCatalogNote" class="muted"></p>
-          </div>
-          <button id="openTaskProjectCatalog" class="ghost" type="button">Quản lý dự án</button>
-        </section>
-        <section id="gpmbWorkflowPanel" class="block gpmb-workflow-panel" aria-labelledby="gpmbWorkflowPanelTitle">
-          <div class="section-head gpmb-workflow-panel-head">
-            <div>
-              <p class="eyebrow">Điều hành quy trình</p>
-              <h3 id="gpmbWorkflowPanelTitle">Quy trình GPMB</h3>
-              <p class="section-note">Gồm 16 bước theo quy trình đã phê duyệt. Mỗi bước chỉ được tạo sau khi công việc liền trước hoàn thành và được đánh giá Đạt.</p>
-            </div>
-            <button id="openGpmbWorkflowCreate" class="gpmb-workflow-manage-only" type="button">Tạo đợt GPMB</button>
-          </div>
-          <div class="gpmb-workflow-policy" aria-label="Nguyên tắc vận hành quy trình GPMB">
-            <span><b>01</b> Theo đúng thứ tự và mốc thời gian đã thiết lập</span>
-            <span><b>02</b> Phân công và phối hợp riêng cho từng bước</span>
-            <span><b>03</b> Tự sinh bước kế tiếp sau khi được duyệt Đạt</span>
-          </div>
-          <div id="gpmbWorkflowNotice" class="gpmb-workflow-notice" aria-live="polite"></div>
-          <div id="gpmbWorkflowList" class="gpmb-workflow-list empty-state">Chưa có đợt GPMB đang được thiết lập.</div>
-        </section>
+        <div id="taskManagementShortcuts" class="task-management-shortcuts" aria-label="Chức năng quản lý dự án và GPMB">
+          <section id="taskProjectCatalogPanel" class="task-management-shortcut project-catalog-trigger is-hidden" aria-label="Quản lý dự án">
+            <button id="openTaskProjectCatalog" class="ghost" type="button">Quản lý dự án</button>
+          </section>
+          <section id="gpmbWorkflowPanel" class="task-management-shortcut gpmb-workflow-panel" aria-label="Quản lý GPMB">
+            <button id="openGpmbWorkflowManager" class="gpmb-workflow-manage-only" type="button">Quản lý GPMB</button>
+          </section>
+        </div>
         <section id="taskCompletionPendingPanel" class="task-completion-pending-panel" aria-labelledby="taskCompletionPendingTitle">
           <div class="task-completion-pending-head">
             <button id="openTaskCompletionPendingList" class="task-completion-pending-heading" type="button" aria-label="Mở danh sách công việc chờ phê duyệt hoàn thành">
@@ -1553,13 +1536,37 @@
         </section>
       </section>
 
+      <section id="gpmbWorkflowManagerDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+        <div class="modal-card is-wide gpmb-workflow-manager-modal" role="dialog" aria-modal="true" aria-labelledby="gpmbWorkflowManagerTitle">
+          <div class="section-head gpmb-workflow-dialog-head gpmb-workflow-manager-head">
+            <div>
+              <p class="eyebrow">Công việc / Điều hành quy trình</p>
+              <h2 id="gpmbWorkflowManagerTitle">Quản lý GPMB</h2>
+              <p class="section-note">Theo dõi từng đợt, mở bước đang thực hiện và điều chỉnh quy trình theo đúng phân quyền.</p>
+            </div>
+            <div class="gpmb-workflow-manager-head-actions">
+              <button id="openGpmbWorkflowCreate" class="gpmb-workflow-manage-only" type="button">Tạo đợt GPMB</button>
+              <button id="closeGpmbWorkflowManager" class="ghost" type="button">Đóng</button>
+            </div>
+          </div>
+          <p id="gpmbWorkflowManagerSummary" class="gpmb-workflow-manager-summary" aria-live="polite">16 bước theo quy trình đã phê duyệt. Mở Quản lý GPMB để theo dõi và điều hành.</p>
+          <div class="gpmb-workflow-policy" aria-label="Nguyên tắc vận hành quy trình GPMB">
+            <span><b>01</b> Theo đúng thứ tự và mốc thời gian đã thiết lập</span>
+            <span><b>02</b> Phân công và phối hợp riêng cho từng bước</span>
+            <span><b>03</b> Tự sinh bước kế tiếp sau khi được duyệt Đạt</span>
+          </div>
+          <div id="gpmbWorkflowNotice" class="gpmb-workflow-notice" aria-live="polite"></div>
+          <div id="gpmbWorkflowList" class="gpmb-workflow-list empty-state">Chưa có đợt GPMB đang được thiết lập.</div>
+        </div>
+      </section>
+
       <section id="gpmbWorkflowCreateDialog" class="modal-backdrop is-hidden" aria-hidden="true">
         <div class="modal-card gpmb-workflow-create-modal" role="dialog" aria-modal="true" aria-labelledby="gpmbWorkflowCreateTitle">
           <div class="section-head gpmb-workflow-dialog-head">
             <div>
               <p class="eyebrow">Công việc / Quy trình GPMB</p>
               <h2 id="gpmbWorkflowCreateTitle">Tạo đợt GPMB</h2>
-              <p class="section-note">Hệ thống chỉ tạo công việc của bước 01. Các bước tiếp theo được sinh tuần tự sau khi bước trước được duyệt Đạt.</p>
+              <p class="section-note">Hệ thống tự động tuần tự giao công việc các bước theo quy trình khi bước trước được duyệt Đạt</p>
             </div>
             <button id="closeGpmbWorkflowCreate" class="ghost" type="button">Đóng</button>
           </div>
@@ -1594,6 +1601,38 @@
             <div class="form-actions wide">
               <button type="submit">Khởi tạo quy trình</button>
               <button id="resetGpmbWorkflowCreate" class="ghost" type="button">Làm mới</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section id="gpmbWorkflowEditDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+        <div class="modal-card gpmb-workflow-edit-modal" role="dialog" aria-modal="true" aria-labelledby="gpmbWorkflowEditTitle">
+          <div class="section-head gpmb-workflow-dialog-head">
+            <div>
+              <p class="eyebrow">Công việc / Điều hành quy trình</p>
+              <h2 id="gpmbWorkflowEditTitle">Sửa đợt GPMB</h2>
+              <p class="section-note">Điều chỉnh tên đợt hoặc dự án khi khởi tạo nhầm. Các công việc GPMB đã sinh sẽ tự liên kết sang dự án mới.</p>
+            </div>
+            <button id="closeGpmbWorkflowEdit" class="ghost" type="button">Đóng</button>
+          </div>
+          <form id="gpmbWorkflowEditForm" class="form-grid gpmb-workflow-edit-form">
+            <input id="gpmbWorkflowEditId" type="hidden">
+            <label class="wide">Tên đợt GPMB
+              <input id="gpmbWorkflowEditName" maxlength="220" required>
+            </label>
+            <label>Danh mục dự án
+              <select id="gpmbWorkflowEditProjectId" required>
+                <option value="">Chọn danh mục dự án</option>
+              </select>
+            </label>
+            <label>Ngày khởi tạo kế hoạch
+              <input id="gpmbWorkflowEditStartDate" type="date" disabled>
+            </label>
+            <p class="wide field-note gpmb-workflow-edit-note">Mốc thời gian và phân công của từng bước được điều chỉnh trong màn hình Xem quy trình theo đúng phân quyền.</p>
+            <div class="form-actions wide">
+              <button type="submit">Lưu thay đổi</button>
+              <button id="cancelGpmbWorkflowEdit" class="ghost" type="button">Hủy</button>
             </div>
           </form>
         </div>
@@ -1731,7 +1770,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.4.1</strong>
+    <strong data-app-version>Phiên bản 3.4.10</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -1812,6 +1851,7 @@
         <div>
           <p class="eyebrow">Danh mục dự án</p>
           <h2 id="taskProjectCatalogDialogTitle">Quản lý tên dự án</h2>
+              <p id="taskProjectCatalogNote" class="section-note task-project-catalog-note" aria-live="polite"></p>
         </div>
         <button id="closeTaskProjectCatalog" class="ghost" type="button">Đóng</button>
       </div>
@@ -2121,7 +2161,7 @@
         <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
       </div>
       <button type="button" class="mobile-notification-bell" data-notification-toggle aria-label="Mở trung tâm thông báo" title="Thông báo">
-        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.1" alt="" aria-hidden="true" decoding="async">
+        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.10" alt="" aria-hidden="true" decoding="async">
         <span id="mobileNotificationUnreadCount" class="notification-bell-count is-hidden">0</span>
       </button>
       <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
@@ -2310,8 +2350,8 @@
   <aside id="notificationQuickToasts" class="notification-quick-toasts" aria-live="polite" aria-label="Nhắc nhở công việc"></aside>
 
   <!-- System data must load before the application runtime. -->
-  <script src="people-data.js?v=3.4.1"></script>
-  <script src="work-calendar.js?v=3.4.1"></script>
-  <script src="script.js?v=3.4.1"></script>
+  <script src="people-data.js?v=3.4.10"></script>
+  <script src="work-calendar.js?v=3.4.10"></script>
+  <script src="script.js?v=3.4.10"></script>
 </body>
 </html>
