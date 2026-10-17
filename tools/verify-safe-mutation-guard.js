@@ -1,0 +1,16 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const edge = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
+const deploy = fs.readFileSync("Deploy-KpiSync.ps1", "utf8");
+const config = fs.readFileSync("supabase-config.js", "utf8");
+assert.ok(edge.includes('const deploymentVersion = "2026.10.16.1";'));
+assert.ok(edge.includes("deleteCount / currentCount >= 0.25"));
+assert.ok(edge.includes("function activeAdminCount"));
+assert.ok(edge.includes("function assertLastAdminPreserved"));
+assert.ok(edge.includes('reason: "last_active_admin_removal"'));
+assert.ok(edge.includes("function logBlockedDestructiveMutation"));
+assert.ok(edge.includes("[SAFE_MUTATION_BLOCKED]"));
+assert.ok(deploy.includes('$projectRef = "hqquobfaccxnydeyvioe"'));
+assert.ok(deploy.includes('$expectedDeploymentVersion = "2026.10.16.1"'));
+assert.ok(config.includes("https://hqquobfaccxnydeyvioe.supabase.co"));
+console.log("safe_mutation_guard=passed");

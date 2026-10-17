@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRef = "hqquobfaccxnydeyvioe"
-$expectedDeploymentVersion = "2026.08.25.2"
+$expectedDeploymentVersion = "2026.10.16.1"
 $cli = Join-Path $PSScriptRoot "tools\supabase-cli\supabase.exe"
 
 if (-not (Test-Path -LiteralPath $cli)) {
@@ -27,6 +27,13 @@ if ($CheckOnly) {
   if ([string]$status.deploymentVersion -ne $expectedDeploymentVersion) {
     throw "Edge Function chua duoc cap nhat dung phien ban. Hay chay .\Deploy-KpiSync.ps1 sau khi dang nhap."
   }
+  if (-not $status.originRestricted -or -not $status.singleDeviceSession -or -not $status.credentialHashing -or -not $status.notifications) {
+    throw "May chu chua kich hoat day du bao ve origin, phien mot thiet bi, bam mat khau hoac trung tam thong bao."
+  }
+  if (-not $status.recordProjection.available -or -not $status.recordProjection.synchronized) {
+    throw "Bang ban ghi chua dong bo dung voi du lieu trung tam. Hay kiem tra migration va Edge Function Logs."
+  }
+  Write-Host "Kiem tra bao ve va dong bo ban ghi: dat."
   return
 }
 
@@ -63,6 +70,12 @@ if ($LASTEXITCODE -ne 0) {
 $status = Get-KpiSyncStatus
 if ([string]$status.deploymentVersion -ne $expectedDeploymentVersion) {
   throw "Deploy da ket thuc nhung may chu van bao phien ban $($status.deploymentVersion). Khong tiep tuc su dung cho den khi kiem tra lai thanh cong."
+}
+if (-not $status.originRestricted -or -not $status.singleDeviceSession -or -not $status.credentialHashing -or -not $status.notifications -or -not $status.gpmbWorkflows) {
+  throw "Deploy chua kich hoat day du bao ve origin, phien mot thiet bi, bam mat khau hoac trung tam thong bao."
+}
+if (-not $status.recordProjection.available -or -not $status.recordProjection.synchronized) {
+  throw "Deploy da xong nhung bang ban ghi chua dong bo dung voi du lieu trung tam."
 }
 
 Write-Host "Hoan tat. May chu dang chay kpi-sync $expectedDeploymentVersion."

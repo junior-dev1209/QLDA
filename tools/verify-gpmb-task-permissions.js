@@ -38,9 +38,16 @@ function repairAccountLinks(state) {
   });
 }
 
-function remapParticipant(state, id) {
-  const account = state.accounts.find((item) => item.id === id);
-  return account?.personId || id;
+function remapParticipant(state, value) {
+  const id = String(value || "").trim();
+  if (!id || state.people.some((person) => person.id === id)) return id;
+  const identity = key(id);
+  const accounts = state.accounts.filter((account) =>
+    [account.id, account.username, account.displayName].some((candidate) => key(candidate) === identity)
+  );
+  if (accounts.length === 1 && accounts[0].personId) return accounts[0].personId;
+  const people = state.people.filter((person) => key(person.name) === identity);
+  return people.length === 1 ? people[0].id : id;
 }
 
 function repairTaskParticipants(state) {
@@ -81,8 +88,8 @@ const state = {
   tasks: [
     {
       id: "legacy-gpmb-task",
-      ownerId: "account-gpmb-employee",
-      collaboratorIds: ["account-gpmb-collaborator"],
+      ownerId: "nguyenvana",
+      collaboratorIds: ["Tran Thi B", "account-gpmb-collaborator"],
       status: "Qua han",
       progressReports: [],
     },
@@ -97,8 +104,8 @@ const task = state.tasks[0];
 
 assert.equal(byId("account-gpmb-employee").personId, "gpmb-employee");
 assert.equal(byId("account-gpmb-employee").departmentId, "gpmb");
-assert.equal(task.ownerId, "gpmb-employee", "Legacy account owner must be remapped to person id.");
-assert.deepEqual(task.collaboratorIds, ["gpmb-collaborator"]);
+assert.equal(task.ownerId, "gpmb-employee", "Username của Người thực hiện phải được chuẩn hóa về ID nhân sự.");
+assert.deepEqual(task.collaboratorIds, ["gpmb-collaborator", "gpmb-collaborator"], "Tên hiển thị và ID tài khoản của Người phối hợp phải cùng nhận diện một nhân sự.");
 assert.equal(canUpdateTask(state, byId("account-gpmb-employee"), task), true, "GPMB owner must update task progress.");
 assert.equal(canUpdateTask(state, byId("account-gpmb-collaborator"), task), true, "GPMB collaborator must update task progress.");
 ["account-gpmb-manager", "account-gpmb-deputy", "account-gpmb-head"].forEach((accountId) => {
@@ -109,17 +116,20 @@ assert.equal(canUpdateTask(state, byId("account-other"), task), false, "Other de
 [
   "function repairPersonnelAccountLinks(state: JsonRecord): number",
   "function repairTaskParticipantLinks(state: JsonRecord): number",
+  "function taskParticipantValues(task: JsonRecord): string[]",
+  "function taskParticipantPerson(state: JsonRecord, value: unknown): JsonRecord | undefined",
   "function taskParticipantForAccount(state: JsonRecord, task: JsonRecord, account: JsonRecord): boolean",
   "accounts: [resolvedPersonnelAccount(state, account)],",
   "taskParticipantDepartmentId(state, personId) === departmentId",
-  "function sanitizeTaskProgressMutation(",
-  "function mergeTaskProgressReportsFromMutation(",
-  "const sanitizedTaskProgress = collection === \"tasks\" && previous && taskBaseValue",
 ].forEach((marker) => assert.ok(source.includes(marker), `Missing server permission safeguard: ${marker}`));
 [
   "function taskParticipantPersonId(value)",
+  "Older task records may contain a username or display name",
   "taskParticipantPersonId(task.ownerId) === person.id",
   "return uniquePersonIds([taskParticipantPersonId(task?.ownerId), ...taskCollaboratorIds(task)]);",
 ].forEach((marker) => assert.ok(clientSource.includes(marker), `Missing client permission safeguard: ${marker}`));
+
+assert.match(source, /const deploymentVersion = "2026\.10\.16\.1";/, "Máy chủ phải dùng bản triển khai mới cho quy tắc người phối hợp.");
+assert.match(clientSource, /deploymentVersionAtLeast\(sharedSync\.deploymentVersion, "2026\.08\.21\.1"\)/, "Ứng dụng phải nhận diện đúng phiên bản máy chủ xử lý tiến độ.");
 
 console.log("gpmb_task_permissions=passed");
