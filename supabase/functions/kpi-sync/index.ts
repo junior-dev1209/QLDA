@@ -16,7 +16,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.10.09.1";
+const deploymentVersion = "2026.10.16.1";
 const passwordHashAlgorithm = "pbkdf2-sha256-v1";
 const passwordHashIterations = 310_000;
 const passwordSaltBytes = 16;
@@ -1457,13 +1457,31 @@ function preserveTaskOriginAudit(previous: JsonRecord, candidate: JsonRecord): J
   return normalized;
 }
 
-function stampTaskAudit(previous: JsonRecord | undefined, candidate: JsonRecord, actor: JsonRecord): JsonRecord {
+function recurringTaskCreator(state: JsonRecord, task: JsonRecord): { id: string; name: string } | null {
+  const recurrence = String(task.recurrence || task.periodicity || "").trim().toLowerCase();
+  const recurringValues = ["daily", "weekly", "monthly", "quarterly", "hàng ngày", "hàng tuần", "hàng tháng", "hàng quý", "hang ngay", "hang tuan", "hang thang", "hang quy"];
+  if (String(task.kind || "regular") !== "regular" || !recurringValues.includes(recurrence)) return null;
+  const owner = taskParticipantPerson(state, task.ownerId);
+  const name = String(owner?.name || task.ownerName || "").trim();
+  if (!name) return null;
+  const ownerAccount = records(state, "accounts").find((account) =>
+    !Boolean(account.disabled) && accountPersonId(state, account) === recordId(owner),
+  );
+  return { id: recordId(ownerAccount) || recordId(owner), name };
+}
+
+function stampTaskAudit(state: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord, actor: JsonRecord): JsonRecord {
   const timestamp = new Date().toISOString();
   const saved = clone(candidate);
+  const recurringCreator = recurringTaskCreator(state, saved);
   if (!previous) {
     saved.createdAt = timestamp;
-    saved.createdBy = String(actor.displayName || actor.username || "Tai khoan");
-    saved.createdById = String(actor.id || "");
+    saved.createdBy = recurringCreator?.name || String(actor.displayName || actor.username || "Tai khoan");
+    saved.createdById = recurringCreator?.id || String(actor.id || "");
+  } else if (recurringCreator) {
+    // Correct legacy periodic records on their next authorised update as well.
+    saved.createdBy = recurringCreator.name;
+    saved.createdById = recurringCreator.id;
   }
   saved.updatedAt = timestamp;
   saved.updatedBy = String(actor.displayName || actor.username || "Tai khoan");
@@ -1471,8 +1489,87 @@ function stampTaskAudit(previous: JsonRecord | undefined, candidate: JsonRecord,
   return saved;
 }
 
+function normalizeCompletionReviewQuality(value: unknown): number | "" {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const numeric = Number(text.replace(",", "."));
+  return Number.isFinite(numeric) ? Math.min(120, Math.max(0, numeric)) : "";
+}
+
+function completionReviewReportDecision(report: JsonRecord): "passed" | "failed" | "" {
+  const decision = String(report.decision || "").trim();
+  if (decision === "passed" || decision === "failed") return decision;
+  const text = `${String(report.action || "")} ${String(report.note || "")}`.toLocaleLowerCase("vi");
+  if (text.includes("đánh giá hoàn thành: đạt")) return "passed";
+  if (text.includes("đánh giá hoàn thành: không đạt")) return "failed";
+  return "";
+}
+
+function completionReviewReportQuality(report: JsonRecord): number | "" {
+  const direct = normalizeCompletionReviewQuality(report.qualityPercent);
+  if (direct !== "") return direct;
+  const text = `${String(report.action || "")} ${String(report.note || "")}`;
+  const match = text.match(/chất lượng\s*:\s*([0-9]+(?:[,.][0-9]+)?)\s*%?/i);
+  return match ? normalizeCompletionReviewQuality(match[1]) : "";
+}
+
+function latestCompletionReviewEvidence(task: JsonRecord): { report: JsonRecord; decision: "passed" | "failed"; qualityPercent: number | "" } | null {
+  const reports = Array.isArray(task.progressReports) ? task.progressReports : [];
+  for (let index = reports.length - 1; index >= 0; index -= 1) {
+    const report = reports[index];
+    if (!isRecord(report)) continue;
+    const decision = completionReviewReportDecision(report);
+    if (!decision) continue;
+    return { report, decision, qualityPercent: completionReviewReportQuality(report) };
+  }
+  return null;
+}
+
+function completedAfterDeadline(timestamp: unknown, task: JsonRecord): boolean {
+  const due = String(task.due || "").trim();
+  const completedAt = new Date(String(timestamp || "")).getTime();
+  const deadline = new Date(`${due}T${String(task.dueTime || "23:59")}`).getTime();
+  return /^\d{4}-\d{2}-\d{2}$/.test(due) && Number.isFinite(completedAt) && Number.isFinite(deadline) && completedAt > deadline;
+}
+
+function recoverTaskCompletionReviewFromHistory(task: JsonRecord): JsonRecord {
+  if (!completedTaskStatus(task.status)) return task;
+  const progress = 100;
+  const reviewStatus = String(task.completionReviewStatus || "").trim();
+  const storedQuality = normalizeCompletionReviewQuality(task.qualityPercent);
+  if (reviewStatus === "passed" && storedQuality !== "") {
+    return Number(task.progress || 0) === progress ? task : { ...task, progress };
+  }
+  const evidence = latestCompletionReviewEvidence(task);
+  if (!evidence || evidence.decision !== "passed" || evidence.qualityPercent === "") {
+    return Number(task.progress || 0) === progress ? task : { ...task, progress };
+  }
+  const review = evidence.report;
+  const completedAt = String(task.completedAt || review.createdAt || "");
+  const reviewedAt = String(review.createdAt || task.completionReviewedAt || completedAt);
+  const lateCompletion = String(review.completionTiming || "") === "late"
+    || (!String(review.completionTiming || "") && completedAt ? completedAfterDeadline(completedAt, task) : false);
+  return {
+    ...task,
+    progress,
+    completionReviewStatus: "passed",
+    completionReviewedAt: reviewedAt,
+    completionReviewedById: String(review.createdById || task.completionReviewedById || ""),
+    completionReviewedByName: String(review.createdBy || task.completionReviewedByName || ""),
+    completionReviewNote: String(review.note || task.completionReviewNote || ""),
+    qualityPercent: evidence.qualityPercent,
+    qualityAssessedAt: reviewedAt,
+    qualityAssessedById: String(review.createdById || task.qualityAssessedById || ""),
+    qualityAssessedByName: String(review.createdBy || task.qualityAssessedByName || ""),
+    completedAt,
+    completedById: String(task.completedById || task.ownerId || ""),
+    completedByName: String(task.completedByName || task.ownerName || ""),
+    lateCompletion,
+  };
+}
+
 function normalizeTaskCompletionLifecycle(next: JsonRecord): JsonRecord {
-  const normalized = clone(next);
+  const normalized = clone(recoverTaskCompletionReviewFromHistory(next));
   // Overdue is derived from the deadline. Old imports may still carry the
   // former manual value, so convert it to a genuine working state on write.
   if (String(normalized.status || "").trim() === "Quá hạn") {
@@ -1658,6 +1755,30 @@ function taskCompletionReviewChange(previous: JsonRecord, next: JsonRecord): boo
   return sameJson(withoutKeys(previous, permitted), withoutKeys(next, permitted));
 }
 
+function taskCompletionRecoveryChange(previous: JsonRecord, next: JsonRecord): boolean {
+  const recovered = recoverTaskCompletionReviewFromHistory(previous);
+  if (sameJson(recovered, previous)) return false;
+  const recoveryFields = [
+    "progress",
+    "completionReviewStatus",
+    "completionReviewedAt",
+    "completionReviewedById",
+    "completionReviewedByName",
+    "completionReviewNote",
+    "lateCompletion",
+    "qualityPercent",
+    "qualityAssessedAt",
+    "qualityAssessedById",
+    "qualityAssessedByName",
+    "completedAt",
+    "completedById",
+    "completedByName",
+  ];
+  const permitted = [...recoveryFields, "updatedAt", "updatedBy", "updatedById"];
+  return recoveryFields.every((field) => sameJson(next[field], recovered[field]))
+    && sameJson(withoutKeys(previous, permitted), withoutKeys(next, permitted));
+}
+
 function canReviewTaskCompletion(state: JsonRecord, account: JsonRecord, task: JsonRecord): boolean {
   if (isAdmin(account) || isDirector(account)) return true;
   return hasDepartmentManagement(account) && personIsInManagedDepartment(state, account, task.ownerId);
@@ -1684,7 +1805,7 @@ function shouldNormalizeTaskProgressUpdate(
   candidate: JsonRecord,
 ): boolean {
   if (!canUpdateTaskProgress(state, account, current) || taskProgressIsLocked(current)) return false;
-  if (taskCompletionReviewChange(base, candidate) || taskQualityOnlyChange(base, candidate)) return false;
+  if (taskCompletionReviewChange(base, candidate) || taskCompletionRecoveryChange(base, candidate) || taskQualityOnlyChange(base, candidate)) return false;
   return taskProgressChangeIntent(base, candidate, true);
 }
 
@@ -1694,7 +1815,7 @@ function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRec
   const canManageDepartmentProgress = isDirector(account)
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
   if (!taskProgressIsLocked(previous) && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
-  if (canReviewTaskCompletion(state, account, previous) && taskCompletionReviewChange(previous, next)) return true;
+  if (canReviewTaskCompletion(state, account, previous) && (taskCompletionReviewChange(previous, next) || taskCompletionRecoveryChange(previous, next))) return true;
   if (canAssessTaskQuality(state, account, previous) && taskQualityOnlyChange(previous, next)) return true;
   if (assignedTask(previous) && taskAssigner(previous, account) && (isDirector(account) || hasDepartmentManagement(account))) {
     if (isDirector(account)) return true;
@@ -1860,12 +1981,18 @@ function notificationFeedForAccount(state: JsonRecord, account: JsonRecord): Jso
   const stored = records(state, "notifications")
     .filter((notification) => String(notification.recipientAccountId || "") === accountId)
     .filter((notification) => String(notification.notificationType || "") !== "acknowledgement");
+  // Derived notices do not exist as normal rows. Their read/dismiss state is
+  // persisted in acknowledgement rows and must be sent back to the recipient
+  // on every snapshot, otherwise a reload would show an old reminder again.
+  const acknowledgements = records(state, "notifications")
+    .filter((notification) => String(notification.notificationType || "") === "acknowledgement")
+    .filter((notification) => String(notification.recipientAccountId || "") === accountId);
   const storedIds = new Set(stored.map(recordId));
   const deadlines = records(state, "tasks")
     .map((task) => taskDeadlineNotificationForAccount(state, account, task))
     .filter((notification): notification is JsonRecord => notification !== null)
     .filter((notification) => !storedIds.has(recordId(notification)));
-  return [...stored, ...deadlines]
+  return [...stored, ...acknowledgements, ...deadlines]
     .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
 }
 
@@ -1965,22 +2092,22 @@ function appendTaskChangeNotifications(state: JsonRecord, actor: JsonRecord, pre
 
 const gpmbWorkflowCategory = "Quy tr\u00ecnh GPMB";
 const gpmbWorkflowTemplate = [
-  { id: "plan", title: "X\u00e2y d\u1ef1ng k\u1ebf ho\u1ea1ch thu h\u1ed3i \u0111\u1ea5t", documents: "K\u1ebf ho\u1ea1ch thu h\u1ed3i \u0111\u1ea5t", days: 7 },
-  { id: "meeting", title: "T\u1ed5 ch\u1ee9c h\u1ecdp ph\u1ed5 bi\u1ebfn v\u00e0 ti\u1ebfp nh\u1eadn \u00fd ki\u1ebfn", documents: "K\u1ebf ho\u1ea1ch h\u1ecdp, bi\u00ean b\u1ea3n v\u00e0 danh s\u00e1ch tham d\u1ef1", days: 3 },
-  { id: "notice", title: "Ban h\u00e0nh, g\u1eedi v\u00e0 ni\u00eam y\u1ebft th\u00f4ng b\u00e1o thu h\u1ed3i \u0111\u1ea5t", documents: "Th\u00f4ng b\u00e1o, b\u1eb1ng ch\u1ee9ng g\u1eedi v\u00e0 ni\u00eam y\u1ebft", days: 10 },
-  { id: "survey", title: "\u0110i\u1ec1u tra, kh\u1ea3o s\u00e1t, \u0111o \u0111\u1ea1c v\u00e0 ki\u1ec3m \u0111\u1ebfm", documents: "Bi\u00ean b\u1ea3n ki\u1ec3m \u0111\u1ebfm v\u00e0 h\u1ed3 s\u01a1 ngu\u1ed3n g\u1ed1c \u0111\u1ea5t", days: 20 },
-  { id: "draft-plan", title: "L\u1eadp ph\u01b0\u01a1ng \u00e1n b\u1ed3i th\u01b0\u1eddng, h\u1ed7 tr\u1ee3 v\u00e0 t\u00e1i \u0111\u1ecbnh c\u01b0", documents: "D\u1ef1 th\u1ea3o ph\u01b0\u01a1ng \u00e1n v\u00e0 b\u1ea3ng t\u00ednh", days: 15 },
-  { id: "disclosure", title: "Ni\u00eam y\u1ebft c\u00f4ng khai d\u1ef1 th\u1ea3o ph\u01b0\u01a1ng \u00e1n", documents: "Th\u00f4ng b\u00e1o ni\u00eam y\u1ebft v\u00e0 bi\u00ean b\u1ea3n c\u00f4ng khai", days: 30 },
-  { id: "consultation", title: "L\u1ea5y \u00fd ki\u1ebfn, \u0111\u1ed1i tho\u1ea1i v\u00e0 ho\u00e0n thi\u1ec7n ph\u01b0\u01a1ng \u00e1n", documents: "\u00dd ki\u1ebfn, bi\u00ean b\u1ea3n \u0111\u1ed1i tho\u1ea1i v\u00e0 gi\u1ea3i tr\u00ecnh", days: 10, conditionalDays: 60, conditionKey: "noCooperation" },
-  { id: "appraisal", title: "Th\u1ea9m \u0111\u1ecbnh ph\u01b0\u01a1ng \u00e1n", documents: "H\u1ed3 s\u01a1 tr\u00ecnh v\u00e0 k\u1ebft qu\u1ea3 th\u1ea9m \u0111\u1ecbnh", days: 30 },
-  { id: "approval", title: "Ph\u00ea duy\u1ec7t ph\u01b0\u01a1ng \u00e1n", documents: "T\u1edd tr\u00ecnh v\u00e0 quy\u1ebft \u0111\u1ecbnh ph\u00ea duy\u1ec7t", days: 7 },
-  { id: "approval-disclosure", title: "C\u00f4ng khai quy\u1ebft \u0111\u1ecbnh ph\u00ea duy\u1ec7t", documents: "Th\u00f4ng b\u00e1o v\u00e0 bi\u00ean b\u1ea3n c\u00f4ng khai", days: 3 },
-  { id: "send-plan", title: "G\u1eedi ph\u01b0\u01a1ng \u00e1n \u0111\u00e3 ph\u00ea duy\u1ec7t \u0111\u1ebfn ng\u01b0\u1eddi c\u00f3 \u0111\u1ea5t thu h\u1ed3i", documents: "Danh s\u00e1ch g\u1eedi, x\u00e1c nh\u1eadn ti\u1ebfp nh\u1eadn", days: 7 },
-  { id: "payment", title: "Chi tr\u1ea3 b\u1ed3i th\u01b0\u1eddng, h\u1ed7 tr\u1ee3 v\u00e0 b\u1ed1 tr\u00ed t\u00e1i \u0111\u1ecbnh c\u01b0", documents: "Ch\u1ee9ng t\u1eeb chi tr\u1ea3 v\u00e0 h\u1ed3 s\u01a1 b\u1ed1 tr\u00ed t\u00e1i \u0111\u1ecbnh c\u01b0", days: 20 },
-  { id: "recovery-decision", title: "Ban h\u00e0nh quy\u1ebft \u0111\u1ecbnh thu h\u1ed3i \u0111\u1ea5t", documents: "Quy\u1ebft \u0111\u1ecbnh thu h\u1ed3i \u0111\u1ea5t", days: 7 },
-  { id: "persuasion", title: "V\u1eadn \u0111\u1ed9ng, thuy\u1ebft ph\u1ee5c tr\u01b0\u1eddng h\u1ee3p ch\u01b0a \u0111\u1ed3ng thu\u1eadn", documents: "Bi\u00ean b\u1ea3n v\u1eadn \u0111\u1ed9ng v\u00e0 k\u1ebft qu\u1ea3 x\u1eed l\u00fd", days: 10, activationKey: "noCooperation" },
-  { id: "handover", title: "V\u1eadn \u0111\u1ed9ng b\u00e0n giao \u0111\u1ea5t v\u00e0 chu\u1ea9n b\u1ecb c\u01b0\u1ee1ng ch\u1ebf khi c\u1ea7n", documents: "Bi\u00ean b\u1ea3n v\u1eadn \u0111\u1ed9ng, h\u1ed3 s\u01a1 c\u01b0\u1ee1ng ch\u1ebf n\u1ebfu ph\u00e1t sinh", days: 10, activationKey: "noHandover" },
-  { id: "land-management", title: "Qu\u1ea3n l\u00fd di\u1ec7n t\u00edch \u0111\u1ea5t \u0111\u00e3 thu h\u1ed3i", documents: "Bi\u00ean b\u1ea3n b\u00e0n giao \u0111\u1ea5t v\u00e0 h\u1ed3 s\u01a1 qu\u1ea3n l\u00fd", days: 30 },
+  { id: "plan", title: "X\u00e2y d\u1ef1ng k\u1ebf ho\u1ea1ch thu h\u1ed3i \u0111\u1ea5t", category: "Điều tra, kiểm đếm đất đai / Trích đo, quy chủ", documents: "K\u1ebf ho\u1ea1ch thu h\u1ed3i \u0111\u1ea5t", days: 7 },
+  { id: "meeting", title: "T\u1ed5 ch\u1ee9c h\u1ecdp ph\u1ed5 bi\u1ebfn v\u00e0 ti\u1ebfp nh\u1eadn \u00fd ki\u1ebfn", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", documents: "K\u1ebf ho\u1ea1ch h\u1ecdp, bi\u00ean b\u1ea3n v\u00e0 danh s\u00e1ch tham d\u1ef1", days: 3 },
+  { id: "notice", title: "Ban h\u00e0nh, g\u1eedi v\u00e0 ni\u00eam y\u1ebft th\u00f4ng b\u00e1o thu h\u1ed3i \u0111\u1ea5t", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", documents: "Th\u00f4ng b\u00e1o, b\u1eb1ng ch\u1ee9ng g\u1eedi v\u00e0 ni\u00eam y\u1ebft", days: 10 },
+  { id: "survey", title: "\u0110i\u1ec1u tra, kh\u1ea3o s\u00e1t, \u0111o \u0111\u1ea1c v\u00e0 ki\u1ec3m \u0111\u1ebfm", category: "Điều tra, kiểm đếm đất đai / Trích đo, quy chủ", documents: "Bi\u00ean b\u1ea3n ki\u1ec3m \u0111\u1ebfm v\u00e0 h\u1ed3 s\u01a1 ngu\u1ed3n g\u1ed1c \u0111\u1ea5t", days: 20 },
+  { id: "draft-plan", title: "L\u1eadp ph\u01b0\u01a1ng \u00e1n b\u1ed3i th\u01b0\u1eddng, h\u1ed7 tr\u1ee3 v\u00e0 t\u00e1i \u0111\u1ecbnh c\u01b0", category: "Lập / Thẩm định / Phê duyệt phương án bồi thường", documents: "D\u1ef1 th\u1ea3o ph\u01b0\u01a1ng \u00e1n v\u00e0 b\u1ea3ng t\u00ednh", days: 15 },
+  { id: "disclosure", title: "Ni\u00eam y\u1ebft c\u00f4ng khai d\u1ef1 th\u1ea3o ph\u01b0\u01a1ng \u00e1n", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", documents: "Th\u00f4ng b\u00e1o ni\u00eam y\u1ebft v\u00e0 bi\u00ean b\u1ea3n c\u00f4ng khai", days: 30 },
+  { id: "consultation", title: "L\u1ea5y \u00fd ki\u1ebfn, \u0111\u1ed1i tho\u1ea1i v\u00e0 ho\u00e0n thi\u1ec7n ph\u01b0\u01a1ng \u00e1n", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", documents: "\u00dd ki\u1ebfn, bi\u00ean b\u1ea3n \u0111\u1ed1i tho\u1ea1i v\u00e0 gi\u1ea3i tr\u00ecnh", days: 10, conditionalDays: 60, conditionKey: "noCooperation" },
+  { id: "appraisal", title: "Th\u1ea9m \u0111\u1ecbnh ph\u01b0\u01a1ng \u00e1n", category: "Lập / Thẩm định / Phê duyệt phương án bồi thường", documents: "H\u1ed3 s\u01a1 tr\u00ecnh v\u00e0 k\u1ebft qu\u1ea3 th\u1ea9m \u0111\u1ecbnh", days: 30 },
+  { id: "approval", title: "Ph\u00ea duy\u1ec7t ph\u01b0\u01a1ng \u00e1n", category: "Lập / Thẩm định / Phê duyệt phương án bồi thường", documents: "T\u1edd tr\u00ecnh v\u00e0 quy\u1ebft \u0111\u1ecbnh ph\u00ea duy\u1ec7t", days: 7 },
+  { id: "approval-disclosure", title: "C\u00f4ng khai quy\u1ebft \u0111\u1ecbnh ph\u00ea duy\u1ec7t", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", documents: "Th\u00f4ng b\u00e1o v\u00e0 bi\u00ean b\u1ea3n c\u00f4ng khai", days: 3 },
+  { id: "send-plan", title: "G\u1eedi ph\u01b0\u01a1ng \u00e1n \u0111\u00e3 ph\u00ea duy\u1ec7t \u0111\u1ebfn ng\u01b0\u1eddi c\u00f3 \u0111\u1ea5t thu h\u1ed3i", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", documents: "Danh s\u00e1ch g\u1eedi, x\u00e1c nh\u1eadn ti\u1ebfp nh\u1eadn", days: 7 },
+  { id: "payment", title: "Chi tr\u1ea3 b\u1ed3i th\u01b0\u1eddng, h\u1ed7 tr\u1ee3 v\u00e0 b\u1ed1 tr\u00ed t\u00e1i \u0111\u1ecbnh c\u01b0", category: "Chi trả tiền đền bù / Bàn giao mặt bằng / Xử lý đơn thư", documents: "Ch\u1ee9ng t\u1eeb chi tr\u1ea3 v\u00e0 h\u1ed3 s\u01a1 b\u1ed1 tr\u00ed t\u00e1i \u0111\u1ecbnh c\u01b0", days: 20 },
+  { id: "recovery-decision", title: "Ban h\u00e0nh quy\u1ebft \u0111\u1ecbnh thu h\u1ed3i \u0111\u1ea5t", category: "Xác minh nguồn gốc / Thông báo thu hồi đất", documents: "Quy\u1ebft \u0111\u1ecbnh thu h\u1ed3i \u0111\u1ea5t", days: 7 },
+  { id: "persuasion", title: "V\u1eadn \u0111\u1ed9ng, thuy\u1ebft ph\u1ee5c tr\u01b0\u1eddng h\u1ee3p ch\u01b0a \u0111\u1ed3ng thu\u1eadn", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", documents: "Bi\u00ean b\u1ea3n v\u1eadn \u0111\u1ed9ng v\u00e0 k\u1ebft qu\u1ea3 x\u1eed l\u00fd", days: 10, activationKey: "noCooperation" },
+  { id: "handover", title: "V\u1eadn \u0111\u1ed9ng b\u00e0n giao \u0111\u1ea5t v\u00e0 chu\u1ea9n b\u1ecb c\u01b0\u1ee1ng ch\u1ebf khi c\u1ea7n", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", documents: "Bi\u00ean b\u1ea3n v\u1eadn \u0111\u1ed9ng, h\u1ed3 s\u01a1 c\u01b0\u1ee1ng ch\u1ebf n\u1ebfu ph\u00e1t sinh", days: 10, activationKey: "noHandover" },
+  { id: "land-management", title: "Qu\u1ea3n l\u00fd di\u1ec7n t\u00edch \u0111\u1ea5t \u0111\u00e3 thu h\u1ed3i", category: "Chi trả tiền đền bù / Bàn giao mặt bằng / Xử lý đơn thư", documents: "Bi\u00ean b\u1ea3n b\u00e0n giao \u0111\u1ea5t v\u00e0 h\u1ed3 s\u01a1 qu\u1ea3n l\u00fd", days: 30 },
 ] as const;
 
 function gpmbIsoDate(value: unknown): string {
@@ -2040,7 +2167,7 @@ function gpmbWorkflowTaskChangeAllowed(state: JsonRecord, actor: JsonRecord, pre
 
 function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord | null {
   const workflowId = recordId(candidate);
-  const canAdjustCore = !previous || isAdmin(actor);
+  const canAdjustCore = !previous || isAdmin(actor) || isDirector(actor);
   const projectId = String(canAdjustCore ? candidate.projectId : previous?.projectId || "").trim();
   const project = records(state, "projectCatalog").find((item) => recordId(item) === projectId);
   const title = String(canAdjustCore ? candidate.title : previous?.title || "").trim().slice(0, 220);
@@ -2062,13 +2189,13 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
     const prior = priorSteps.get(template.id);
     const enabled = gpmbStepEnabled(template, conditions);
     if (prior?.taskId) {
-      const preserved = clone(prior);
+      const preserved = { ...clone(prior), category: template.category };
       const preservedDue = gpmbIsoDate(preserved.due);
       if (preservedDue) cursor = gpmbAddDays(preservedDue, 1);
       if (String(preserved.status || "") === "active") activeAssigned = true;
       return preserved;
     }
-    if (!enabled) return { id: template.id, title: template.title, documents: template.documents, activationKey: template.activationKey || "", days: template.days, startDate: "", due: "", ownerId: "", ownerName: "", collaboratorIds: [], collaboratorNames: [], status: "skipped", taskId: "", activatedAt: "", completedAt: "" };
+    if (!enabled) return { id: template.id, title: template.title, category: template.category, documents: template.documents, activationKey: template.activationKey || "", days: template.days, startDate: "", due: "", ownerId: "", ownerName: "", collaboratorIds: [], collaboratorNames: [], status: "skipped", taskId: "", activatedAt: "", completedAt: "" };
     const requestedStart = canAdjustTimeline
       ? gpmbIsoDate(requested.startDate)
       : gpmbIsoDate(prior?.startDate);
@@ -2082,7 +2209,7 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
     activeAssigned ||= true;
     const due = gpmbAddDays(start, days - 1);
     cursor = gpmbAddDays(due, 1);
-    return { id: template.id, title: template.title, documents: template.documents, activationKey: template.activationKey || "", days, startDate: start, due, ownerId, ownerName: String(owner?.name || ""), collaboratorIds, collaboratorNames: collaboratorIds.map((id) => String(personForId(state, id)?.name || "")), status, taskId: "", activatedAt: "", completedAt: "" };
+    return { id: template.id, title: template.title, category: template.category, documents: template.documents, activationKey: template.activationKey || "", days, startDate: start, due, ownerId, ownerName: String(owner?.name || ""), collaboratorIds, collaboratorNames: collaboratorIds.map((id) => String(personForId(state, id)?.name || "")), status, taskId: "", activatedAt: "", completedAt: "" };
   });
   if (invalidParticipant) return null;
   const current = steps.find((step) => String(step.status || "") === "active");
@@ -2101,6 +2228,40 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
     createdById: previous?.createdById || candidate.createdById || "",
     updatedAt: new Date().toISOString(),
   };
+}
+
+function synchronizeGpmbWorkflowTaskLinks(state: JsonRecord, actor: JsonRecord): { updatedTaskIds: string[]; deletedTaskIds: string[] } {
+  const workflows = new Map(records(state, "gpmbWorkflows").map((workflow) => [recordId(workflow), workflow]));
+  const updatedTaskIds: string[] = [];
+  const deletedTaskIds: string[] = [];
+  const timestamp = new Date().toISOString();
+  const actorName = String(actor.displayName || actor.username || "");
+  const nextTasks: JsonRecord[] = [];
+
+  records(state, "tasks").forEach((task) => {
+    const workflowId = String(task.gpmbWorkflowId || "").trim();
+    if (!workflowId) {
+      nextTasks.push(task);
+      return;
+    }
+    const workflow = workflows.get(workflowId);
+    if (!workflow) {
+      deletedTaskIds.push(recordId(task));
+      return;
+    }
+    const projectId = String(workflow.projectId || "");
+    const projectName = String(workflow.projectName || "");
+    const category = gpmbWorkflowTemplate.find((step) => step.id === String(task.gpmbStepId || ""))?.category || gpmbWorkflowCategory;
+    if (String(task.projectId || "") === projectId && String(task.projectName || "") === projectName && String(task.category || "") === category) {
+      nextTasks.push(task);
+      return;
+    }
+    updatedTaskIds.push(recordId(task));
+    nextTasks.push({ ...task, projectId, projectName, category, updatedAt: timestamp, updatedBy: actorName, updatedById: String(actor.id || "") });
+  });
+
+  state.tasks = nextTasks;
+  return { updatedTaskIds: updatedTaskIds.filter(Boolean), deletedTaskIds: deletedTaskIds.filter(Boolean) };
 }
 
 function advanceGpmbWorkflows(state: JsonRecord, actor: JsonRecord): { taskIds: string[]; workflowIds: string[]; notificationIds: string[] } {
@@ -2134,7 +2295,7 @@ function advanceGpmbWorkflows(state: JsonRecord, actor: JsonRecord): { taskIds: 
       const taskId = gpmbTaskId(recordId(workflow), String(active.id || ""));
       if (!String(active.taskId || "")) {
         const previousStep = steps[activeIndex - 1];
-        const generated = stampTaskAudit(undefined, {
+        const generated = stampTaskAudit(state, undefined, {
           id: taskId,
           title: `GPMB · Bước ${String(activeIndex + 1).padStart(2, "0")} · ${String(active.title || "")}`,
           projectId: workflow.projectId,
@@ -2144,7 +2305,7 @@ function advanceGpmbWorkflows(state: JsonRecord, actor: JsonRecord): { taskIds: 
           collaboratorNames: Array.isArray(active.collaboratorNames)
             ? active.collaboratorNames.map((value) => String(value || "").trim()).filter(Boolean)
             : gpmbCollaboratorIds(active.collaboratorIds, active.ownerId).map((id) => String(personForId(state, id)?.name || "")),
-          category: gpmbWorkflowCategory,
+          category: gpmbWorkflowTemplate.find((step) => step.id === String(active.id || ""))?.category || gpmbWorkflowCategory,
           kind: "regular",
           workType: "arising",
           priority: "high",
@@ -2228,7 +2389,7 @@ function personHasRetainedReferences(state: JsonRecord, personId: string): boole
 
 function canDelete(state: JsonRecord, actor: JsonRecord, collection: CollectionName, previous: JsonRecord): boolean {
   if (collection === "notifications") return false;
-  if (collection === "gpmbWorkflows") return false;
+  if (collection === "gpmbWorkflows") return isAdmin(actor);
   if (collection === "calendarEvents") return canManageCalendarEvent(state, actor)
     && !records(state, "tasks").some((task) => task.sourceCalendarEventId === previous.id);
   if (collection === "people") return canManagePeople(state, actor) && !personHasRetainedReferences(state, recordId(previous));
@@ -2389,10 +2550,14 @@ function validPatch(value: unknown): value is StatePatch {
   return true;
 }
 
-function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch): boolean {
+function deletionSummary(current: JsonRecord, patch: StatePatch): { blocked: boolean; totals: Record<string, { current: number; requestedDeletes: number }>; currentTotal: number; deletedTotal: number } {
   const protectedCollections: CollectionName[] = ["people", "tasks", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
+  const criticalCollections = new Set<string>(["people", "tasks", "accounts"]);
+  const totals: Record<string, { current: number; requestedDeletes: number }> = {};
   let currentTotal = 0;
   let deletedTotal = 0;
+  let blocked = false;
+
   for (const collection of protectedCollections) {
     const currentRecords = records(current, collection);
     const existingIds = new Set(currentRecords.map(recordId).filter(Boolean));
@@ -2401,50 +2566,55 @@ function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch):
       .filter((id) => existingIds.has(id)));
     const currentCount = currentRecords.length;
     const deleteCount = deleteIds.size;
+    totals[collection] = { current: currentCount, requestedDeletes: deleteCount };
     currentTotal += currentCount;
     deletedTotal += deleteCount;
-    if (["people", "tasks", "accounts"].includes(collection) && currentCount > 0 && deleteCount >= currentCount) return true;
-    // SAFE guard: for critical collections, block a single mutation that would
-    // delete 25% or more once the collection has at least 8 existing records.
-    if (["people", "tasks", "accounts"].includes(collection) && currentCount >= 8 && deleteCount / currentCount >= 0.25) return true;
-    if (currentCount >= 5 && deleteCount / currentCount > 0.35) return true;
+
+    // Critical collections: block deletion of 25% or more when there are at least 8 records.
+    // Also block complete removal for any non-empty critical collection, including small datasets.
+    if (criticalCollections.has(collection) && currentCount > 0 && deleteCount >= currentCount) blocked = true;
+    if (criticalCollections.has(collection) && currentCount >= 8 && deleteCount / currentCount >= 0.25) blocked = true;
+
+    // Retain the broader guard for all other protected collections.
+    if (!criticalCollections.has(collection) && currentCount >= 5 && deleteCount / currentCount > 0.35) blocked = true;
   }
-  return currentTotal >= 5 && deletedTotal / currentTotal > 0.35;
+  if (currentTotal >= 5 && deletedTotal / currentTotal > 0.35) blocked = true;
+  return { blocked, totals, currentTotal, deletedTotal };
 }
 
-function patchDeletesLastAdmin(current: JsonRecord, patch: StatePatch): boolean {
-  const currentAccounts = records(current, "accounts");
-  const currentActiveAdminIds = new Set(currentAccounts
-    .filter((account) => isAdmin(account) && !Boolean(account.disabled))
-    .map(recordId)
-    .filter(Boolean));
-  if (!currentActiveAdminIds.size) return false;
-
-  const deletedIds = new Set((patch.collections?.accounts?.deletes || [])
-    .map((entry) => String(entry.id || "").trim())
-    .filter(Boolean));
-  const accountUpserts = new Map((patch.collections?.accounts?.upserts || [])
-    .map((entry) => [String(entry.id || "").trim(), entry.value])
-    .filter(([id, value]) => Boolean(id) && isRecord(value)) as Array<[string, JsonRecord]>);
-
-  const survivingAdminIds = new Set(currentActiveAdminIds);
-  for (const id of deletedIds) survivingAdminIds.delete(id);
-  for (const [id, value] of accountUpserts) {
-    if (isAdmin(value) && !Boolean(value.disabled)) survivingAdminIds.add(id);
-    else survivingAdminIds.delete(id);
-  }
-  return survivingAdminIds.size === 0;
+function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch): boolean {
+  return deletionSummary(current, patch).blocked;
 }
 
-function mutationAuditSummary(patch: StatePatch): JsonRecord {
-  const collectionsSummary: JsonRecord = {};
-  for (const collection of collections) {
-    const change = patch.collections?.[collection];
-    const upserts = Array.isArray(change?.upserts) ? change.upserts.length : 0;
-    const deletes = Array.isArray(change?.deletes) ? change.deletes.length : 0;
-    if (upserts || deletes) collectionsSummary[collection] = { upserts, deletes };
+function logBlockedDestructiveMutation(current: JsonRecord, patch: StatePatch, actorId: string, reason: string): void {
+  const summary = deletionSummary(current, patch);
+  console.warn("[SAFE_MUTATION_BLOCKED]", JSON.stringify({
+    at: new Date().toISOString(),
+    actorId: String(actorId || "").slice(0, 128),
+    reason,
+    collections: summary.totals,
+    currentTotal: summary.currentTotal,
+    requestedDeleteTotal: summary.deletedTotal,
+  }));
+}
+
+function activeAdminCount(state: JsonRecord): number {
+  return records(state, "accounts").filter((account) => isAdmin(account) && !Boolean(account.disabled)).length;
+}
+
+function assertLastAdminPreserved(current: JsonRecord, next: JsonRecord, actorId: string): void {
+  const before = activeAdminCount(current);
+  const after = activeAdminCount(next);
+  if (before > 0 && after === 0) {
+    console.warn("[SAFE_MUTATION_BLOCKED]", JSON.stringify({
+      at: new Date().toISOString(),
+      actorId: String(actorId || "").slice(0, 128),
+      reason: "last_active_admin_removal",
+      activeAdminsBefore: before,
+      activeAdminsAfter: after,
+    }));
+    throw new UnsafeBulkDeletionError("The last active Admin account cannot be deleted, disabled, or demoted.");
   }
-  return { collections: collectionsSummary, fields: Array.isArray(patch.fields) ? patch.fields.length : 0 };
 }
 
 function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number): void {
@@ -2534,7 +2704,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       const saved = collection === "accounts"
         ? mergeAccountPassword(previous, candidate)
         : collection === "tasks"
-          ? stampTaskAudit(previous, candidate, actor)
+          ? stampTaskAudit(next, previous, candidate, actor)
           : clone(candidate);
       if (collection === "calendarEvents") {
         const timestamp = new Date().toISOString();
@@ -2594,6 +2764,9 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
     next[key] = key === "moduleSettings" ? normalizeModuleSettings(candidate) : clone(candidate);
     changed += 1;
   });
+
+  const gpmbTaskLinks = synchronizeGpmbWorkflowTaskLinks(next, actor);
+  changed += gpmbTaskLinks.updatedTaskIds.length + gpmbTaskLinks.deletedTaskIds.length;
 
   // GPMB is a server-owned state machine. A task is generated only when the
   // preceding task has both been completed and passed its completion review.
@@ -3170,17 +3343,14 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
     if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
-    if (patchRemovesUnsafeAmountOfData(current.state, patch) || patchDeletesLastAdmin(current.state, patch)) {
-      console.warn("kpi-sync destructive mutation blocked", {
-        accountId: actorId,
-        revision: current.revision,
-        ...mutationAuditSummary(patch),
-      });
+    if (patchRemovesUnsafeAmountOfData(current.state, patch)) {
+      logBlockedDestructiveMutation(current.state, patch, actorId, "bulk_deletion_threshold");
       throw new UnsafeBulkDeletionError("Unsafe bulk deletion was blocked.");
     }
     const actor = accountForId(current.state, actorId);
     if (!actor) throw new Error("Authentication required.");
     const result = applyPatch(current.state, actor, patch);
+    assertLastAdminPreserved(current.state, result.state, actorId);
     lastDenied = result.denied;
     if (!result.changed) return { snapshot: current, denied: lastDenied, changed: 0 };
     await secureMutatedAccountCredentials(result.state, patch);
@@ -3500,7 +3670,7 @@ async function handoverEmployeeWithRetry(actorId: string, handover: EmployeeHand
         const recurrenceHistory = Array.isArray(candidate.recurrenceHandoverHistory) ? candidate.recurrenceHandoverHistory.filter(isRecord) : [];
         candidate = { ...candidate, recurrenceHandoverHistory: [...recurrenceHistory, historyEntry].slice(-50) };
       }
-      return stampTaskAudit(task, candidate, actor);
+      return stampTaskAudit(nextState, task, candidate, actor);
     });
     nextState.people = records(nextState, "people").map((person) => recordId(person) === departingId ? {
       ...person,
@@ -3846,12 +4016,10 @@ Deno.serve(async (request) => {
       const body = await readJsonPayload(request);
       if (!validPatch(body?.patch)) return json(request, { error: "Invalid mutation payload." }, 422);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
-      const audit = mutationAuditSummary(body.patch);
-      if (patchRemovesUnsafeAmountOfData(current.state, body.patch) || patchDeletesLastAdmin(current.state, body.patch)) {
-        console.warn("kpi-sync destructive mutation blocked", { accountId, revision: current.revision, ...audit });
+      if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
+        logBlockedDestructiveMutation(current.state, body.patch, accountId, "bulk_deletion_threshold");
         return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
       }
-      console.log("kpi-sync mutation audit", { accountId, revision: current.revision, ...audit });
       const result = await updateWithRetry(accountId, body.patch);
       const responseAccount = accountForId(result.snapshot.state, accountId) || accountForId(current.state, accountId);
       if (!responseAccount) return json(request, { error: "Authentication required." }, 401);
