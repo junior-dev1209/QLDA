@@ -1199,13 +1199,15 @@ select[multiple],
 }
 
 .dashboard-daily-report-action,
+.dashboard-weekly-report-action,
 .dashboard-monthly-report-action {
   display: flex;
   align-items: end;
   gap: 9px;
 }
 
-.dashboard-daily-report-action label {
+.dashboard-daily-report-action label,
+.dashboard-weekly-report-action label {
   display: grid;
   gap: 4px;
   color: var(--muted);
@@ -1213,7 +1215,8 @@ select[multiple],
   font-weight: 800;
 }
 
-.dashboard-daily-report-action input {
+.dashboard-daily-report-action input,
+.dashboard-weekly-report-action input {
   width: 158px;
   min-height: 36px;
   padding: 6px 9px;
@@ -1279,6 +1282,64 @@ select[multiple],
 .dashboard-monthly-report-button:focus-visible {
   border-color: #104b5e;
   background: #104b5e;
+}
+
+.dashboard-weekly-report-button {
+  border-color: #286b61;
+  background: #286b61;
+}
+
+.dashboard-weekly-report-button:hover,
+.dashboard-weekly-report-button:focus-visible {
+  border-color: #20584f;
+  background: #20584f;
+}
+
+.account-password-action {
+  display: block;
+  margin-top: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: left;
+  box-shadow: none;
+}
+
+.account-password-action:hover,
+.account-password-action:focus-visible {
+  border: 0;
+  background: transparent;
+  color: var(--primary-dark);
+  text-decoration: underline;
+  box-shadow: none;
+  transform: none;
+}
+
+.change-password-modal {
+  width: min(440px, 100%);
+}
+
+.change-password-modal > label {
+  display: grid;
+  gap: 5px;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.change-password-modal input {
+  min-width: 0;
+  width: 100%;
+}
+
+.change-password-status {
+  min-height: 1.2em;
+  margin: 0;
+  color: var(--bad);
+  font-size: 0.84rem;
 }
 
 .section-note {
@@ -9852,17 +9913,20 @@ td:last-child {
 
   .dashboard-report-actions,
   .dashboard-daily-report-action,
+  .dashboard-weekly-report-action,
   .dashboard-monthly-report-action {
     align-items: stretch;
     flex-wrap: wrap;
     margin-top: -3px;
   }
 
-  .dashboard-daily-report-action label {
+  .dashboard-daily-report-action label,
+  .dashboard-weekly-report-action label {
     flex: 1 1 150px;
   }
 
   .dashboard-daily-report-action input,
+  .dashboard-weekly-report-action input,
   .dashboard-monthly-report-action,
   .dashboard-daily-report-button {
     width: 100%;

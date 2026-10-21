@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRef = "hqquobfaccxnydeyvioe"
-$expectedDeploymentVersion = "2026.10.16.1"
+$expectedDeploymentVersion = "2026.10.21.1"
 $cli = Join-Path $PSScriptRoot "tools\supabase-cli\supabase.exe"
 
 if (-not (Test-Path -LiteralPath $cli)) {

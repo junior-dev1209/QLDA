@@ -5,7 +5,7 @@ const client = fs.readFileSync("script.js", "utf8");
 const edge = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
 const php = fs.readFileSync("api/sync.php", "utf8");
 
-assert.match(edge, /const deploymentVersion = "2026\.10\.16\.1";/, "Máy chủ phải dùng phiên bản bảo vệ đồng bộ.");
+assert.match(edge, /const deploymentVersion = "2026\.10\.21\.1";/, "Máy chủ phải dùng phiên bản bảo vệ đồng bộ.");
 assert.match(client, /function hasTrustedSharedChangeCheckpoint/, "Trình duyệt phải xác minh ảnh gốc trước khi gửi thay đổi đang chờ.");
 assert.match(client, /function sharedPatchDeletesCriticalData/, "Trình duyệt phải nhận diện bản sao có nguy cơ xóa dữ liệu.");
 assert.match(client, /function initializeEmptySharedServerFromImportedBackup/, "Khởi tạo máy chủ phải là thao tác khôi phục có chủ đích.");

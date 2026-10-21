@@ -129,7 +129,7 @@ assert.equal(canUpdateTask(state, byId("account-other"), task), false, "Other de
   "return uniquePersonIds([taskParticipantPersonId(task?.ownerId), ...taskCollaboratorIds(task)]);",
 ].forEach((marker) => assert.ok(clientSource.includes(marker), `Missing client permission safeguard: ${marker}`));
 
-assert.match(source, /const deploymentVersion = "2026\.10\.16\.1";/, "Máy chủ phải dùng bản triển khai mới cho quy tắc người phối hợp.");
+assert.match(source, /const deploymentVersion = "2026\.10\.21\.1";/, "Máy chủ phải dùng bản triển khai mới cho quy tắc người phối hợp.");
 assert.match(clientSource, /deploymentVersionAtLeast\(sharedSync\.deploymentVersion, "2026\.08\.21\.1"\)/, "Ứng dụng phải nhận diện đúng phiên bản máy chủ xử lý tiến độ.");
 
 console.log("gpmb_task_permissions=passed");

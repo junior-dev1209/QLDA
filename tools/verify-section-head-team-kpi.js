@@ -136,6 +136,6 @@ assert.equal(state.people[2].sectionHeadId, "");
 ].forEach((marker) => assert.ok(source.includes(marker), `Missing section-head KPI safeguard: ${marker}`));
 
 assert.match(edgeSource, /sectionHeadKpiCatalogVersion/, "Máy chủ phải đồng bộ phiên bản danh mục KPI của Trưởng bộ phận/Trưởng nhóm.");
-assert.match(edgeSource, /const deploymentVersion = "2026\.10\.16\.1";/, "Máy chủ phải dùng bản triển khai có hỗ trợ danh mục KPI mới.");
+assert.match(edgeSource, /const deploymentVersion = "2026\.10\.21\.1";/, "Máy chủ phải dùng bản triển khai có hỗ trợ danh mục KPI mới.");
 
 console.log("section_head_team_kpi=passed");

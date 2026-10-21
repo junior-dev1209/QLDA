@@ -1,19 +1,22 @@
 # Trien khai Supabase Cloud
 
-## Ban 2026.10.16.1 SAFE: bao ve thao tac xoa va tai khoan Admin
+## Ban 2026.10.21.1 SAFE: bao ve xoa du lieu va Admin cuoi cung
 
-- Edge Function `kpi-sync` dung `deploymentVersion = 2026.10.16.1`.
-- Bao ve xoa hang loat chat hon: voi `people`, `tasks`, `accounts`, chan xoa tu 25% tro len khi co it nhat 8 ban ghi; van chan xoa toan bo tap du lieu nho.
-- Khong cho phep thao tac lam mat Admin dang hoat dong cuoi cung.
-- Cac thao tac xoa nguy hiem bi chan duoc ghi vao Edge Function Logs voi ma `[SAFE_MUTATION_BLOCKED]`; nhat ky chi gom thong ke, khong ghi noi dung ban ghi.
-- `Deploy-KpiSync.ps1` doi chieu dung phien ban `2026.10.16.1` va lien ket project ref `hqquobfaccxnydeyvioe`.
-- Sau khi deploy, chay `.\Deploy-KpiSync.ps1 -CheckOnly` de kiem tra phien ban va cac dieu kien dong bo. Khong chay `db push` tru khi da xem xet cac migration chua ap dung.
+Edge Function `kpi-sync` chan cac patch xoa toan bo `people`, `tasks` hoac `accounts` khi collection con du lieu; chan xoa tu 25% tro len doi voi cac collection trong nhom nay khi co it nhat 8 ban ghi; giu nguong bao ve chung cho cac collection duoc bao ve khac. Neu patch lam so tai khoan Admin dang hoat dong tu lon hon 0 ve 0, server tu choi thay doi. Cac thao tac bi chan ghi log `[SAFE_MUTATION_BLOCKED]` chi gom ID tai khoan tac dong, ly do va so luong ban ghi, khong ghi noi dung ban ghi hay thong tin dang nhap.
+
+Ban SAFE giu nguyen cac chuc nang cua v3.4.14 va su dung deployment version `2026.10.21.1`. Sau khi deploy, chay ` .\Deploy-KpiSync.ps1 -CheckOnly` de xac nhan phien ban va cac kiem tra san co. Nen sao luu du lieu truoc khi deploy; khong chay migration neu chua kiem tra trang thai migration.
 
 ## Kien truc
 
 Ung dung dung Supabase theo luong sau:
 
 `Trinh duyet -> Edge Function kpi-sync -> Postgres + Storage private kpi-files`
+
+## Ban 2026.10.19.1: phan quyen tai khoan va danh muc du an
+
+Admin la tai khoan duy nhat duoc tao, sua va xoa tai khoan; Ban giam doc van xem duoc danh sach tai khoan nhung khong the gui lenh ghi/xoa truc tiep. Ban giam doc duoc xem Danh muc du an trong muc Cong viec o che do chi doc. Chuc nang In bao cao tong hop chi hien va chay duoc voi Admin. Nut Nap du lieu mau va ham tao du lieu mau da duoc go khoi bo ma ung dung.
+
+Khi phat hanh, deploy Edge Function truoc giao dien de quyen tai khoan moi duoc ap dung o may chu truoc khi nguoi dung nhan ban frontend moi.
 
 ## Ban 2026.10.15.1: phuc hoi trang thai duyet hoan thanh
 
@@ -70,7 +73,7 @@ Moi tai khoan online chi co mot phien hop le. Khi dang nhap tren thiet bi moi, m
 .\tools\supabase-cli\supabase.exe link --project-ref hqquobfaccxnydeyvioe
 ```
 
-Tep `.cmd` tu chay PowerShell voi pham vi `ExecutionPolicy Bypass` cho rieng mot lenh, khong thay doi chinh sach bao mat cua Windows. Script dung Supabase CLI da duoc dat trong `tools\supabase-cli`, khong phu thuoc lenh `supabase` toan cuc hay bien moi truong `PATH`. Lan dau, `-Login` yeu cau dang nhap Supabase. `-CheckOnly` kiem tra CLI va xac nhan may chu da thuc su chay phien ban `2026.10.15.1`. Khi deploy binh thuong, script tu lien ket du an neu can, chay `db push` truoc khi deploy Function; dung `-SkipDatabaseMigrations` chi khi migration da duoc ap dung thu cong.
+Tep `.cmd` tu chay PowerShell voi pham vi `ExecutionPolicy Bypass` cho rieng mot lenh, khong thay doi chinh sach bao mat cua Windows. Script dung Supabase CLI da duoc dat trong `tools\supabase-cli`, khong phu thuoc lenh `supabase` toan cuc hay bien moi truong `PATH`. Lan dau, `-Login` yeu cau dang nhap Supabase. `-CheckOnly` kiem tra CLI va xac nhan may chu da thuc su chay phien ban `2026.10.19.1`. Khi deploy binh thuong, script tu lien ket du an neu can, chay `db push` truoc khi deploy Function; dung `-SkipDatabaseMigrations` chi khi migration da duoc ap dung thu cong.
 
 Neu can dung Supabase CLI cua may tinh thay vi script, cai CLI va dang nhap:
 
@@ -221,7 +224,7 @@ Quy trinh khoi tao hoac phuc hoi du lieu trung tam:
 
 1. Mo phien ban moi, dang nhap Admin tren may dang co ban JSON day du va moi nhat.
 2. Neu may chu rong, he thong hien canh bao va khong tu dong tai bat ky du lieu cuc bo nao. Tai khoan Admin chon Nhap JSON, chon tep JSON day du (it nhat Nhan su - Tai khoan va Van hanh), sau do xac nhan khoi phuc trung tam.
-3. Kiem tra `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`. Sau khi hoan tat, `initialized` phai la `true`, `revision` lon hon `0`, `deploymentVersion` la `2026.10.15.1`, `storageModel` la `record-projection-transition`, `singleDeviceSession`, `credentialHashing`, `calendarEvents`, `notifications` va `gpmbWorkflows` la `true`, `recordProjection.available` va `recordProjection.synchronized` la `true`, `releaseUpdates` la `false` va `originRestricted` la `true`.
+3. Kiem tra `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`. Sau khi hoan tat, `initialized` phai la `true`, `revision` lon hon `0`, `deploymentVersion` la `2026.10.19.1`, `storageModel` la `record-projection-transition`, `singleDeviceSession`, `credentialHashing`, `calendarEvents`, `notifications` va `gpmbWorkflows` la `true`, `recordProjection.available` va `recordProjection.synchronized` la `true`, `releaseUpdates` la `false` va `originRestricted` la `true`.
 4. Dang nhap tren may thu hai, tai lai trang va kiem tra du lieu van con day du.
 
 Neu ket qua `status` co `initialized: false` hoac `revision: 0`, Postgres trung tam chua co du lieu va tat ca may khac se chi nhan trang thai rong. Ban giao dien khong bao gio tu khoi tao hoac dong bo ban sao cuc bo len may chu trong truong hop do. Chi Admin dang nhap tren may co ban sao JSON da kiem tra moi duoc phep chon Nhap JSON va xac nhan khoi phuc. Khong tao du lieu moi, khong thao tac tu may khac va khong dung tep JSON thieu nhom Nhan su - Tai khoan hoac Van hanh truoc khi hoan tat khoi phuc.

@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.10";
+const APP_VERSION = "3.4.14";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -5935,7 +5935,7 @@ function canEditPeriod(period) {
 }
 
 function canManageAccounts() {
-  return isDirector() || isAdmin();
+  return isAdmin();
 }
 
 function canEditOwnAccount() {
@@ -6093,6 +6093,10 @@ function canAssignTasks() {
 
 function canManageProjectCatalog() {
   return isAdmin() || isManager() || isDeputyManager() || isSectionHead();
+}
+
+function canViewProjectCatalog() {
+  return canManageProjectCatalog() || isDirector();
 }
 
 function isAssignableByDepartmentLeader(person) {
@@ -7556,31 +7560,43 @@ function updatePersonSectionHeadOptions(selectedValue) {
   field.classList.toggle("is-hidden", isSectionHead);
 }
 
+function taskCategoryRoleForPerson(person) {
+  const roleId = normalizeSearchText(person?.roleId || "");
+  if (!roleId) return null;
+  const departmentId = String(person?.departmentId || "");
+  const candidates = roles.filter((role) => !departmentId || role.departmentId === departmentId);
+  const exactMatches = candidates.filter((role) => normalizeSearchText(role.id) === roleId);
+  if (exactMatches.length === 1) return exactMatches[0];
+  if (exactMatches.length > 1) return null;
+  const legacyMatches = candidates.filter((role) => normalizeSearchText(role.id).startsWith(`${roleId}-`));
+  return legacyMatches.length === 1 ? legacyMatches[0] : null;
+}
+
 function taskCategoryOptionsForPerson(personId) {
-  const person = personById(personId);
-  const role = person ? roleById(person.roleId) : null;
-  const roleCriteria = role?.criteria?.map((criterion) => criterion[0]).filter(Boolean) || [];
-  const fallback = [
-    "Hoàn thành kế hoạch dự án",
-    "Tiến độ - chất lượng - chi phí",
-    "Cải cách hành chính",
-    "Chuyển đổi số",
-    "Tiết kiệm, chống lãng phí",
-  ];
-  return [...new Set(roleCriteria.length ? roleCriteria : fallback)];
+  const role = taskCategoryRoleForPerson(personById(personId));
+  const roleCriteria = role?.criteria?.map((criterion) => String(criterion?.[0] || "").trim()).filter(Boolean) || [];
+  return [...new Set(roleCriteria)];
 }
 
 function updateTaskCategoryOptions(selectedValue, ownerSelectId = "taskOwner", categorySelectId = "taskCategory") {
   const select = byId(categorySelectId);
-  const options = taskCategoryOptionsForPerson(byId(ownerSelectId).value);
+  const ownerId = byId(ownerSelectId).value;
+  const options = taskCategoryOptionsForPerson(ownerId);
   const selectedCandidates = [selectedValue, select.value].filter((value) => value && !String(value).startsWith("Chọn người được giao"));
-  const selected = selectedCandidates[0] || "";
-  const merged = selected && !options.includes(selected) ? [selected, ...options] : options;
-  fillSelect(
-    select,
-    merged.map((category) => ({ value: category, label: category })),
-    selected && merged.includes(selected) ? selected : merged[0] || "",
-  );
+  const requested = selectedCandidates[0] || "";
+  const taskId = categorySelectId === "assignmentTaskCategory" ? byId("assignmentTaskId")?.value : byId("taskId")?.value;
+  const preserveLegacy = Boolean(taskId && requested && !options.includes(requested));
+  const optionRows = options.map((category) => ({ value: category, label: category }));
+  if (preserveLegacy) optionRows.unshift({ value: requested, label: `${requested} (danh mục cũ, chưa khớp chức vụ)` });
+  if (!optionRows.length) {
+    optionRows.push({
+      value: "",
+      label: ownerId ? "Chức vụ chưa có danh mục nhiệm vụ được cấu hình" : "Chọn người được giao để lấy danh mục nhiệm vụ",
+    });
+  }
+  const selected = preserveLegacy || options.includes(requested) ? requested : options[0] || "";
+  fillSelect(select, optionRows, selected);
+  if (!options.length && !preserveLegacy && select.options[0]) select.options[0].disabled = true;
 }
 
 function updateTaskCollaboratorOptions(selectedValues = []) {
@@ -8058,13 +8074,17 @@ function renderTaskProjectCatalog() {
   const panel = byId("taskProjectCatalogPanel");
   if (!panel) return;
   const canManage = canManageProjectCatalog();
-  panel.classList.toggle("is-hidden", !canManage);
-  if (!canManage) return;
+  const canView = canViewProjectCatalog();
+  panel.classList.toggle("is-hidden", !canView);
+  byId("openTaskProjectCatalog").textContent = canManage ? "Quản lý dự án" : "Danh mục dự án";
+  byId("taskProjectCatalogForm").classList.toggle("is-hidden", !canManage);
+  if (!canView) return;
   const projects = taskProjectOptions();
   const search = normalizeSearchText(byId("taskProjectCatalogSearch")?.value || "");
   const visibleProjects = search
     ? projects.filter((project) => normalizeSearchText(project.label).includes(search))
     : projects;
+  byId("taskProjectCatalogDialogTitle").textContent = canManage ? "Quản lý tên dự án" : "Danh mục dự án";
   byId("taskProjectCatalogNote").textContent = projects.length
     ? `${projects.length} dự án đang được dùng làm tên chuẩn cho công việc.`
     : "Chưa có dự án. Thêm dự án để liên kết khi tạo công việc.";
@@ -8074,10 +8094,10 @@ function renderTaskProjectCatalog() {
           (project) => `
             <div class="project-catalog-item">
               <button class="project-catalog-project-link" type="button" data-open-project-tasks="${escapeHtml(project.value)}" title="Xem công việc thuộc dự án ${escapeHtml(project.label)}">${escapeHtml(project.label)}</button>
-              <div class="project-catalog-actions">
+              ${canManage ? `<div class="project-catalog-actions">
                 <button class="ghost" type="button" data-edit-task-project="${escapeHtml(project.value)}">Sửa</button>
                 <button class="ghost project-catalog-delete" type="button" data-delete-task-project="${escapeHtml(project.value)}" title="Xóa dự án" aria-label="Xóa dự án ${escapeHtml(project.label)}">X</button>
-              </div>
+              </div>` : ""}
             </div>
           `,
         )
@@ -8088,13 +8108,13 @@ function renderTaskProjectCatalog() {
 }
 
 function openTaskProjectCatalogDialog() {
-  if (!canManageProjectCatalog()) return;
+  if (!canViewProjectCatalog()) return;
   byId("taskProjectCatalogSearch").value = "";
   renderTaskProjectCatalog();
   const dialog = byId("taskProjectCatalogDialog");
   dialog.classList.remove("is-hidden");
   dialog.setAttribute("aria-hidden", "false");
-  byId("taskProjectCatalogName").focus();
+  (canManageProjectCatalog() ? byId("taskProjectCatalogName") : byId("taskProjectCatalogSearch")).focus();
 }
 
 function closeTaskProjectCatalogDialog() {
@@ -11505,14 +11525,15 @@ function dailyWorkReportDocumentTemplate(report) {
   const taskRows = report.tasks.length
     ? report.tasks.map((task) => {
       const status = dailyReportTaskStatus(task);
-      return `<tr><td>${escapeHtml(dailyReportTaskDepartment(task).name)}</td><td><strong>${escapeHtml(task.title || "Chưa có tên công việc")}</strong><small>${escapeHtml(dailyReportTaskProjectName(task))}</small></td><td>${escapeHtml(dailyReportTaskOwner(task))}</td><td><span class="status ${dailyReportStatusTone(status)}">${escapeHtml(status)}</span></td><td>${formatScore(Number(task.progress || 0))}%</td><td>${escapeHtml(dailyReportTaskNote(task, report.date))}</td></tr>`;
+      const note = typeof report.taskNote === "function" ? report.taskNote(task) : dailyReportTaskNote(task, report.date);
+      return `<tr><td>${escapeHtml(dailyReportTaskDepartment(task).name)}</td><td><strong>${escapeHtml(task.title || "Chưa có tên công việc")}</strong><small>${escapeHtml(dailyReportTaskProjectName(task))}</small></td><td>${escapeHtml(dailyReportTaskOwner(task))}</td><td><span class="status ${dailyReportStatusTone(status)}">${escapeHtml(status)}</span></td><td>${formatScore(Number(task.progress || 0))}%</td><td>${escapeHtml(note)}</td></tr>`;
     }).join("")
     : '<tr><td colspan="6" class="empty">Không có công việc để liệt kê.</td></tr>';
-  const reportDate = formatDate(report.date);
+  const reportDate = report.rangeLabel || formatDate(report.date);
   const generatedAt = formatDateTime(report.generatedAt);
   return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Bao-cao-cong-viec-hang-ngay-${report.date}</title><style>
 @page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{margin:0;color:#13263a;font-family:Arial,"Segoe UI",sans-serif;font-size:10.5px;line-height:1.38}header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:13px 16px;background:#0d4e5b;color:#fff}header p{margin:0 0 3px;font-size:9px;font-weight:700;text-transform:uppercase}header h1{margin:0;font-size:21px;line-height:1.15}header .meta{text-align:right;font-size:9px;line-height:1.65}.subtitle{margin:10px 0 9px;color:#607588;font-size:9.5px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}.metric{min-height:56px;padding:9px 11px;border:1px solid #d7e2e8;border-top:4px solid #176878;border-radius:5px;background:#fff}.metric span{display:block;color:#607588;font-size:9px;font-weight:700}.metric strong{display:block;margin-top:4px;color:#176878;font-size:24px;line-height:1}.metric.good{border-top-color:#16805f}.metric.good strong{color:#16805f}.metric.pending{border-top-color:#a56808}.metric.pending strong{color:#a56808}.metric.overdue{border-top-color:#b42318}.metric.overdue strong{color:#b42318}.grid{display:grid;grid-template-columns:1.22fr .98fr;gap:12px;align-items:start}.panel{border:1px solid #d7e2e8;border-radius:5px;overflow:hidden;background:#fff}.panel h2{margin:0;padding:8px 10px;border-bottom:1px solid #d7e2e8;color:#13263a;font-size:11.5px}.panel h2 small{float:right;color:#607588;font-size:8px;font-weight:400}.summary-table,.detail-table{width:100%;border-collapse:collapse}.summary-table th,.summary-table td{padding:6px 8px;border-bottom:1px solid #e2e9ed;text-align:right}.summary-table th:first-child{text-align:left}.summary-table thead th{background:#edf4f6;color:#607588;font-size:8px}.summary-table tbody th{font-weight:700}.summary-table tbody tr:nth-child(odd),.detail-table tbody tr:nth-child(odd){background:#f8fafc}.good{color:#16805f;font-weight:700}.active{color:#2f7fa4;font-weight:700}.pending{color:#a56808;font-weight:700}.overdue{color:#b42318;font-weight:700}.project-row{display:grid;grid-template-columns:minmax(120px,.8fr) minmax(170px,1.2fr);gap:10px;padding:8px 10px;border-bottom:1px solid #e2e9ed}.project-row:last-child{border-bottom:0}.project-row strong,.project-row small{display:block}.project-row small{margin-top:3px;color:#607588;font-size:8px}.project-progress>span{color:#38576b;font-size:8.5px}.project-progress b{color:#176878}.progress-track{height:8px;margin:4px 0 2px;overflow:hidden;border-radius:4px;background:#e5edf1}.progress-track i{display:block;height:100%;border-radius:4px;background:#16805f}.empty,.empty-projects{padding:12px;color:#607588;text-align:center}.detail{margin-top:10px}.detail-table thead{display:table-header-group}.detail-table th{padding:7px 6px;background:#edf4f6;color:#607588;font-size:8px;text-align:left}.detail-table td{padding:7px 6px;vertical-align:top;border-bottom:1px solid #e2e9ed}.detail-table td:nth-child(1){width:12%}.detail-table td:nth-child(2){width:30%}.detail-table td:nth-child(3){width:14%}.detail-table td:nth-child(4){width:13%}.detail-table td:nth-child(5){width:8%;font-weight:700;color:#176878}.detail-table td:nth-child(6){width:23%;color:#526b7c}.detail-table small{display:block;margin-top:3px;color:#607588;font-size:8px}.status{display:inline-block;padding:3px 6px;border-radius:4px;font-size:8px;font-weight:700;white-space:nowrap}.status.is-complete{background:#eaf7f0;color:#16805f}.status.is-pending{background:#fff5dd;color:#a56808}.status.is-overdue{background:#fcecec;color:#b42318}.status.is-active{background:#eaf3f8;color:#2f7fa4}.status.is-preparing{background:#f2f5f7;color:#526b7c}.note{margin:8px 0 0;padding:7px 9px;border-left:3px solid #a56808;background:#fff9ed;color:#67521d;font-size:8.5px}footer{display:flex;justify-content:space-between;margin-top:8px;padding-top:6px;border-top:1px solid #d7e2e8;color:#607588;font-size:7.5px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.grid{display:block}.grid>.panel+.panel{margin-top:10px}.panel{break-inside:auto}.project-row,.summary-table tr,.detail-table tr{break-inside:avoid;page-break-inside:avoid}header,.metrics{break-after:avoid;page-break-after:avoid}.detail-table thead{display:table-header-group}}
-</style></head><body><header><div><p>Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</p><h1>Báo cáo công việc hàng ngày</h1></div><div class="meta">Ngày báo cáo: <b>${escapeHtml(reportDate)}</b><br>Xuất lúc: ${escapeHtml(generatedAt)}<br>${escapeHtml(report.account?.displayName || report.account?.username || "Tài khoản hệ thống")}</div></header><p class="subtitle">Tổng hợp một lần cho mỗi công việc phát sinh mới, cập nhật tiến độ/phản hồi, đến hạn, hoàn thành hoặc được đánh giá trong ngày đã chọn; không nhân số liệu theo số người tham gia.</p><section class="metrics">${metricCard("Công việc trong ngày", report.metrics.total, "primary")}${metricCard("Hoàn thành đạt", report.metrics.approved, "good")}${metricCard("Chờ phê duyệt", report.metrics.pending, "pending")}${metricCard("Quá hạn cần xử lý", report.metrics.overdue, "overdue")}</section><section class="grid"><article class="panel"><h2>Khối lượng theo phòng ban <small>${report.departments.length} phòng có công việc</small></h2><table class="summary-table"><thead><tr><th>Phòng ban</th><th>Phát sinh</th><th>Đạt</th><th>Đang làm</th><th>Chờ duyệt</th><th>Quá hạn</th></tr></thead><tbody>${departmentRows}</tbody></table></article><article class="panel"><h2>Tiến độ dự án có công việc phát sinh <small>${report.projects.length} dự án</small></h2>${projectRows}</article></section><section class="panel detail"><h2>Danh sách công việc trong ngày <small>${report.tasks.length} công việc</small></h2><table class="detail-table"><thead><tr><th>Phòng</th><th>Công việc / dự án</th><th>Người thực hiện</th><th>Trạng thái hiện tại</th><th>Tiến độ</th><th>Cập nhật gần nhất</th></tr></thead><tbody>${taskRows}</tbody></table></section><p class="note">Lưu ý: Mỗi mã công việc chỉ được tính một lần, kể cả khi có nhiều người phối hợp hoặc có nhiều diễn biến trong ngày. Hệ thống dùng mốc tạo mới, báo cáo tiến độ, phản hồi, đến hạn, hoàn thành và đánh giá để xác định phạm vi; không dùng mốc đồng bộ kỹ thuật. Khi xuất lại báo cáo của ngày cũ, trạng thái và tiến độ là giá trị hiện tại vì hệ thống chưa lưu bản chụp trạng thái theo từng ngày.</p><footer><span>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</span><span>Báo cáo công việc hàng ngày · ${escapeHtml(reportDate)}</span></footer><script>window.addEventListener("load",()=>window.setTimeout(()=>window.print(),180));</script></body></html>`;
+</style></head><body><header><div><p>Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</p><h1>Báo cáo công việc hàng ngày</h1></div><div class="meta">Ngày báo cáo: <b>${escapeHtml(reportDate)}</b><br>Xuất lúc: ${escapeHtml(generatedAt)}<br>${escapeHtml(report.account?.displayName || report.account?.username || "Tài khoản hệ thống")}</div></header><p class="subtitle">Tổng hợp một lần cho mỗi công việc phát sinh mới, cập nhật tiến độ/phản hồi, đến hạn, hoàn thành hoặc được đánh giá trong ngày đã chọn; không nhân số liệu theo số người tham gia.</p><section class="metrics">${metricCard("Công việc trong ngày", report.metrics.total, "primary")}${metricCard("Hoàn thành đạt", report.metrics.approved, "good")}${metricCard("Chờ phê duyệt", report.metrics.pending, "pending")}${metricCard("Quá hạn cần xử lý", report.metrics.overdue, "overdue")}</section>${report.extraSummary || ""}<section class="grid"><article class="panel"><h2>Khối lượng theo phòng ban <small>${report.departments.length} phòng có công việc</small></h2><table class="summary-table"><thead><tr><th>Phòng ban</th><th>Phát sinh</th><th>Đạt</th><th>Đang làm</th><th>Chờ duyệt</th><th>Quá hạn</th></tr></thead><tbody>${departmentRows}</tbody></table></article><article class="panel"><h2>Tiến độ dự án có công việc phát sinh <small>${report.projects.length} dự án</small></h2>${projectRows}</article></section><section class="panel detail"><h2>Danh sách công việc trong ngày <small>${report.tasks.length} công việc</small></h2><table class="detail-table"><thead><tr><th>Phòng</th><th>Công việc / dự án</th><th>Người thực hiện</th><th>Trạng thái hiện tại</th><th>Tiến độ</th><th>Cập nhật gần nhất</th></tr></thead><tbody>${taskRows}</tbody></table></section><p class="note">Lưu ý: Mỗi mã công việc chỉ được tính một lần, kể cả khi có nhiều người phối hợp hoặc có nhiều diễn biến trong ngày. Hệ thống dùng mốc tạo mới, báo cáo tiến độ, phản hồi, đến hạn, hoàn thành và đánh giá để xác định phạm vi; không dùng mốc đồng bộ kỹ thuật. Khi xuất lại báo cáo của ngày cũ, trạng thái và tiến độ là giá trị hiện tại vì hệ thống chưa lưu bản chụp trạng thái theo từng ngày.</p><footer><span>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</span><span>Báo cáo công việc hàng ngày · ${escapeHtml(reportDate)}</span></footer><script>window.addEventListener("load",()=>window.setTimeout(()=>window.print(),180));</script></body></html>`;
 }
 
 function dailyWorkReportDocumentHtml(report) {
@@ -11543,6 +11564,173 @@ function exportDailyWorkReportPdf() {
   }
   reportWindow.document.open();
   reportWindow.document.write(dailyWorkReportDocumentHtml(report));
+  reportWindow.document.close();
+  reportWindow.focus();
+}
+
+function weeklyWorkReportDateRange(value) {
+  const anchorDate = dailyReportDateValue(value);
+  const monday = new Date(`${anchorDate}T12:00:00`);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const dates = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    return dailyReportDateValue(date);
+  });
+  const today = dailyReportDateValue();
+  return {
+    anchorDate,
+    startDate: dates[0],
+    endDate: dates[6],
+    cutoffDate: dates[6] > today ? today : dates[6],
+    dates,
+    label: `${formatDate(dates[0])} - ${formatDate(dates[6])}`,
+  };
+}
+
+function weeklyWorkReportCompletionEventDate(task, range) {
+  const completedDate = dailyReportDatePart(task?.completedAt);
+  const reviewedDate = taskCompletionIsApproved(task) ? dailyReportDatePart(task?.completionReviewedAt) : "";
+  const inRange = (date) => date >= range.startDate && date <= range.endDate;
+  if (reviewedDate && inRange(reviewedDate)) return reviewedDate;
+  if (completedDate && inRange(completedDate)) return completedDate;
+  return "";
+}
+
+function taskOccurredInWeeklyWorkReport(task, range) {
+  const dueDate = dailyReportDatePart(task?.due);
+  const dueInRange = dueDate >= range.startDate && dueDate <= range.endDate;
+  const createdDate = dailyReportDatePart(task?.createdAt);
+  const createdUnfinishedInRange = createdDate >= range.startDate
+    && createdDate <= range.cutoffDate
+    && !taskIsCompletedByReportCutoff(task, range.cutoffDate);
+  const completedOutsideDueRange = !dueInRange && Boolean(weeklyWorkReportCompletionEventDate(task, range));
+  return dueInRange || createdUnfinishedInRange || completedOutsideDueRange;
+}
+
+function weeklyWorkReportTaskNote(task, range) {
+  const note = [...(Array.isArray(task?.progressReports) ? task.progressReports : [])]
+    .reverse()
+    .find((item) => {
+      const date = dailyReportDatePart(item?.createdAt);
+      return date >= range.startDate && date <= range.endDate && String(item?.note || "").trim();
+    });
+  return note?.note || task?.note || "Chưa có ghi chú.";
+}
+
+function weeklyWorkReportData(anchorDate) {
+  const range = weeklyWorkReportDateRange(anchorDate);
+  const visibleTaskById = new Map();
+  state.tasks.forEach((task, index) => {
+    if (!canViewTaskRecord(task)) return;
+    const key = String(task?.id || "").trim() || `task-row-${index}`;
+    if (!visibleTaskById.has(key)) visibleTaskById.set(key, task);
+  });
+  const visibleTasks = [...visibleTaskById.values()];
+  const tasks = visibleTasks
+    .filter((task) => taskOccurredInWeeklyWorkReport(task, range))
+    .slice()
+    .sort((left, right) => dailyReportTaskDepartment(left).name.localeCompare(dailyReportTaskDepartment(right).name, "vi") || dailyReportTaskOwner(left).localeCompare(dailyReportTaskOwner(right), "vi") || String(left.due || "").localeCompare(String(right.due || "")));
+  const departmentMap = new Map();
+  tasks.forEach((task) => {
+    const department = dailyReportTaskDepartment(task);
+    const row = departmentMap.get(department.name) || { ...department, tasks: [] };
+    row.tasks.push(task);
+    departmentMap.set(department.name, row);
+  });
+  const departments = [...departmentMap.values()]
+    .map((row) => ({
+      ...row,
+      total: row.tasks.length,
+      approved: row.tasks.filter(taskCompletionIsApproved).length,
+      pending: row.tasks.filter(taskCompletionNeedsReview).length,
+      overdue: row.tasks.filter((task) => getDueStatus(task) === "Quá hạn").length,
+      active: row.tasks.filter((task) => !taskCompletionIsApproved(task) && !taskCompletionNeedsReview(task) && getDueStatus(task) !== "Quá hạn").length,
+    }))
+    .sort((left, right) => right.total - left.total || left.name.localeCompare(right.name, "vi"));
+  const projectMap = new Map();
+  tasks.forEach((task) => {
+    const key = dailyReportProjectKey(task);
+    if (!key) return;
+    const row = projectMap.get(key) || { key, name: projectNameForTask(task), dailyTasks: [] };
+    row.dailyTasks.push(task);
+    projectMap.set(key, row);
+  });
+  const projects = [...projectMap.values()]
+    .map((row) => {
+      const allTasks = visibleTasks.filter((task) => dailyReportProjectKey(task) === row.key);
+      return {
+        ...row,
+        total: allTasks.length,
+        approved: allTasks.filter(taskCompletionIsApproved).length,
+        averageProgress: allTasks.length ? clamp(allTasks.reduce((sum, task) => sum + Number(task.progress || 0), 0) / allTasks.length, 0, 100) : 0,
+        departments: [...new Set(row.dailyTasks.map((task) => dailyReportTaskDepartment(task).name))],
+      };
+    })
+    .sort((left, right) => right.dailyTasks.length - left.dailyTasks.length || left.name.localeCompare(right.name, "vi"));
+  const dayLabels = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ nhật"];
+  const dailyDistribution = range.dates.map((date, index) => ({
+    date,
+    label: dayLabels[index],
+    due: tasks.filter((task) => dailyReportDatePart(task?.due) === date).length,
+    completed: tasks.filter((task) => weeklyWorkReportCompletionEventDate(task, range) === date).length,
+  }));
+  return {
+    ...range,
+    date: range.startDate,
+    generatedAt: new Date(),
+    account: currentAccount(),
+    tasks,
+    departments,
+    projects,
+    dailyDistribution,
+    taskNote: (task) => weeklyWorkReportTaskNote(task, range),
+    metrics: {
+      total: tasks.length,
+      approved: tasks.filter(taskCompletionIsApproved).length,
+      pending: tasks.filter(taskCompletionNeedsReview).length,
+      overdue: tasks.filter((task) => getDueStatus(task) === "Quá hạn").length,
+    },
+  };
+}
+
+function weeklyWorkReportTrendHtml(report) {
+  const maximum = Math.max(1, ...report.dailyDistribution.flatMap((day) => [day.due, day.completed]));
+  const rows = report.dailyDistribution.map((day) => `<article><strong>${escapeHtml(day.label)}</strong><small>${escapeHtml(formatDate(day.date))}</small><span>Đến hạn <b>${day.due}</b></span><div class="week-bar due"><i style="width:${Math.round((day.due / maximum) * 100)}%"></i></div><span>Hoàn thành/duyệt <b>${day.completed}</b></span><div class="week-bar complete"><i style="width:${Math.round((day.completed / maximum) * 100)}%"></i></div></article>`).join("");
+  return `<section class="panel week-trend"><h2>Khối lượng theo ngày <small>Thứ Hai - Chủ nhật</small></h2><div class="week-trend-grid">${rows}</div><p>Biểu đồ đếm công việc đến hạn và công việc hoàn thành/được duyệt theo từng ngày. Tổng công việc trong báo cáo vẫn khử trùng lặp theo mã công việc.</p></section>`;
+}
+
+function weeklyWorkReportDocumentHtml(report) {
+  const styles = ".week-trend{margin:0 0 10px}.week-trend-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;padding:7px}.week-trend-grid article{min-width:0;padding:6px;border:1px solid #e2e9ed;border-radius:4px;background:#f8fafc}.week-trend-grid strong,.week-trend-grid small,.week-trend-grid span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.week-trend-grid strong{font-size:8px}.week-trend-grid small{margin:2px 0 5px;color:#607588;font-size:7px}.week-trend-grid span{margin-top:3px;color:#526b7c;font-size:7px}.week-trend-grid b{float:right;color:#13263a}.week-bar{height:4px;margin-top:2px;overflow:hidden;border-radius:3px;background:#e5edf1}.week-bar i{display:block;height:100%;border-radius:3px;background:#a56808}.week-bar.complete i{background:#16805f}.week-trend>p{margin:0;padding:0 8px 7px;color:#607588;font-size:7.5px}@media print{.week-trend{break-inside:avoid;page-break-inside:avoid}}";
+  const html = dailyWorkReportDocumentTemplate({ ...report, rangeLabel: report.label, extraSummary: weeklyWorkReportTrendHtml(report) })
+    .replace("<title>Bao-cao-cong-viec-hang-ngay-", "<title>Bao-cao-cong-viec-hang-tuan-")
+    .replaceAll("Báo cáo công việc hàng ngày", "Báo cáo công việc hàng tuần")
+    .replace(`Ngày báo cáo: <b>${escapeHtml(report.label)}</b>`, `Tuần báo cáo: <b>${escapeHtml(report.label)}</b>`)
+    .replace("Tổng hợp một lần cho mỗi công việc phát sinh mới, cập nhật tiến độ/phản hồi, đến hạn, hoàn thành hoặc được đánh giá trong ngày đã chọn; không nhân số liệu theo số người tham gia.", "Tổng hợp theo tuần Thứ Hai đến Chủ nhật: công việc có hạn trong tuần, phát sinh trong tuần nhưng chưa hoàn thành tại ngày chốt, hoặc có hạn ngoài tuần nhưng hoàn thành/được duyệt trong tuần. Mỗi mã công việc chỉ tính một lần.")
+    .replaceAll("Công việc trong ngày", "Công việc trong tuần")
+    .replaceAll("việc trong ngày", "việc trong tuần")
+    .replaceAll("Phát sinh</th>", "Trong tuần</th>")
+    .replaceAll("Tiến độ dự án có công việc phát sinh", "Tiến độ dự án có công việc trong tuần")
+    .replaceAll("Danh sách công việc trong ngày", "Danh sách công việc trong tuần")
+    .replaceAll("công việc phát sinh trong ngày đã chọn", "công việc thuộc tuần đã chọn")
+    .replace("Không có công việc phát sinh, đến hạn hoặc có diễn biến thực tế trong ngày đã chọn.", "Không có công việc thuộc phạm vi thống kê của tuần đã chọn.")
+    .replaceAll("công việc đến hạn, phát sinh chưa hoàn thành, hoàn thành hoặc được duyệt hoàn thành trong ngày đã chọn", "công việc thuộc phạm vi thống kê của tuần đã chọn")
+    .replace("Lưu ý: Mỗi mã công việc chỉ được tính một lần, kể cả khi có nhiều người phối hợp hoặc có nhiều diễn biến trong ngày. Hệ thống dùng mốc tạo mới, báo cáo tiến độ, phản hồi, đến hạn, hoàn thành và đánh giá để xác định phạm vi; không dùng mốc đồng bộ kỹ thuật. Khi xuất lại báo cáo của ngày cũ, trạng thái và tiến độ là giá trị hiện tại vì hệ thống chưa lưu bản chụp trạng thái theo từng ngày.", "Nguyên tắc tính: mỗi mã công việc chỉ được tính một lần, kể cả khi có nhiều người tham gia. Phạm vi dựa trên hạn hoàn thành, thời điểm tạo của việc chưa hoàn thành, thời điểm hoàn thành và thời điểm duyệt hoàn thành. Trạng thái và tiến độ trong bản PDF là giá trị tại thời điểm xuất; hệ thống chưa lưu bản chụp trạng thái theo từng ngày.")
+    .replace("</style></head>", `${styles}</style></head>`);
+  return applyReportPrintAutoClose(html);
+}
+
+function exportWeeklyWorkReportPdf() {
+  const input = byId("dashboardWeeklyReportDate");
+  const report = weeklyWorkReportData(input?.value || dailyReportDateValue());
+  if (input) input.value = report.anchorDate;
+  const reportWindow = window.open("", "_blank");
+  if (!reportWindow) {
+    alert("Trình duyệt đang chặn cửa sổ xuất PDF. Hãy cho phép cửa sổ bật lên rồi thử lại.");
+    return;
+  }
+  reportWindow.document.open();
+  reportWindow.document.write(weeklyWorkReportDocumentHtml(report));
   reportWindow.document.close();
   reportWindow.focus();
 }
@@ -11834,12 +12022,22 @@ function openDashboardPeriodTaskDetail(kind) {
   });
 }
 
+function dashboardPeopleForEvaluation() {
+  if (canViewSystemContent()) return state.people.filter(isKpiEligiblePerson);
+  if (hasDepartmentManagementAccess()) {
+    const departmentId = currentDepartmentId();
+    return state.people.filter((person) => person.departmentId === departmentId && isKpiEligiblePerson(person));
+  }
+  const person = currentPerson();
+  return isKpiEligiblePerson(person) ? [person] : [];
+}
+
 function dashboardKpiSummaryRows(period = state.activePeriod) {
   const context = cachedDashboardKpiContext(period);
   const evaluationsByPersonId = new Map(
     personalEvaluationsForDashboard(period, context).map((evaluation) => [evaluation.personId, evaluation]),
   );
-  return visiblePeopleForEvaluation()
+  return dashboardPeopleForEvaluation()
     .map((person) => ({ person, evaluation: evaluationsByPersonId.get(person.id) || null }))
     .sort((left, right) => {
       const rightScore = hasRecordedKpiResult(right.evaluation) ? kpiResultScore(right.evaluation) : -1;
@@ -13002,7 +13200,7 @@ function renderDashboard(options = {}) {
   if (monthlyReportAction) monthlyReportAction.classList.toggle("is-hidden", !canViewMonthlyWorkReport());
   syncTaskDisplayScopeControls();
   const kpiContext = cachedDashboardKpiContext(state.activePeriod);
-  const visiblePeople = visiblePeopleForEvaluation().filter(isActivePerson);
+  const visiblePeople = dashboardPeopleForEvaluation().filter(isActivePerson);
   const visiblePersonIds = new Set(visiblePeople.map((person) => person.id));
   const periodEvaluations = personalEvaluationsForDashboard(state.activePeriod, kpiContext).filter(
     (evaluation) => visiblePersonIds.has(evaluation.personId) && hasRecordedKpiResult(evaluation),
@@ -16034,10 +16232,12 @@ function openPopupCustomizeDialog(key) {
 
 function renderAccountTable() {
   const tbody = byId("accountTable");
+  const accountForm = byId("accountForm");
   const adminQuickTools = byId("accountAdminQuickTools");
   const accountScrollActions = byId("accountScrollActions");
   const canUseAdminTools = isAdmin();
   const canViewAccountDirectory = canManageAccounts() || canViewSystemContent();
+  accountForm?.classList.toggle("is-hidden", !canManageAccounts() && !canEditOwnAccount());
   adminQuickTools?.classList.toggle("is-hidden", !canUseAdminTools);
   accountScrollActions?.classList.toggle("is-hidden", !canUseAdminTools);
   if (!canViewAccountDirectory && !canEditOwnAccount()) {
@@ -16647,6 +16847,8 @@ function renderCurrentUser() {
   const account = currentAccount();
   const person = currentPerson();
   const department = departmentById(currentDepartmentId());
+  byId("changePasswordButton")?.classList.toggle("is-hidden", !account);
+  byId("mobileChangePasswordButton")?.classList.toggle("is-hidden", !account);
   byId("currentUserLabel").textContent = account ? account.displayName : "Chưa đăng nhập";
   byId("currentUserMeta").textContent = account
     ? `${accountRoleLabels[account.role] || account.role}${department ? ` · ${department.name}` : ""}${person ? ` · ${person.name}` : ""}`
@@ -16684,6 +16886,79 @@ function updateAccountFormAccess() {
   byId("accountCanViewSystemContent").disabled = !canManageGrants;
   byId("accountCanManageCalendar").disabled = !canManageGrants;
   byId("accountCanManagePeople").disabled = !canManageGrants;
+}
+
+function openOwnPasswordChangeDialog() {
+  if (!currentAccount()) return;
+  document.getElementById("mobileMenuPopup")?.classList.remove("is-active");
+  byId("changePasswordForm")?.reset();
+  byId("changePasswordStatus").textContent = "";
+  openModal("changePasswordDialog");
+  byId("currentPasswordForChange")?.focus({ preventScroll: true });
+}
+
+function closeOwnPasswordChangeDialog() {
+  closeModal("changePasswordDialog");
+  byId("changePasswordForm")?.reset();
+  byId("changePasswordStatus").textContent = "";
+}
+
+async function submitOwnPasswordChange(event) {
+  event.preventDefault();
+  const status = byId("changePasswordStatus");
+  const currentPassword = byId("currentPasswordForChange").value;
+  const newPassword = byId("newPasswordForChange").value;
+  const confirmation = byId("confirmPasswordForChange").value;
+  if (!newPassword || newPassword.length > 128) {
+    status.textContent = "Mật khẩu mới cần có từ 1 đến 128 ký tự.";
+    byId("newPasswordForChange").focus();
+    return;
+  }
+  if (newPassword !== confirmation) {
+    status.textContent = "Mật khẩu nhập lại chưa khớp.";
+    byId("confirmPasswordForChange").focus();
+    return;
+  }
+  if (!sharedSync.session || isOfflineFileRuntime()) {
+    status.textContent = "Đổi mật khẩu cần kết nối với máy chủ. Hãy kết nối mạng rồi thử lại.";
+    byId("currentPasswordForChange").value = "";
+    return;
+  }
+  const submitButton = byId("savePasswordChange");
+  submitButton.disabled = true;
+  status.textContent = "Đang xác thực và cập nhật mật khẩu...";
+  try {
+    if (sharedSync.pending || sharedSync.dirty) {
+      const syncResult = await flushSharedStateSync();
+      if (!syncResult.ok || syncResult.pending) throw new Error("Dữ liệu chưa đồng bộ xong. Hãy thử lại sau khi kết nối ổn định.");
+    }
+    const { response, payload } = await sharedJsonRequest("change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    if (response.status === 401) {
+      handleSharedSessionUnauthorized();
+      throw new Error("Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại rồi thử đổi mật khẩu.");
+    }
+    if (!response.ok) {
+      const message = response.status === 400
+        ? "Mật khẩu hiện tại không chính xác."
+        : payload?.error || "Không thể cập nhật mật khẩu lúc này.";
+      throw new Error(message);
+    }
+    sharedSync.revision = Number(payload.revision) || sharedSync.revision;
+    sharedSync.initialized = sharedSync.revision > 0;
+    closeOwnPasswordChangeDialog();
+    showSystemToast("Đổi mật khẩu thành công", "Mật khẩu mới đã được lưu trên máy chủ.", { tone: "success" });
+  } catch (error) {
+    status.textContent = error?.message || "Không thể cập nhật mật khẩu lúc này.";
+  } finally {
+    byId("currentPasswordForChange").value = "";
+    byId("newPasswordForChange").value = "";
+    byId("confirmPasswordForChange").value = "";
+    submitButton.disabled = false;
+  }
 }
 
 function syncMobileNavigationAccess(activeViewId = document.querySelector(".view.is-active")?.id || "") {
@@ -16727,6 +17002,9 @@ function applyAccessControls() {
   renderCurrentUser();
   document.querySelectorAll(".admin-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isDirector());
+  });
+  document.querySelectorAll(".admin-only-action").forEach((element) => {
+    element.classList.toggle("is-hidden", !isAdmin());
   });
   document.querySelectorAll(".summary-action").forEach((element) => {
     element.classList.toggle("is-hidden", !canViewSystemContent());
@@ -18334,7 +18612,7 @@ function openHistoryTimelineTarget(target) {
   if (targetType === "account" && canAccessView("accounts")) {
     const account = accountById(targetId);
     switchView("accounts");
-    if (account && (canManageAccounts() || account.id === currentAccount()?.id)) {
+    if (account && (canManageAccounts() || (canEditOwnAccount() && account.id === currentAccount()?.id))) {
       populateAccountForm(account);
       focusEditForm("accountForm", "accountDisplayName");
     }
@@ -18514,6 +18792,7 @@ function renderPrintOptions() {
 }
 
 function openPrintDialog() {
+  if (!isAdmin()) return;
   renderPrintOptions();
   byId("printDialog").classList.remove("is-hidden");
   byId("printDialog").setAttribute("aria-hidden", "false");
@@ -18539,6 +18818,7 @@ function clearPrintSelection() {
 }
 
 function printSelectedSections(sectionIds) {
+  if (!isAdmin()) return;
   clearPrintSelection();
   updatePrintHeader(sectionIds);
   sectionIds.forEach((id) => byId(id)?.classList.add("is-print-selected"));
@@ -18926,120 +19206,6 @@ function resetDepartmentEvaluationForm() {
   loadDepartmentEvaluationForSelection();
 }
 
-function seedDemoData() {
-  if (state.people.length || state.tasks.length || state.evaluations.length || state.departmentEvaluations.length) {
-    if (!confirm("Thao tác này sẽ thêm dữ liệu mẫu vào dữ liệu hiện có. Tiếp tục?")) return;
-  }
-  const people = [
-    ["Nguyễn Minh Anh", "ke-hoach", "truong-phong-ke-hoach", "Biên chế"],
-    ["Trần Quốc Huy", "du-an-1", "truong-phong-du-an-1", "Biên chế"],
-    ["Lê Thu Hà", "gpmb", "can-bo-gpmb", "Hợp đồng chuyên môn"],
-    ["Phạm Đức Long", "ha-tang", "can-bo-ha-tang", "Hợp đồng chuyên môn"],
-  ].map((item) => ({
-    id: uid("person"),
-    name: item[0],
-    departmentId: item[1],
-    roleId: item[2],
-    contract: item[3],
-    gender: "",
-    qualification: "",
-    contractTerm: "",
-    contractSignedDate: "",
-    phone: "",
-    birthDate: "",
-    start: "",
-    salaryCoefficient: "",
-    salaryGrade: "",
-    salaryReviewDate: "",
-    address: "",
-    note: "",
-  }));
-  state.people.push(...people);
-  [
-    ["nhanvien", "Nhân viên mẫu", "employee", people[2]],
-    ["truongphong", "Trưởng phòng mẫu", "manager", people[1]],
-  ].forEach(([username, displayName, role, person]) => {
-    if (!state.accounts.some((account) => account.username === username)) {
-      state.accounts.push({
-        id: uid("account"),
-        username,
-        password: DEFAULT_NEW_ACCOUNT_PASSWORD,
-        passwordChangeRequired: false,
-        displayName,
-        role,
-        personId: person.id,
-        departmentId: person.departmentId,
-      });
-    }
-  });
-  state.tasks.push(
-    {
-      id: uid("task"),
-      title: "Tổng hợp báo cáo tiến độ tháng",
-      ownerId: people[0].id,
-      category: "Cải cách hành chính",
-      due: `${state.activePeriod}-27`,
-      status: "Đang thực hiện",
-      progress: 70,
-      note: "",
-    },
-    {
-      id: uid("task"),
-      title: "Kiểm tra nghiệm thu hạng mục đường trục",
-      ownerId: people[1].id,
-      category: "Tiến độ - chất lượng - chi phí",
-      due: `${state.activePeriod}-24`,
-      status: "Hoàn thành",
-      progress: 100,
-      note: "",
-    },
-  );
-  departments.forEach((department, index) => {
-    const score = 84 + index * 2;
-    state.departmentEvaluations.push(applyRecordAudit({
-      id: uid("dept-eval"),
-      period: state.activePeriod,
-      departmentId: department.id,
-      criteriaScores: {},
-      finalScore: score,
-      grade: gradeDepartment(score),
-      reviewer: "Giám đốc",
-      comment: "Dữ liệu mẫu phục vụ chạy thử KPI phòng.",
-    }));
-  });
-  people.forEach((person, index) => {
-    const departmentScore = latestDepartmentEvaluation(person.departmentId)?.finalScore ?? 84 + index;
-    const personalScore = 86 + index * 2;
-    const behaviorScore = index === 0 ? 2 : 0;
-    const finalScore = calculatePersonalFinalScore(personalScore, departmentScore, behaviorScore);
-    state.evaluations.push(applyRecordAudit({
-      id: uid("eval"),
-      period: state.activePeriod,
-      personId: person.id,
-      criteriaScores: {},
-      behavior: {},
-      personalScore,
-      departmentScore,
-      behaviorScore,
-      finalScore,
-      grade: gradePersonal(finalScore),
-      reviewer: "Hội đồng thi đua",
-      comment: "Dữ liệu mẫu phục vụ chạy thử.",
-    }));
-  });
-  logActivity({
-    action: "Tạo",
-    module: "Dữ liệu mẫu",
-    targetType: "data",
-    targetId: "seed",
-    title: "Nạp dữ liệu mẫu",
-    details: "Tạo nhanh nhân sự, công việc, KPI phòng và KPI cá nhân mẫu.",
-  });
-  syncPersonnelAccounts();
-  saveState();
-  renderAll();
-}
-
 function renderApplicationIdentity() {
   document.querySelectorAll("[data-app-version]").forEach((element) => {
     element.textContent = `Phiên bản ${APP_VERSION}`;
@@ -19049,6 +19215,9 @@ function renderApplicationIdentity() {
 renderApplicationIdentity();
 if (byId("dashboardDailyReportDate") && !byId("dashboardDailyReportDate").value) {
   byId("dashboardDailyReportDate").value = dailyReportDateValue();
+}
+if (byId("dashboardWeeklyReportDate") && !byId("dashboardWeeklyReportDate").value) {
+  byId("dashboardWeeklyReportDate").value = dailyReportDateValue();
 }
 
 // Passwords from earlier releases were kept only to support an
@@ -20324,6 +20493,17 @@ byId("accountForm").addEventListener("submit", (event) => {
 });
 
 byId("resetAccountForm").addEventListener("click", resetAccountForm);
+byId("changePasswordButton")?.addEventListener("click", openOwnPasswordChangeDialog);
+byId("mobileChangePasswordButton")?.addEventListener("click", openOwnPasswordChangeDialog);
+byId("changePasswordForm")?.addEventListener("submit", submitOwnPasswordChange);
+byId("changePasswordClose")?.addEventListener("click", closeOwnPasswordChangeDialog);
+byId("cancelPasswordChange")?.addEventListener("click", closeOwnPasswordChangeDialog);
+byId("changePasswordDialog")?.addEventListener("click", (event) => {
+  if (event.target === byId("changePasswordDialog")) closeOwnPasswordChangeDialog();
+});
+byId("changePasswordDialog")?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeOwnPasswordChangeDialog();
+});
 byId("dismissBirthdayCelebration").addEventListener("click", closeBirthdayCelebration);
 byId("birthdayCelebration").addEventListener("click", (event) => {
   if (event.target === byId("birthdayCelebration")) closeBirthdayCelebration();
@@ -21583,8 +21763,8 @@ byId("historyTimeline").addEventListener("keydown", (event) => {
   });
 });
 
-byId("seedDemo").addEventListener("click", seedDemoData);
 byId("exportDailyWorkReportPdf")?.addEventListener("click", exportDailyWorkReportPdf);
+byId("exportWeeklyWorkReportPdf")?.addEventListener("click", exportWeeklyWorkReportPdf);
 byId("exportMonthlyWorkReportPdf")?.addEventListener("click", exportMonthlyWorkReportPdf);
 
 byId("printReport").addEventListener("click", openPrintDialog);
@@ -21599,6 +21779,10 @@ byId("printDialog").addEventListener("click", (event) => {
 
 byId("printForm").addEventListener("submit", (event) => {
   event.preventDefault();
+  if (!isAdmin()) {
+    closePrintDialog();
+    return;
+  }
   const selected = Array.from(document.querySelectorAll("input[name='printSection']:checked")).map((input) => input.value);
   if (!selected.length) {
     alert("Vui lòng chọn ít nhất một mục để in.");

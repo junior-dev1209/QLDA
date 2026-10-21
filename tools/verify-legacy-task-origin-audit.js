@@ -61,6 +61,6 @@ assert.match(edge, /taskBaseValue = preserveTaskOriginAudit\(previous, taskBaseV
 assert.match(edge, /\? stampTaskAudit\(next, previous, candidate, actor\)/, "Máy chủ phải ghi audit cập nhật bằng tài khoản phiên hiện tại.");
 assert.match(edge, /saved\.updatedBy = String\(actor\.displayName \|\| actor\.username \|\| "Tai khoan"\);/, "Máy chủ phải ghi người cập nhật theo tài khoản phiên hiện tại.");
 assert.match(edge, /if \(!previous\) \{[\s\S]*?saved\.createdAt = timestamp;/, "Máy chủ chỉ gán nguồn gốc cho công việc mới.");
-assert.match(edge, /const deploymentVersion = "2026\.10\.16\.1";/, "Máy chủ phải công bố phiên bản sửa lỗi công việc cũ.");
+assert.match(edge, /const deploymentVersion = "2026\.10\.21\.1";/, "Máy chủ phải công bố phiên bản sửa lỗi công việc cũ.");
 
 console.log("legacy_task_origin_audit=passed");

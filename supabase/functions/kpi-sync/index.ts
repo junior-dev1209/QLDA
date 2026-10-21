@@ -16,7 +16,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.10.16.1";
+const deploymentVersion = "2026.10.21.1";
 const passwordHashAlgorithm = "pbkdf2-sha256-v1";
 const passwordHashIterations = 310_000;
 const passwordSaltBytes = 16;
@@ -1853,7 +1853,7 @@ function canChangeDepartmentEvaluation(state: JsonRecord, account: JsonRecord, v
 
 function accountChangeAllowed(actor: JsonRecord, previous: JsonRecord | undefined, next: JsonRecord): boolean {
   if (isAdmin(actor)) return true;
-  if (isDirector(actor)) return sameJson(accountAccessGrants(previous), accountAccessGrants(next));
+  if (isDirector(actor)) return false;
   if (String(actor.id || "") !== String(next.id || "") || !previous) return false;
   const auditFields = ["updatedAt", "updatedBy", "updatedById"];
   const unchangedAccountFields = sameJson(
@@ -2396,7 +2396,7 @@ function canDelete(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   if (isAdmin(actor)) return true;
   if (collection === "activityLog") return false;
   if (collection === "projectCatalog") return moduleIsAvailableToAccount(state, actor, "tasks") && (isAdmin(actor) || hasDepartmentManagement(actor) || accountRole(actor) === "section_head");
-  if (collection === "accounts") return moduleIsAvailableToAccount(state, actor, "accounts") && isDirector(actor);
+  if (collection === "accounts") return false;
   if (collection === "bulletins" || collection === "archiveRecords" || collection === "supportRequests") return false;
   if (collection === "tasks") return false;
   if (collection === "evaluations") return moduleIsAvailableToAccount(state, actor, "evaluations") && canChangeEvaluation(state, actor, previous);
@@ -2550,13 +2550,21 @@ function validPatch(value: unknown): value is StatePatch {
   return true;
 }
 
-function deletionSummary(current: JsonRecord, patch: StatePatch): { blocked: boolean; totals: Record<string, { current: number; requestedDeletes: number }>; currentTotal: number; deletedTotal: number } {
+type UnsafeDeletionSummary = {
+  blocked: boolean;
+  reason: string;
+  collections: Record<string, { current: number; requestedDeletes: number }>;
+  currentTotal: number;
+  requestedDeletesTotal: number;
+};
+
+function deletionSummary(current: JsonRecord, patch: StatePatch): UnsafeDeletionSummary {
   const protectedCollections: CollectionName[] = ["people", "tasks", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
-  const criticalCollections = new Set<string>(["people", "tasks", "accounts"]);
-  const totals: Record<string, { current: number; requestedDeletes: number }> = {};
+  const criticalCollections: CollectionName[] = ["people", "tasks", "accounts"];
+  const counts: Record<string, { current: number; requestedDeletes: number }> = {};
   let currentTotal = 0;
-  let deletedTotal = 0;
-  let blocked = false;
+  let requestedDeletesTotal = 0;
+  let reason = "";
 
   for (const collection of protectedCollections) {
     const currentRecords = records(current, collection);
@@ -2566,35 +2574,42 @@ function deletionSummary(current: JsonRecord, patch: StatePatch): { blocked: boo
       .filter((id) => existingIds.has(id)));
     const currentCount = currentRecords.length;
     const deleteCount = deleteIds.size;
-    totals[collection] = { current: currentCount, requestedDeletes: deleteCount };
+    counts[collection] = { current: currentCount, requestedDeletes: deleteCount };
     currentTotal += currentCount;
-    deletedTotal += deleteCount;
+    requestedDeletesTotal += deleteCount;
 
-    // Critical collections: block deletion of 25% or more when there are at least 8 records.
-    // Also block complete removal for any non-empty critical collection, including small datasets.
-    if (criticalCollections.has(collection) && currentCount > 0 && deleteCount >= currentCount) blocked = true;
-    if (criticalCollections.has(collection) && currentCount >= 8 && deleteCount / currentCount >= 0.25) blocked = true;
-
-    // Retain the broader guard for all other protected collections.
-    if (!criticalCollections.has(collection) && currentCount >= 5 && deleteCount / currentCount > 0.35) blocked = true;
+    if (criticalCollections.includes(collection) && currentCount > 0 && deleteCount >= currentCount) {
+      reason ||= `full_removal_${collection}`;
+    }
+    // For larger critical collections, block a single patch deleting at least one quarter.
+    if (criticalCollections.includes(collection) && currentCount >= 8 && deleteCount / currentCount >= 0.25) {
+      reason ||= `critical_collection_threshold_${collection}`;
+    }
+    // Keep the existing general guard for non-critical protected collections.
+    if (!criticalCollections.includes(collection) && currentCount >= 5 && deleteCount / currentCount > 0.35) {
+      reason ||= `protected_collection_threshold_${collection}`;
+    }
   }
-  if (currentTotal >= 5 && deletedTotal / currentTotal > 0.35) blocked = true;
-  return { blocked, totals, currentTotal, deletedTotal };
+
+  if (!reason && currentTotal >= 5 && requestedDeletesTotal / currentTotal > 0.35) {
+    reason = "overall_deletion_threshold";
+  }
+  return { blocked: Boolean(reason), reason, collections: counts, currentTotal, requestedDeletesTotal };
 }
 
 function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch): boolean {
   return deletionSummary(current, patch).blocked;
 }
 
-function logBlockedDestructiveMutation(current: JsonRecord, patch: StatePatch, actorId: string, reason: string): void {
-  const summary = deletionSummary(current, patch);
+function logBlockedDestructiveMutation(actorId: string, summary: UnsafeDeletionSummary): void {
+  // Deliberately log counts and actor ID only; never log record contents or credentials.
   console.warn("[SAFE_MUTATION_BLOCKED]", JSON.stringify({
-    at: new Date().toISOString(),
-    actorId: String(actorId || "").slice(0, 128),
-    reason,
-    collections: summary.totals,
+    timestamp: new Date().toISOString(),
+    actorId,
+    reason: summary.reason,
+    collections: summary.collections,
     currentTotal: summary.currentTotal,
-    requestedDeleteTotal: summary.deletedTotal,
+    requestedDeletesTotal: summary.requestedDeletesTotal,
   }));
 }
 
@@ -2603,15 +2618,15 @@ function activeAdminCount(state: JsonRecord): number {
 }
 
 function assertLastAdminPreserved(current: JsonRecord, next: JsonRecord, actorId: string): void {
-  const before = activeAdminCount(current);
-  const after = activeAdminCount(next);
-  if (before > 0 && after === 0) {
+  const currentCount = activeAdminCount(current);
+  const nextCount = activeAdminCount(next);
+  if (currentCount > 0 && nextCount === 0) {
     console.warn("[SAFE_MUTATION_BLOCKED]", JSON.stringify({
-      at: new Date().toISOString(),
-      actorId: String(actorId || "").slice(0, 128),
+      timestamp: new Date().toISOString(),
+      actorId,
       reason: "last_active_admin_removal",
-      activeAdminsBefore: before,
-      activeAdminsAfter: after,
+      activeAdminsBefore: currentCount,
+      activeAdminsAfter: nextCount,
     }));
     throw new UnsafeBulkDeletionError("The last active Admin account cannot be deleted, disabled, or demoted.");
   }
@@ -3343,8 +3358,9 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
     if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
-    if (patchRemovesUnsafeAmountOfData(current.state, patch)) {
-      logBlockedDestructiveMutation(current.state, patch, actorId, "bulk_deletion_threshold");
+    const deletionCheck = deletionSummary(current.state, patch);
+    if (deletionCheck.blocked) {
+      logBlockedDestructiveMutation(actorId, deletionCheck);
       throw new UnsafeBulkDeletionError("Unsafe bulk deletion was blocked.");
     }
     const actor = accountForId(current.state, actorId);
@@ -3408,6 +3424,33 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
         console.error("Unable to mirror an authorised record command.", projectionError);
       }
       return nextSnapshot;
+    }
+    if (attempt < 7) {
+      const delay = Math.min(900, 60 * 2 ** attempt) + Math.round(Math.random() * 120);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Concurrent update limit reached.");
+}
+
+async function changeOwnAccountPasswordWithRetry(actorId: string, currentPassword: string, newPassword: string): Promise<StateSnapshot | null> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const current = await snapshot();
+    const account = accountForId(current.state, actorId);
+    if (!account || Boolean(account.disabled)) throw new Error("Authentication required.");
+    if (!(await accountPasswordMatches(account, currentPassword))) return null;
+    const nextState = clone(current.state);
+    const nextAccount = accountForId(nextState, actorId);
+    if (!nextAccount) throw new Error("Authentication required.");
+    await setAccountPasswordCredential(nextAccount, newPassword);
+    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+      expected_revision: current.revision,
+      next_state: nextState,
+    });
+    if (error) throw error;
+    if (Array.isArray(data) && data.length) {
+      const updated = data[0] as { next_revision: number; next_updated_at: string };
+      return { revision: Number(updated.next_revision), updatedAt: String(updated.next_updated_at || ""), state: nextState };
     }
     if (attempt < 7) {
       const delay = Math.min(900, 60 * 2 ** attempt) + Math.round(Math.random() * 120);
@@ -3903,6 +3946,21 @@ Deno.serve(async (request) => {
       return json(request, { revision: current.revision, updatedAt: current.updatedAt, state: visibleState(current.state, account), sessionToken: token, expiresAt });
     }
 
+    if (action === "change-password" && request.method === "POST") {
+      const body = await readJsonPayload(request);
+      const currentPassword = String(body.currentPassword || "");
+      const newPassword = String(body.newPassword || "");
+      if (!currentPassword || !newPassword || newPassword.length > 128) {
+        return json(request, { error: "Enter the current password and a new password up to 128 characters." }, 422);
+      }
+      const current = await snapshot();
+      const accountId = await requireSession(request, current);
+      if (accountId instanceof Response) return accountId;
+      const updated = await changeOwnAccountPasswordWithRetry(accountId, currentPassword, newPassword);
+      if (!updated) return json(request, { error: "Current password is incorrect." }, 400);
+      return json(request, { ok: true, revision: updated.revision, updatedAt: updated.updatedAt });
+    }
+
     if (action === "logout" && request.method === "POST") {
       const token = request.headers.get("x-kpi-session") || "";
       if (token) await admin.from("kpi_sync_sessions").delete().eq("token_hash", await sha256(token));
@@ -4016,8 +4074,9 @@ Deno.serve(async (request) => {
       const body = await readJsonPayload(request);
       if (!validPatch(body?.patch)) return json(request, { error: "Invalid mutation payload." }, 422);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
-      if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
-        logBlockedDestructiveMutation(current.state, body.patch, accountId, "bulk_deletion_threshold");
+      const deletionCheck = deletionSummary(current.state, body.patch);
+      if (deletionCheck.blocked) {
+        logBlockedDestructiveMutation(accountId, deletionCheck);
         return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
       }
       const result = await updateWithRetry(accountId, body.patch);

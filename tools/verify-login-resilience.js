@@ -5,7 +5,7 @@ const client = fs.readFileSync("script.js", "utf8");
 const edge = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
 const php = fs.readFileSync("api/sync.php", "utf8");
 const migration = fs.readFileSync("supabase/migrations/20260822000001_remove_kpi_login_rate_limits.sql", "utf8");
-assert.match(edge, /const deploymentVersion = "2026\.10\.16\.1";/, "Máy chủ phải mang phiên bản đăng nhập mới.");
+assert.match(edge, /const deploymentVersion = "2026\.10\.21\.1";/, "Máy chủ phải mang phiên bản đăng nhập mới.");
 assert.match(edge, /if \(!account\) return json\(request, \{ error: "Invalid username or password\." \}, 401\);/, "Máy chủ phải trả lỗi đăng nhập thông thường khi không có tài khoản.");
 assert.match(edge, /const passwordHashAlgorithm = "pbkdf2-sha256-v1";/, "Máy chủ phải dùng định dạng băm mật khẩu có phiên bản.");
 assert.match(edge, /async function accountPasswordMatches/, "Máy chủ phải xác thực cả mật khẩu băm và mật khẩu cũ trong giai đoạn chuyển đổi.");

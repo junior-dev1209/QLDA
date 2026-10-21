@@ -40,7 +40,7 @@ assert.ok(!html.includes("Giữ Ctrl hoặc Command"), "Không được yêu c�
   ".kpi-period-lock-panel",
 ].forEach((marker) => assert.ok(css.includes(marker), `Thiếu bố cục nâng cấp: ${marker}`));
 
-assert.match(edge, /const deploymentVersion = "2026\.10\.16\.1";/, "Máy chủ chưa mang phiên bản nâng cấp điều hành.");
+assert.match(edge, /const deploymentVersion = "2026\.10\.21\.1";/, "Máy chủ chưa mang phiên bản nâng cấp điều hành.");
 assert.match(edge, /"kpiPeriodLocks"/, "Máy chủ chưa đồng bộ dữ liệu chốt kỳ KPI.");
 assert.match(edge, /"followUpDate"/, "Người thực hiện chưa thể đồng bộ mốc cập nhật.");
 assert.match(edge, /function lockedKpiChangeAllowed/, "Máy chủ chưa kiểm tra quyền điều chỉnh sau chốt kỳ.");

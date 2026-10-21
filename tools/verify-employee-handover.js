@@ -54,7 +54,7 @@ assert.match(client, /employmentHandoverRecipientIds: recipientIds/, "Hồ sơ p
 assert.match(client, /function recurrenceOwnerForDue\(sourceTask, due\)/, "Client phải dùng lịch sử bàn giao khi tạo việc định kỳ mới.");
 assert.match(client, /deploymentVersionAtLeast\(sharedSync\.deploymentVersion, "2026\.09\.30\.1"\)/, "Client phải chặn máy chủ chưa hỗ trợ bàn giao nhiều người.");
 
-assert.match(edge, /const deploymentVersion = "2026\.10\.16\.1"/, "Máy chủ phải công bố phiên bản hỗ trợ bàn giao nhiều người.");
+assert.match(edge, /const deploymentVersion = "2026\.10\.21\.1"/, "Máy chủ phải công bố phiên bản hỗ trợ bàn giao nhiều người.");
 assert.match(edge, /type EmployeeHandoverAssignment = \{[\s\S]*?successorPersonId: string;/, "Máy chủ phải dùng cấu trúc phân công từng công việc.");
 assert.match(edge, /taskAssignments: EmployeeHandoverAssignment\[\];[\s\S]*?recurrenceAssignments: EmployeeHandoverAssignment\[\];/, "Máy chủ phải nhận phân công cho việc mở và mẫu định kỳ.");
 assert.match(edge, /const taskSuccessorIds = new Map\(handover\.taskAssignments/, "Máy chủ phải ánh xạ người nhận theo từng công việc.");
