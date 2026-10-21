@@ -16,7 +16,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.10.21.1";
+const deploymentVersion = "2026.10.19.1";
 const passwordHashAlgorithm = "pbkdf2-sha256-v1";
 const passwordHashIterations = 310_000;
 const passwordSaltBytes = 16;
@@ -2550,22 +2550,10 @@ function validPatch(value: unknown): value is StatePatch {
   return true;
 }
 
-type UnsafeDeletionSummary = {
-  blocked: boolean;
-  reason: string;
-  collections: Record<string, { current: number; requestedDeletes: number }>;
-  currentTotal: number;
-  requestedDeletesTotal: number;
-};
-
-function deletionSummary(current: JsonRecord, patch: StatePatch): UnsafeDeletionSummary {
+function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch): boolean {
   const protectedCollections: CollectionName[] = ["people", "tasks", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
-  const criticalCollections: CollectionName[] = ["people", "tasks", "accounts"];
-  const counts: Record<string, { current: number; requestedDeletes: number }> = {};
   let currentTotal = 0;
-  let requestedDeletesTotal = 0;
-  let reason = "";
-
+  let deletedTotal = 0;
   for (const collection of protectedCollections) {
     const currentRecords = records(current, collection);
     const existingIds = new Set(currentRecords.map(recordId).filter(Boolean));
@@ -2574,62 +2562,12 @@ function deletionSummary(current: JsonRecord, patch: StatePatch): UnsafeDeletion
       .filter((id) => existingIds.has(id)));
     const currentCount = currentRecords.length;
     const deleteCount = deleteIds.size;
-    counts[collection] = { current: currentCount, requestedDeletes: deleteCount };
     currentTotal += currentCount;
-    requestedDeletesTotal += deleteCount;
-
-    if (criticalCollections.includes(collection) && currentCount > 0 && deleteCount >= currentCount) {
-      reason ||= `full_removal_${collection}`;
-    }
-    // For larger critical collections, block a single patch deleting at least one quarter.
-    if (criticalCollections.includes(collection) && currentCount >= 8 && deleteCount / currentCount >= 0.25) {
-      reason ||= `critical_collection_threshold_${collection}`;
-    }
-    // Keep the existing general guard for non-critical protected collections.
-    if (!criticalCollections.includes(collection) && currentCount >= 5 && deleteCount / currentCount > 0.35) {
-      reason ||= `protected_collection_threshold_${collection}`;
-    }
+    deletedTotal += deleteCount;
+    if (["people", "tasks", "accounts"].includes(collection) && currentCount > 0 && deleteCount >= currentCount) return true;
+    if (currentCount >= 5 && deleteCount / currentCount > 0.35) return true;
   }
-
-  if (!reason && currentTotal >= 5 && requestedDeletesTotal / currentTotal > 0.35) {
-    reason = "overall_deletion_threshold";
-  }
-  return { blocked: Boolean(reason), reason, collections: counts, currentTotal, requestedDeletesTotal };
-}
-
-function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch): boolean {
-  return deletionSummary(current, patch).blocked;
-}
-
-function logBlockedDestructiveMutation(actorId: string, summary: UnsafeDeletionSummary): void {
-  // Deliberately log counts and actor ID only; never log record contents or credentials.
-  console.warn("[SAFE_MUTATION_BLOCKED]", JSON.stringify({
-    timestamp: new Date().toISOString(),
-    actorId,
-    reason: summary.reason,
-    collections: summary.collections,
-    currentTotal: summary.currentTotal,
-    requestedDeletesTotal: summary.requestedDeletesTotal,
-  }));
-}
-
-function activeAdminCount(state: JsonRecord): number {
-  return records(state, "accounts").filter((account) => isAdmin(account) && !Boolean(account.disabled)).length;
-}
-
-function assertLastAdminPreserved(current: JsonRecord, next: JsonRecord, actorId: string): void {
-  const currentCount = activeAdminCount(current);
-  const nextCount = activeAdminCount(next);
-  if (currentCount > 0 && nextCount === 0) {
-    console.warn("[SAFE_MUTATION_BLOCKED]", JSON.stringify({
-      timestamp: new Date().toISOString(),
-      actorId,
-      reason: "last_active_admin_removal",
-      activeAdminsBefore: currentCount,
-      activeAdminsAfter: nextCount,
-    }));
-    throw new UnsafeBulkDeletionError("The last active Admin account cannot be deleted, disabled, or demoted.");
-  }
+  return currentTotal >= 5 && deletedTotal / currentTotal > 0.35;
 }
 
 function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number): void {
@@ -3358,15 +3296,12 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
     if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
-    const deletionCheck = deletionSummary(current.state, patch);
-    if (deletionCheck.blocked) {
-      logBlockedDestructiveMutation(actorId, deletionCheck);
+    if (patchRemovesUnsafeAmountOfData(current.state, patch)) {
       throw new UnsafeBulkDeletionError("Unsafe bulk deletion was blocked.");
     }
     const actor = accountForId(current.state, actorId);
     if (!actor) throw new Error("Authentication required.");
     const result = applyPatch(current.state, actor, patch);
-    assertLastAdminPreserved(current.state, result.state, actorId);
     lastDenied = result.denied;
     if (!result.changed) return { snapshot: current, denied: lastDenied, changed: 0 };
     await secureMutatedAccountCredentials(result.state, patch);
@@ -4074,9 +4009,7 @@ Deno.serve(async (request) => {
       const body = await readJsonPayload(request);
       if (!validPatch(body?.patch)) return json(request, { error: "Invalid mutation payload." }, 422);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
-      const deletionCheck = deletionSummary(current.state, body.patch);
-      if (deletionCheck.blocked) {
-        logBlockedDestructiveMutation(accountId, deletionCheck);
+      if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
         return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
       }
       const result = await updateWithRetry(accountId, body.patch);
