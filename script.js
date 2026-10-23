@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.14";
+const APP_VERSION = "3.4.64";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -1112,7 +1112,7 @@ const moduleDefaultRoleAccess = {
 };
 const MODULE_SETTINGS_VERSION = 3;
 
-const GPMB_WORKFLOW_TEMPLATE = Object.freeze([
+const GPMB_LEGACY_WORKFLOW_TEMPLATE = Object.freeze([
   { id: "plan", title: "Xây dựng kế hoạch thu hồi đất", category: "Điều tra, kiểm đếm đất đai / Trích đo, quy chủ", owner: "Phòng GPMB", documents: "Kế hoạch thu hồi đất", days: 7 },
   { id: "meeting", title: "Tổ chức họp phổ biến và tiếp nhận ý kiến", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", owner: "Phòng GPMB / UBND xã", documents: "Kế hoạch họp, biên bản và danh sách tham dự", days: 3 },
   { id: "notice", title: "Ban hành, gửi và niêm yết thông báo thu hồi đất", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", owner: "Phòng GPMB", documents: "Thông báo, bằng chứng gửi và niêm yết", days: 10 },
@@ -1130,6 +1130,7 @@ const GPMB_WORKFLOW_TEMPLATE = Object.freeze([
   { id: "handover", title: "Vận động bàn giao đất và chuẩn bị cưỡng chế khi cần", category: "Niêm yết công khai / Đối thoại / Lấy ý kiến", owner: "Phòng GPMB / UBND xã", documents: "Biên bản vận động, hồ sơ cưỡng chế nếu phát sinh", days: 10, activationKey: "noHandover", legalNote: "Chỉ kích hoạt khi chưa bàn giao đất" },
   { id: "land-management", title: "Quản lý diện tích đất đã thu hồi", category: "Chi trả tiền đền bù / Bàn giao mặt bằng / Xử lý đơn thư", owner: "Phòng GPMB", documents: "Biên bản bàn giao đất và hồ sơ quản lý", days: 30, legalNote: "Duy trì đến khi đất được giao hoặc cho thuê" },
 ]);
+const GPMB_WORKFLOW_TEMPLATE = Object.freeze(window.GPMB_WORKFLOW_TEMPLATE || []);
 
 const customFieldScopes = [
   { id: "people", label: "Nhân sự", formId: "personForm" },
@@ -1417,6 +1418,7 @@ function defaultSystemCustomization() {
     popupSizes: {},
     customFields: [],
     theme: defaultSystemTheme(),
+    lunaEnabled: true,
   };
 }
 
@@ -1490,6 +1492,7 @@ function normalizeSystemCustomization(customization = {}) {
     popupSizes,
     customFields,
     theme: normalizeSystemTheme(customization.theme),
+    lunaEnabled: customization.lunaEnabled !== false,
   };
 }
 
@@ -1539,9 +1542,10 @@ if (localStorage.getItem(SESSION_KEY)) {
 }
 let customizeMode = localStorage.getItem(CUSTOMIZE_MODE_KEY) === "1";
 const NOTIFICATION_LOCAL_STORAGE_PREFIX = "phuc-thinh-notification-center-v1";
-const NOTIFICATION_PRESENTED_STORAGE_PREFIX = "phuc-thinh-notification-presented-v1";
+const NOTIFICATION_PRESENTED_STORAGE_PREFIX = "phuc-thinh-notification-presented-v2";
 const NOTIFICATION_MAX_LOCAL_ITEMS = 250;
 const NOTIFICATION_MAX_PRESENTED_IDS = 500;
+const LUNA_NOTIFICATION_PREFERENCES_PREFIX = "phuc-thinh-luna-notification-preferences-v1";
 const notificationCenter = {
   accountId: "",
   filter: "all",
@@ -1551,6 +1555,17 @@ const notificationCenter = {
   initialized: false,
   activeToastIds: new Set(),
 };
+const LUNA_ANNOUNCEMENT_TOPIC = "luna-system-announcements";
+let lunaRealtimeModulePromise = null;
+let lunaRealtimeClient = null;
+let lunaRealtimeChannel = null;
+let lunaRealtimeConnectPromise = null;
+let lunaRealtimeRetryTimer = 0;
+let lunaAnnouncementRefreshTimer = 0;
+let lunaAnnouncementPendingId = "";
+let lunaAnnouncementPendingFingerprint = "";
+let lunaAnnouncementLastId = "";
+const bulletinNotificationSeenFallback = new Map();
 let customizationDragElement = null;
 let customizationResizeState = null;
 let customizationResizeFrame = 0;
@@ -1640,6 +1655,7 @@ const sharedSync = {
   deploymentVersion: "",
   calendarEventsSupported: false,
   notificationsSupported: false,
+  lunaBroadcastSupported: false,
   accountId: "",
   dirtyAccountId: "",
   localChangeVersion: 0,
@@ -1672,6 +1688,7 @@ const TASK_STATUS_PREPARING = "Chuẩn bị thực hiện";
 const TASK_STATUS_OLD_PREPARING = "Chưa bắt đầu";
 const TASK_STATUS_COMPLETED = "Hoàn thành";
 const TASK_STATUS_CLOSED = "Đã kết thúc";
+const TASK_STATUS_RECURRENCE_STOPPED = "Đã ngừng";
 const TASK_STATUS_PENDING_REVIEW = "Chờ đánh giá";
 const DASHBOARD_VISIBLE_LIST_ROWS = 10;
 const TASK_PRIORITY_NORMAL = "normal";
@@ -1688,7 +1705,7 @@ const taskBlockerLabels = {
   "in-progress": "Đang xử lý trở ngại",
   resolved: "Đã gỡ trở ngại",
 };
-const taskStatuses = [TASK_STATUS_PREPARING, "Đang thực hiện", "Hoàn thành", "Quá hạn"];
+const taskStatuses = [TASK_STATUS_PREPARING, "Đang thực hiện", "Hoàn thành", "Quá hạn", TASK_STATUS_RECURRENCE_STOPPED];
 const TASK_KIND_ASSIGNED = "assigned";
 const TASK_KIND_REGULAR = "regular";
 const taskKindLabels = {
@@ -1869,7 +1886,11 @@ function taskDueSoon(task, days = 3, today = new Date()) {
 
 function isTaskFinishedStatus(status) {
   const normalized = normalizeTaskStatus(status);
-  return normalized === TASK_STATUS_COMPLETED || normalized === TASK_STATUS_CLOSED;
+  return normalized === TASK_STATUS_COMPLETED || normalized === TASK_STATUS_CLOSED || normalized === TASK_STATUS_RECURRENCE_STOPPED;
+}
+
+function isRecurrenceStoppedTask(task) {
+  return normalizeTaskStatus(task?.status) === TASK_STATUS_RECURRENCE_STOPPED;
 }
 
 function normalizeTaskQualityInput(value) {
@@ -2622,12 +2643,26 @@ function gpmbIsoDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "";
 }
 
-function gpmbStepTemplateById(stepId) {
-  return GPMB_WORKFLOW_TEMPLATE.find((step) => step.id === String(stepId || "")) || null;
+function gpmbWorkflowTemplateForWorkflow(workflow) {
+  const version = Number(workflow?.workflowVersion);
+  if (version >= 2) return GPMB_WORKFLOW_TEMPLATE;
+  if (version === 1) return GPMB_LEGACY_WORKFLOW_TEMPLATE;
+  const steps = Array.isArray(workflow?.steps) ? workflow.steps : [];
+  return steps.some((step) => String(step?.id || "").startsWith("p1-"))
+    ? GPMB_WORKFLOW_TEMPLATE
+    : GPMB_LEGACY_WORKFLOW_TEMPLATE;
+}
+
+function gpmbStepTemplateById(stepId, workflow = null) {
+  const templates = workflow ? gpmbWorkflowTemplateForWorkflow(workflow) : [...GPMB_WORKFLOW_TEMPLATE, ...GPMB_LEGACY_WORKFLOW_TEMPLATE];
+  return templates.find((step) => step.id === String(stepId || "")) || null;
 }
 
 function gpmbStepIsEnabled(step, conditions = {}) {
-  return !step?.activationKey || conditions?.[step.activationKey] === true;
+  if (step?.defaultSkipped) return false;
+  if (step?.activationKey && conditions?.[step.activationKey] !== (step.activationValue !== false)) return false;
+  if (step?.activationAlsoKey && conditions?.[step.activationAlsoKey] !== (step.activationAlsoValue !== false)) return false;
+  return true;
 }
 
 function gpmbStepDuration(step, conditions = {}, override = "") {
@@ -2655,12 +2690,12 @@ function gpmbWorkflowCollaboratorNames(ids = []) {
     .filter(Boolean);
 }
 
-function gpmbWorkflowDefaultSteps(startDate, ownerId = "", ownerName = "", conditions = {}, collaboratorIds = []) {
+function gpmbWorkflowDefaultSteps(startDate, ownerId = "", ownerName = "", conditions = {}, collaboratorIds = [], templateSteps = GPMB_WORKFLOW_TEMPLATE) {
   let cursor = gpmbIsoDate(startDate) || gpmbWorkflowTodayIso();
   let hasActiveStep = false;
   const defaultCollaboratorIds = gpmbWorkflowCollaboratorIds(collaboratorIds, ownerId);
   const defaultCollaboratorNames = gpmbWorkflowCollaboratorNames(defaultCollaboratorIds);
-  return GPMB_WORKFLOW_TEMPLATE.map((template) => {
+  return templateSteps.map((template) => {
     const enabled = gpmbStepIsEnabled(template, conditions);
     const days = gpmbStepDuration(template, conditions);
     const step = {
@@ -2669,7 +2704,19 @@ function gpmbWorkflowDefaultSteps(startDate, ownerId = "", ownerName = "", condi
       category: template.category,
       owner: template.owner,
       documents: template.documents,
+      phase: template.phase || "",
+      phaseTitle: template.phaseTitle || "",
+      ordinal: template.ordinal || 0,
+      deliverable: template.deliverable || "",
+      legalBasis: template.legalBasis || "",
+      timeRule: template.timeRule || "",
+      durationBasis: template.durationBasis || "planning-default",
+      notes: template.notes || "",
       activationKey: template.activationKey || "",
+      activationValue: template.activationValue !== false,
+      activationAlsoKey: template.activationAlsoKey || "",
+      activationAlsoValue: template.activationAlsoValue !== false,
+      defaultSkipped: template.defaultSkipped === true,
       days,
       startDate: enabled ? cursor : "",
       due: enabled ? gpmbWorkflowStepEnd(cursor, days) : "",
@@ -2700,23 +2747,47 @@ function normalizeGpmbWorkflows(workflows = [], projectCatalog = []) {
       const conditions = {
         noCooperation: workflow?.conditions?.noCooperation === true,
         noHandover: workflow?.conditions?.noHandover === true,
+        resettlementRequired: workflow?.conditions?.resettlementRequired === true,
       };
+      const workflowVersion = Number(workflow.workflowVersion) >= 2
+        || (Array.isArray(workflow.steps) && workflow.steps.some((step) => String(step?.id || "").startsWith("p1-")))
+        ? 2
+        : 1;
+      const templateSteps = workflowVersion >= 2 ? GPMB_WORKFLOW_TEMPLATE : GPMB_LEGACY_WORKFLOW_TEMPLATE;
       const savedSteps = new Map((Array.isArray(workflow.steps) ? workflow.steps : [])
         .filter((step) => step && typeof step === "object")
         .map((step) => [String(step.id || ""), step]));
-      const defaults = gpmbWorkflowDefaultSteps(startDate, "", "", conditions);
+      const defaults = gpmbWorkflowDefaultSteps(startDate, "", "", conditions, [], templateSteps);
       const steps = defaults.map((fallback) => {
         const source = savedSteps.get(fallback.id) || {};
-        const template = gpmbStepTemplateById(fallback.id);
+        const template = gpmbStepTemplateById(fallback.id, { workflowVersion });
         const enabled = gpmbStepIsEnabled(template, conditions);
         const days = gpmbStepDuration(template, conditions, source.days);
         const date = enabled ? gpmbIsoDate(source.startDate) || fallback.startDate : "";
-        const due = enabled && gpmbIsoDate(source.due) >= date ? gpmbIsoDate(source.due) : gpmbWorkflowStepEnd(date, days);
+        const due = enabled
+          ? gpmbIsoDate(source.due) >= date ? gpmbIsoDate(source.due) : gpmbWorkflowStepEnd(date, days)
+          : "";
         const status = [GPMB_STEP_WAITING, GPMB_STEP_ACTIVE, GPMB_STEP_COMPLETED, GPMB_STEP_SKIPPED].includes(source.status)
           ? source.status
           : fallback.status;
         return {
           ...fallback,
+          title: String(source.title || fallback.title),
+          category: String(source.category || fallback.category),
+          owner: String(source.owner || fallback.owner),
+          documents: String(source.documents || fallback.documents),
+          phase: fallback.phase,
+          phaseTitle: fallback.phaseTitle,
+          ordinal: fallback.ordinal,
+          deliverable: fallback.deliverable,
+          legalBasis: fallback.legalBasis,
+          timeRule: fallback.timeRule,
+          notes: fallback.notes,
+          activationKey: template?.activationKey || "",
+          activationValue: template?.activationValue !== false,
+          activationAlsoKey: template?.activationAlsoKey || "",
+          activationAlsoValue: template?.activationAlsoValue !== false,
+          defaultSkipped: template?.defaultSkipped === true,
           days,
           startDate: date,
           due,
@@ -2732,10 +2803,11 @@ function normalizeGpmbWorkflows(workflows = [], projectCatalog = []) {
           completedAt: String(source.completedAt || ""),
         };
       });
-      const activeStep = steps.find((step) => step.status === GPMB_STEP_ACTIVE && gpmbStepIsEnabled(gpmbStepTemplateById(step.id), conditions));
-      const completed = steps.filter((step) => gpmbStepIsEnabled(gpmbStepTemplateById(step.id), conditions)).every((step) => step.status === GPMB_STEP_COMPLETED || step.status === GPMB_STEP_SKIPPED);
+      const activeStep = steps.find((step) => step.status === GPMB_STEP_ACTIVE && gpmbStepIsEnabled(gpmbStepTemplateById(step.id, { workflowVersion }), conditions));
+      const completed = steps.filter((step) => gpmbStepIsEnabled(gpmbStepTemplateById(step.id, { workflowVersion }), conditions)).every((step) => step.status === GPMB_STEP_COMPLETED || step.status === GPMB_STEP_SKIPPED);
       return {
         ...workflow,
+        workflowVersion,
         title: String(workflow.title || "Đợt GPMB").trim().slice(0, 220),
         projectId: project?.id || "",
         projectName: project?.name || String(workflow.projectName || "").trim(),
@@ -4080,13 +4152,96 @@ async function probeSharedSync({ force = false } = {}) {
     sharedSync.deploymentVersion = sharedSync.available ? String(payload?.deploymentVersion || "") : "";
     sharedSync.calendarEventsSupported = sharedSync.available && payload?.calendarEvents === true;
     sharedSync.notificationsSupported = sharedSync.available && payload?.notifications === true;
+    sharedSync.lunaBroadcastSupported = sharedSync.available && payload?.lunaBroadcast === true;
   } catch {
     // Do not cache a transient connection failure. The next online/focus/poll
     // event must be able to reconnect without forcing the user to reload.
     sharedSync.available = null;
     sharedSync.initialized = null;
+    sharedSync.lunaBroadcastSupported = false;
   }
   return sharedSync.available === true;
+}
+
+function stopLunaAnnouncementRealtime() {
+  if (lunaRealtimeRetryTimer) window.clearTimeout(lunaRealtimeRetryTimer);
+  lunaRealtimeRetryTimer = 0;
+  const channel = lunaRealtimeChannel;
+  const client = lunaRealtimeClient;
+  lunaRealtimeChannel = null;
+  lunaRealtimeClient = null;
+  if (channel && client) {
+    void client.removeChannel(channel).catch(() => {});
+    client.realtime.disconnect();
+  }
+}
+
+function scheduleLunaAnnouncementRealtimeRetry() {
+  if (lunaRealtimeRetryTimer || !currentAccount() || !sharedSync.session || sharedSync.lunaBroadcastSupported !== true) return;
+  lunaRealtimeRetryTimer = window.setTimeout(() => {
+    lunaRealtimeRetryTimer = 0;
+    void ensureLunaAnnouncementRealtimeConnection();
+  }, 30000);
+}
+
+async function ensureLunaAnnouncementRealtimeConnection() {
+  if (!currentAccount() || !sharedSync.session || !usingSupabaseSync() || sharedSync.lunaBroadcastSupported !== true) {
+    stopLunaAnnouncementRealtime();
+    return;
+  }
+  if (lunaRealtimeChannel || lunaRealtimeConnectPromise) return;
+  lunaRealtimeConnectPromise = (async () => {
+    const config = supabaseSyncConfig();
+    if (!config) return;
+    lunaRealtimeModulePromise ||= import("https://esm.sh/@supabase/supabase-js@2.107.0?bundle");
+    const { createClient } = await lunaRealtimeModulePromise;
+    if (!currentAccount() || !sharedSync.session || sharedSync.lunaBroadcastSupported !== true) return;
+    const client = createClient(config.projectUrl, config.publishableKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      realtime: { params: { eventsPerSecond: 2 } },
+    });
+    const channel = client.channel(LUNA_ANNOUNCEMENT_TOPIC, {
+      config: { private: true, broadcast: { self: false } },
+    });
+    channel.on("broadcast", { event: "announcement" }, ({ payload }) => {
+      const announcementId = String(payload?.announcementId || "");
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(announcementId)) return;
+      queueLunaAnnouncementRefresh();
+    });
+    lunaRealtimeClient = client;
+    lunaRealtimeChannel = channel;
+    channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        if (lunaRealtimeRetryTimer) window.clearTimeout(lunaRealtimeRetryTimer);
+        lunaRealtimeRetryTimer = 0;
+      } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status) && lunaRealtimeChannel === channel) {
+        stopLunaAnnouncementRealtime();
+        scheduleLunaAnnouncementRealtimeRetry();
+      }
+    });
+  })().catch(() => {
+    stopLunaAnnouncementRealtime();
+    scheduleLunaAnnouncementRealtimeRetry();
+  }).finally(() => {
+    lunaRealtimeConnectPromise = null;
+  });
+  await lunaRealtimeConnectPromise;
+}
+
+function queueLunaAnnouncementRefresh() {
+  if (lunaAnnouncementRefreshTimer || !currentAccount()) return;
+  lunaAnnouncementRefreshTimer = window.setTimeout(async () => {
+    lunaAnnouncementRefreshTimer = 0;
+    if (!currentAccount() || !sharedSync.session) return;
+    if (sharedSync.inFlight) {
+      lunaAnnouncementRefreshTimer = window.setTimeout(() => {
+        lunaAnnouncementRefreshTimer = 0;
+        queueLunaAnnouncementRefresh();
+      }, 650);
+      return;
+    }
+    await refreshSharedState({ force: true });
+  }, 180);
 }
 
 function deploymentVersionAtLeast(actual, required) {
@@ -4452,6 +4607,7 @@ function stopSharedStateRefresh() {
   sharedSync.authCheckInFlight = false;
   sharedSync.authCheckAttempt = 0;
   sharedSync.retryAttempt = 0;
+  stopLunaAnnouncementRealtime();
 }
 
 function resetSharedSessionValidation() {
@@ -4841,6 +4997,16 @@ function restoreDeniedSharedChanges(currentPayload, remotePayload, deniedChanges
 }
 
 function showSystemToast(title, message, { tone = "warning", duration = 7000 } = {}) {
+  if (typeof window.virtualAssistantNotify === "function" && currentAccount()) {
+    window.virtualAssistantNotify({
+      id: `system-feedback:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
+      title,
+      message,
+      priority: tone,
+      recipientAccountId: currentAccount().id,
+    }, { duration });
+    return;
+  }
   const container = byId("phucThinhToastContainer");
   if (!container) return;
 
@@ -5074,9 +5240,13 @@ async function flushSharedStateSync() {
   }
 }
 
-async function refreshSharedState() {
-  if (isOfflineFileRuntime() || !sharedSync.session || sharedSync.inFlight || document.visibilityState === "hidden" || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
-  if (sharedSync.pending || sharedSync.dirty) {
+async function refreshSharedState({ force = false } = {}) {
+  if (isOfflineFileRuntime() || !sharedSync.session || document.visibilityState === "hidden" || (usingSupabaseSync() && !sharedSync.sessionToken)) return;
+  if (sharedSync.inFlight) {
+    if (force) queueLunaAnnouncementRefresh();
+    return;
+  }
+  if (!force && (sharedSync.pending || sharedSync.dirty)) {
     if (await probeSharedSync({ force: true })) {
       sharedSync.pending = true;
       flushSharedStateSync();
@@ -5086,10 +5256,10 @@ async function refreshSharedState() {
     return;
   }
   if (sharedSync.available !== true && !(await probeSharedSync({ force: true }))) return;
-  if (document.activeElement?.matches("input, textarea, select") || document.querySelector(".modal-backdrop:not(.is-hidden)")) return;
+  if (!force && (document.activeElement?.matches("input, textarea, select") || document.querySelector(".modal-backdrop:not(.is-hidden)"))) return;
   try {
     const { response, payload } = await sharedJsonRequest("state", {
-      query: sharedSync.revision === null ? {} : { revision: String(sharedSync.revision) },
+      query: !force && sharedSync.revision !== null ? { revision: String(sharedSync.revision) } : {},
     });
     if (response.status === 401) {
       handleSharedSessionUnauthorized();
@@ -5098,7 +5268,12 @@ async function refreshSharedState() {
     if (!response.ok || !payload?.state || Number(payload.revision) === sharedSync.revision) return;
     sharedSync.revision = Number(payload.revision) || 0;
     sharedSync.initialized = sharedSync.revision > 0;
-    await adoptSharedState(payload.state);
+    if (sharedSync.pending || sharedSync.dirty) {
+      await retainUnsyncedLocalChanges(payload.state, { render: !force });
+    } else {
+      await adoptSharedState(payload.state, { render: !force });
+    }
+    if (force) renderNotificationCenter();
   } catch {
     // Keep the last successful local view while the network is temporarily unavailable.
   }
@@ -5845,10 +6020,9 @@ function renderBirthdayCelebration() {
   const dialog = byId("birthdayCelebration");
   const account = currentAccount();
   const person = birthdayPersonForToday();
-  ensureBirthdayAssetSources();
+  banner?.classList.add("is-hidden");
+  closeBirthdayCelebration();
   if (!banner || !dialog || !account || !person) {
-    banner?.classList.add("is-hidden");
-    closeBirthdayCelebration();
     if (birthdayDateRefreshTimer) window.clearTimeout(birthdayDateRefreshTimer);
     birthdayDateRefreshTimer = 0;
     return;
@@ -5856,20 +6030,38 @@ function renderBirthdayCelebration() {
 
   const today = vietnamDateParts();
   const name = person.name || account.displayName || "bạn";
-  byId("birthdayDayBannerName").textContent = `Chúc mừng sinh nhật ${name}`;
-  byId("birthdayCelebrationTitle").textContent = `Chúc mừng sinh nhật ${name}`;
-  byId("birthdayCelebrationMessage").textContent = "Chúc bạn luôn mạnh khỏe, hạnh phúc và gặt hái nhiều thành công trong công việc.";
-  banner.classList.remove("is-hidden");
-  setBirthdayBannerCollapsed(birthdayBannerCollapsed);
   scheduleBirthdayDateRefresh();
 
   const displayKey = birthdayDisplayKey(account, today);
-  if (birthdayCelebrationDisplayKey === displayKey || !dialog.classList.contains("is-hidden")) return;
+  if (birthdayCelebrationDisplayKey === displayKey) return;
+  const storageKey = `phuc-thinh-assistant-birthday-v1:${displayKey}`;
+  try {
+    if (localStorage.getItem(storageKey)) {
+      birthdayCelebrationDisplayKey = displayKey;
+      return;
+    }
+    localStorage.setItem(storageKey, "1");
+  } catch {
+    // The in-memory display key still prevents repeats for this session.
+  }
   birthdayCelebrationDisplayKey = displayKey;
-  dialog.classList.remove("is-hidden");
-  dialog.setAttribute("aria-hidden", "false");
-  if (birthdayCelebrationCloseTimer) window.clearTimeout(birthdayCelebrationCloseTimer);
-  birthdayCelebrationCloseTimer = window.setTimeout(closeBirthdayCelebration, 12000);
+  resetNotificationRuntimeForAccount();
+  const birthdayNotice = normalizeNotificationItem({
+    id: `birthday:${displayKey}`,
+    recipientAccountId: account.id,
+    category: "system",
+    priority: "success",
+    title: `Chúc mừng sinh nhật ${name}`,
+    message: "Chúc bạn luôn mạnh khỏe, hạnh phúc và gặt hái nhiều thành công trong công việc.",
+    createdAt: new Date().toISOString(),
+    localOnly: true,
+  }, { localOnly: true });
+  if (birthdayNotice && !notificationCenter.localItems.some((item) => item.id === birthdayNotice.id)) {
+    notificationCenter.localItems = [...notificationCenter.localItems, birthdayNotice].slice(-NOTIFICATION_MAX_LOCAL_ITEMS);
+    persistLocalNotificationItems();
+    renderNotificationCenter({ present: false });
+  }
+  window.virtualAssistantNotify?.(birthdayNotice);
 }
 
 function currentDepartmentId() {
@@ -6062,6 +6254,21 @@ function visiblePeopleForPeopleView() {
   return person ? [person] : [];
 }
 
+function renderPeopleDepartmentFilterOptions(people) {
+  const select = byId("peopleDepartmentFilter");
+  const selected = select.value;
+  const departmentIds = new Set(people.map((person) => person.departmentId).filter(Boolean));
+  const options = departments
+    .filter((department) => departmentIds.has(department.id))
+    .map((department) => ({ value: department.id, label: department.name }));
+  if (people.some((person) => !person.departmentId || !departmentById(person.departmentId))) {
+    options.push({ value: "__unassigned__", label: "Chưa cập nhật phòng" });
+  }
+  const validSelection = options.some((option) => option.value === selected) ? selected : "";
+  fillSelect(select, [{ value: "", label: "Tất cả phòng" }, ...options], validSelection);
+  return select.value;
+}
+
 function visiblePeopleForTasks() {
   if (canViewSystemContent()) return state.people.filter(isActivePerson);
   if (hasDepartmentTaskAccess()) return state.people.filter((person) => person.departmentId === currentDepartmentId() && isActivePerson(person));
@@ -6158,7 +6365,7 @@ function canDeleteTask(task) {
 }
 
 function canCopyTask(task) {
-  if (!task) return false;
+  if (!task || isRecurrenceStoppedTask(task)) return false;
   return isAssignedTask(task) ? canAssignTaskToPerson(task.ownerId) : canCreateRegularTaskForPerson(task.ownerId);
 }
 
@@ -6174,7 +6381,7 @@ function canReviewTaskCompletionForPerson(personId) {
 }
 
 function canReviewTaskCompletion(task) {
-  if (!task || normalizeTaskStatus(task.status) !== TASK_STATUS_COMPLETED) return false;
+  if (!task || isRecurrenceStoppedTask(task) || normalizeTaskStatus(task.status) !== TASK_STATUS_COMPLETED) return false;
   const needsCompletionDecision = taskCompletionNeedsReview(task);
   const needsQualityCompletion = taskCompletionIsApproved(task) && !taskHasQualityPercent(task);
   return (needsCompletionDecision || needsQualityCompletion) && canReviewTaskCompletionForPerson(task.ownerId);
@@ -6214,7 +6421,7 @@ function taskProgressLockedAfterApproval(task) {
 }
 
 function canUpdateTaskProgress(task) {
-  if (!task || (!isAdmin() && taskProgressLockedAfterApproval(task))) return false;
+  if (!task || isRecurrenceStoppedTask(task) || (!isAdmin() && taskProgressLockedAfterApproval(task))) return false;
   return canReportTask(task) || canCollaborateTask(task) || canManageDepartmentTaskProgress(task);
 }
 
@@ -6432,6 +6639,161 @@ function recurrenceOwnerForDue(sourceTask, due) {
   return isActivePerson(owner) ? owner : null;
 }
 
+function recurrenceSeriesKey(task) {
+  return String(task?.recurrenceSeriesId || task?.recurrenceSourceId || task?.id || "").trim();
+}
+
+function recurrenceSourceForTask(task) {
+  if (!task || normalizeTaskKind(task) !== TASK_KIND_REGULAR || normalizeTaskRecurrence(task) === TASK_RECURRENCE_NONE) return null;
+  const sourceId = String(task.recurrenceSourceId || recurrenceSeriesKey(task));
+  return (state.tasks || []).find((item) => item.id === sourceId && !item.recurrenceSourceId)
+    || (state.tasks || []).find((item) => !item.recurrenceSourceId && recurrenceSeriesKey(item) === recurrenceSeriesKey(task))
+    || null;
+}
+
+function recurrenceSeriesTasks(task) {
+  const key = recurrenceSeriesKey(task);
+  return key ? (state.tasks || []).filter((item) => recurrenceSeriesKey(item) === key) : [];
+}
+
+function recurrenceSeriesIsActive(task) {
+  const source = recurrenceSourceForTask(task);
+  return Boolean(source && normalizeTaskRecurrence(source) !== TASK_RECURRENCE_NONE && !source.recurrenceStoppedAt);
+}
+
+function canStopTaskRecurrence(task) {
+  const source = recurrenceSourceForTask(task);
+  if (!source || !recurrenceSeriesIsActive(task)) return false;
+  if (isAdmin() || isDirector()) return true;
+  const today = dailyReportDateValue();
+  const responsible = recurrenceOwnerForDue(source, today) || personById(source.ownerId);
+  const actorPersonId = String(currentPerson()?.id || currentAccount()?.personId || "");
+  if (responsible && actorPersonId === String(responsible.id || "")) return true;
+  return hasDepartmentManagementAccess() && Boolean(responsible)
+    && String(responsible.departmentId || "") === currentDepartmentId();
+}
+
+function applyRecurringTaskStop(taskId) {
+  const task = (state.tasks || []).find((item) => item.id === String(taskId || ""));
+  if (!task || !canStopTaskRecurrence(task)) throw new Error("Bạn không có quyền dừng chuỗi định kỳ này.");
+  const source = recurrenceSourceForTask(task);
+  const seriesKey = recurrenceSeriesKey(source);
+  const today = dailyReportDateValue();
+  const timestamp = new Date().toISOString();
+  const actor = currentActorInfo();
+  let stoppedOccurrences = 0;
+  let updatedTasks = 0;
+  state.tasks = (state.tasks || []).map((item) => {
+    if (recurrenceSeriesKey(item) !== seriesKey) return item;
+    const futureUnstarted = item.id !== source.id
+      && String(item.due || item.startDate || "") > today
+      && normalizeTaskStatus(item.status) === TASK_STATUS_PREPARING
+      && Number(item.progress || 0) === 0
+      && !isTaskFinishedStatus(item.status);
+    const next = {
+      ...item,
+      recurrenceStoppedAt: timestamp,
+      recurrenceStoppedById: actor.id,
+      recurrenceStoppedByName: actor.name,
+      recurrenceStopDate: today,
+    };
+    if (futureUnstarted) {
+      stoppedOccurrences += 1;
+      next.status = TASK_STATUS_RECURRENCE_STOPPED;
+      next.progressReports = [
+        ...(Array.isArray(item.progressReports) ? item.progressReports : []),
+        {
+          id: uid("task-report"),
+          progress: 0,
+          status: TASK_STATUS_RECURRENCE_STOPPED,
+          previousStatus: normalizeTaskStatus(item.status),
+          action: "Dừng kỳ định kỳ",
+          note: `Kỳ công việc được ngừng khi dừng chuỗi định kỳ từ ${formatDate(today)}.`,
+          createdAt: timestamp,
+          createdById: actor.id,
+          createdBy: actor.name,
+        },
+      ];
+    }
+    updatedTasks += 1;
+    return applyTaskRecordAudit(next, item);
+  });
+  const owner = personById(source.ownerId);
+  logActivity({
+    action: "Dừng định kỳ",
+    module: "Công việc",
+    targetType: "task-recurrence",
+    targetId: seriesKey,
+    personId: taskOwnerPersonId(source),
+    departmentId: owner?.departmentId || "",
+    period: taskPeriod(source),
+    title: source.title || "Chuỗi công việc định kỳ",
+    details: `Đã dừng sinh kỳ mới; ${stoppedOccurrences} kỳ tương lai chưa bắt đầu được đánh dấu Đã ngừng. ${updatedTasks} bản ghi trong chuỗi đã lưu dấu vết dừng.`,
+  });
+  return { stoppedOccurrences, updatedTasks };
+}
+
+function sharedSyncSupportsRecurringTaskStop() {
+  return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.10.20.1");
+}
+
+async function stopRecurringTaskOnServer(taskId) {
+  const { response, payload } = await sharedJsonRequest("stop-recurring-task", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taskId }),
+  });
+  if (response.status === 401) {
+    handleSharedSessionUnauthorized();
+    return { ok: false, reason: "session-verification" };
+  }
+  if (!response.ok || !payload?.state) return { ok: false, reason: payload?.error || `server-${response.status}` };
+  sharedSync.revision = Number(payload.revision) || sharedSync.revision;
+  sharedSync.initialized = sharedSync.revision > 0;
+  await adoptSharedState(payload.state, { render: false });
+  return { ok: true, stoppedOccurrences: Number(payload.stoppedOccurrences) || 0 };
+}
+
+async function stopRecurringTask(taskId) {
+  const task = (state.tasks || []).find((item) => item.id === String(taskId || ""));
+  if (!task || !canStopTaskRecurrence(task)) return false;
+  const source = recurrenceSourceForTask(task);
+  const futureCount = recurrenceSeriesTasks(task).filter((item) => item.id !== source.id
+    && String(item.due || item.startDate || "") > dailyReportDateValue()
+    && normalizeTaskStatus(item.status) === TASK_STATUS_PREPARING
+    && Number(item.progress || 0) === 0
+    && !isTaskFinishedStatus(item.status)).length;
+  if (!confirm(`Dừng chuỗi định kỳ “${source.title || "Công việc"}” từ hôm nay? Hệ thống sẽ không sinh kỳ mới. ${futureCount} kỳ tương lai chưa bắt đầu đã tạo sẵn sẽ chuyển sang “Đã ngừng”; các kỳ đã hoàn thành hoặc đang thực hiện được giữ nguyên.`)) return false;
+  try {
+    if (sharedSync.session && !isOfflineFileRuntime()) {
+      if (!sharedSyncSupportsRecurringTaskStop()) {
+        throw new Error("Máy chủ online chưa hỗ trợ thao tác dừng định kỳ. Hãy triển khai phiên bản máy chủ mới trước khi thực hiện.");
+      }
+      const result = await stopRecurringTaskOnServer(task.id);
+      if (!result.ok) throw new Error(result.reason === "session-verification"
+        ? "Phiên đăng nhập cần được xác minh lại. Công việc chưa thay đổi."
+        : result.reason === "Permission denied."
+          ? "Bạn không có quyền dừng chuỗi định kỳ này."
+          : result.reason.includes("already stopped")
+            ? "Chuỗi định kỳ này đã được dừng trên máy chủ. Hãy tải lại dữ liệu công việc."
+            : `Máy chủ từ chối dừng định kỳ: ${result.reason}`);
+      renderAll();
+      openTaskDetailDialog(task.id);
+      showSystemToast("Đã dừng định kỳ", `Đã ngừng ${result.stoppedOccurrences} kỳ tương lai chưa bắt đầu. Hệ thống sẽ không sinh kỳ mới.`, { tone: "success" });
+      return true;
+    }
+    const result = applyRecurringTaskStop(task.id);
+    saveState();
+    renderAll();
+    openTaskDetailDialog(task.id);
+    showSystemToast("Đã dừng định kỳ", `Đã ngừng ${result.stoppedOccurrences} kỳ tương lai chưa bắt đầu. Hệ thống sẽ không sinh kỳ mới.`, { tone: "success" });
+    return result;
+  } catch (error) {
+    alert(error?.message || "Không thể dừng định kỳ. Dữ liệu công việc chưa bị thay đổi.");
+    return false;
+  }
+}
+
 function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) {
   if (recurringTasksEnsuredPeriod === targetPeriod && recurringTasksEnsuredRevision === derivedStateRevision) {
     return false;
@@ -6450,7 +6812,7 @@ function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) 
     .filter((task) => !task.recurrenceSourceId)
     .forEach((sourceTask) => {
       const recurrence = normalizeTaskRecurrence(sourceTask);
-      if (recurrence === TASK_RECURRENCE_NONE || !sourceTask.due) return;
+      if (recurrence === TASK_RECURRENCE_NONE || sourceTask.recurrenceStoppedAt || !sourceTask.due) return;
       const sourcePeriod = taskPeriod(sourceTask);
       const sourceIndex = periodIndex(sourcePeriod);
       if (sourceIndex < 0 || sourceIndex > targetIndex) return;
@@ -6912,7 +7274,7 @@ function editableTaskStatus(task) {
 
 function getDueStatus(task) {
   const status = editableTaskStatus(task);
-  if (status === TASK_STATUS_CLOSED) return status;
+  if (status === TASK_STATUS_CLOSED || status === TASK_STATUS_RECURRENCE_STOPPED) return status;
   if (status === TASK_STATUS_COMPLETED) return status;
   if (!task.due) return status;
   const due = taskDeadlineDate(task);
@@ -7038,7 +7400,7 @@ function taskCompletedBeforeDeadline(task) {
 }
 
 function taskViolationReasons(task) {
-  if (normalizeTaskStatus(task.status) === TASK_STATUS_CLOSED) return [];
+  if (normalizeTaskStatus(task.status) === TASK_STATUS_CLOSED || isRecurrenceStoppedTask(task)) return [];
   const overdue = getDueStatus(task) === "Quá hạn" || taskIsLateCompletion(task);
   if (!overdue) return [];
   const reasons = [];
@@ -7560,11 +7922,11 @@ function updatePersonSectionHeadOptions(selectedValue) {
   field.classList.toggle("is-hidden", isSectionHead);
 }
 
-function taskCategoryRoleForPerson(person) {
+function taskCategoryRoleForPerson(person, roleCatalog = roles) {
   const roleId = normalizeSearchText(person?.roleId || "");
   if (!roleId) return null;
   const departmentId = String(person?.departmentId || "");
-  const candidates = roles.filter((role) => !departmentId || role.departmentId === departmentId);
+  const candidates = roleCatalog.filter((role) => !departmentId || role.departmentId === departmentId);
   const exactMatches = candidates.filter((role) => normalizeSearchText(role.id) === roleId);
   if (exactMatches.length === 1) return exactMatches[0];
   if (exactMatches.length > 1) return null;
@@ -7584,19 +7946,44 @@ function updateTaskCategoryOptions(selectedValue, ownerSelectId = "taskOwner", c
   const options = taskCategoryOptionsForPerson(ownerId);
   const selectedCandidates = [selectedValue, select.value].filter((value) => value && !String(value).startsWith("Chọn người được giao"));
   const requested = selectedCandidates[0] || "";
-  const taskId = categorySelectId === "assignmentTaskCategory" ? byId("assignmentTaskId")?.value : byId("taskId")?.value;
-  const preserveLegacy = Boolean(taskId && requested && !options.includes(requested));
   const optionRows = options.map((category) => ({ value: category, label: category }));
-  if (preserveLegacy) optionRows.unshift({ value: requested, label: `${requested} (danh mục cũ, chưa khớp chức vụ)` });
+  const recordIdField = categorySelectId === "taskCategory" ? "taskId" : "assignmentTaskId";
+  const preserveLegacyCategory = Boolean(byId(recordIdField)?.value);
+  if (preserveLegacyCategory && requested && !options.some((category) => normalizeSearchText(category) === normalizeSearchText(requested))) {
+    optionRows.unshift({ value: requested, label: `${requested} (danh mục cũ, chưa có mục thay thế)` });
+  }
   if (!optionRows.length) {
     optionRows.push({
       value: "",
       label: ownerId ? "Chức vụ chưa có danh mục nhiệm vụ được cấu hình" : "Chọn người được giao để lấy danh mục nhiệm vụ",
     });
   }
-  const selected = preserveLegacy || options.includes(requested) ? requested : options[0] || "";
+  const selected = requested && optionRows.some((option) => option.value === requested) ? requested : options[0] || "";
   fillSelect(select, optionRows, selected);
-  if (!options.length && !preserveLegacy && select.options[0]) select.options[0].disabled = true;
+  if (!options.length && select.options[0]) select.options[0].disabled = true;
+}
+
+function migrateTaskCategoriesForCatalogChange(previousRoles = [], nextRoles = []) {
+  if (!isAdmin()) return 0;
+  const nextRoleById = new Map(nextRoles.map((role) => [String(role.id || ""), role]));
+  const timestamp = new Date().toISOString();
+  let changed = 0;
+  state.tasks = (state.tasks || []).map((task) => {
+    if (!task || isGpmbWorkflowTask(task)) return task;
+    const ownerId = taskParticipantPersonId(task.ownerId);
+    const oldRole = taskCategoryRoleForPerson(personById(ownerId), previousRoles);
+    const newRole = oldRole ? nextRoleById.get(String(oldRole.id || "")) : null;
+    if (!oldRole || !newRole || (oldRole.criteria || []).length !== (newRole.criteria || []).length) return task;
+    const currentCategory = String(task.category || "").trim();
+    const oldIndex = (oldRole.criteria || []).findIndex((criterion) => normalizeSearchText(criterion?.[0]) === normalizeSearchText(currentCategory));
+    if (oldIndex < 0) return task;
+    if ((newRole.criteria || []).some((criterion) => String(criterion?.[0] || "").trim() === currentCategory)) return task;
+    const nextCategory = String(newRole.criteria?.[oldIndex]?.[0] || "").trim();
+    if (!nextCategory || nextCategory === currentCategory) return task;
+    changed += 1;
+    return { ...task, category: nextCategory, categoryCatalogUpdatedAt: timestamp, categoryCatalogPreviousValue: currentCategory };
+  });
+  return changed;
 }
 
 function updateTaskCollaboratorOptions(selectedValues = []) {
@@ -7746,6 +8133,7 @@ function renderAccountOptions() {
 function renderPeopleTable() {
   const tbody = byId("peopleTable");
   const basePeople = visiblePeopleForPeopleView();
+  const selectedDepartment = renderPeopleDepartmentFilterOptions(basePeople);
   if (!basePeople.length) {
     tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"11\"");
     return;
@@ -7754,6 +8142,8 @@ function renderPeopleTable() {
   const evaluatedPeople = new Set(evaluationsForPeriod(state.activePeriod).map((evaluation) => evaluation.personId));
   const people = basePeople.filter((person) => {
     if (peoplePendingEvaluationOnly && (!isKpiEligiblePerson(person) || evaluatedPeople.has(person.id))) return false;
+    const personDepartment = person.departmentId && departmentById(person.departmentId) ? person.departmentId : "__unassigned__";
+    if (selectedDepartment && personDepartment !== selectedDepartment) return false;
     if (!search) return true;
     const department = departmentById(person.departmentId)?.name || "";
     const role = roleById(person.roleId)?.name || "";
@@ -7920,7 +8310,7 @@ function renderTaskInboxDialog() {
               ${task.responseNote ? `<p class="task-inbox-note"><strong>Phản hồi/Báo cáo:</strong> ${escapeHtml(task.responseNote)}</p>` : ""}
               ${latestReport?.note && latestReport.note !== task.responseNote ? `<p class="task-inbox-note"><strong>Cập nhật tiến độ gần nhất:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
               ${taskProgressReportListHtml(task)}
-              ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
+              ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
             </article>
           `;
         })
@@ -8983,7 +9373,7 @@ function renderTaskBoard(options = {}) {
             const collaboratorNames = taskCollaboratorNames(task);
             const assigned = isAssignedTask(task);
             const taskKind = normalizeTaskKind(task);
-            const editable = canEditTaskDetails(task);
+            const editable = canEditTaskDetails(task) && !isRecurrenceStoppedTask(task);
             const deletable = canDeleteTask(task);
             const copyable = canCopyTask(task);
             const reportable = canUpdateTaskProgress(task);
@@ -9020,7 +9410,7 @@ function renderTaskBoard(options = {}) {
                   <span><strong>Chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))} · Thực hiện KPI ${formatScore(taskKpiActualScore(task))}</span>
                 </div>
                 <div class="progress" aria-label="Tiến độ ${task.progress}%"><span style="width:${clamp(task.progress, 0, 100)}%"></span></div>
-                ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
+                ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
                 ${attachmentList}
                 <div class="row-actions task-card-actions">
                   ${reportable ? `<button class="task-progress-update-button" data-respond-task="${task.id}" type="button" title="Cập nhật" aria-label="Cập nhật"><span>Cập nhật</span></button>` : ""}
@@ -9091,7 +9481,7 @@ function renderTaskStatusDetailItem(task) {
       ${task.note ? `<p class="kpi-task-detail-note"><strong>Nội dung/Báo cáo:</strong> ${escapeHtml(task.note)}</p>` : ""}
       ${latestReport?.note && latestReport.note !== task.note ? `<p class="kpi-task-detail-note"><strong>Báo cáo gần nhất:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
       ${taskProgressReportListHtml(task)}
-      ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
+      ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
     </article>
   `;
 }
@@ -9316,13 +9706,14 @@ function restoreTaskDetailInlineEditor({ reset = false } = {}) {
 function taskDetailActionMarkup(task) {
   const actions = [];
   const assigned = isAssignedTask(task);
-  const editable = canEditTaskDetails(task);
+  const editable = canEditTaskDetails(task) && !isRecurrenceStoppedTask(task);
   const copyable = canCopyTask(task);
   const reportable = canUpdateTaskProgress(task);
   const reviewable = canReviewTaskCompletion(task);
   const endable = canEndTaskAssignment(task);
   const deletable = canDeleteTask(task);
   if (reportable) actions.push('<button class="task-progress-update-button" type="button" data-task-detail-action="report" title="Cập nhật" aria-label="Cập nhật"><span>Cập nhật</span></button>');
+  if (canStopTaskRecurrence(task)) actions.push('<button class="task-stop-recurrence-button" type="button" data-task-detail-action="stop-recurrence">Dừng định kỳ</button>');
   if (editable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="edit" title="Sửa công việc" aria-label="Sửa công việc"><span aria-hidden="true">&#9998;</span></button>');
   if (copyable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="copy" title="Sao chép công việc" aria-label="Sao chép công việc"><span aria-hidden="true">&#9112;</span></button>');
   if (reviewable) actions.push('<button class="ghost task-icon-button task-icon-approve" type="button" data-task-detail-action="review" title="Duyệt hoàn thành" aria-label="Duyệt hoàn thành"><span aria-hidden="true">&#10003;</span></button>');
@@ -9432,7 +9823,7 @@ function openTaskDetailDialog(taskId) {
         <span><strong>Danh mục nhiệm vụ</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
         ${!assigned ? `<span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>` : ""}
         <span><strong>Mức độ ưu tiên</strong>${escapeHtml(taskPriorityLabels[normalizeTaskPriority(task.priority)])}</span>
-        ${!assigned ? `<span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}</span>` : ""}
+        ${!assigned ? `<span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}${task.recurrenceStoppedAt ? ` · Đã dừng ${escapeHtml(formatDate(task.recurrenceStopDate) || formatDateTime(task.recurrenceStoppedAt))}` : ""}</span>` : ""}
         <span><strong>Ngày tạo</strong>${escapeHtml(formatDateTime(task.createdAt) || "Chưa ghi nhận")}</span>
         <span><strong>Người tạo</strong>${escapeHtml(taskRecordedCreatorName(task))}</span>
         <span><strong>Ngày bắt đầu</strong>${escapeHtml(formatTaskStartDate(task) || "Chưa cập nhật")}</span>
@@ -9472,7 +9863,7 @@ function openTaskDetailDialog(taskId) {
       <h3>Hồ sơ liên quan</h3>
       ${attachmentList}
     </section>
-    ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
+    ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
   `;
   byId("taskDetailDialog").dataset.taskId = task.id;
   byId("taskDetailDialog").classList.remove("is-hidden");
@@ -9723,7 +10114,7 @@ function taskMatchesKpiCriterion(task, criterionName) {
 }
 
 function taskBelongsToPersonForKpi(task, personId) {
-  return !!task && !!personId && taskParticipantIds(task).includes(personId);
+  return !!task && !isRecurrenceStoppedTask(task) && !!personId && taskParticipantIds(task).includes(personId);
 }
 
 function taskCountsForPersonalCriterion(task, personId, criterionName) {
@@ -10278,7 +10669,7 @@ function renderKpiTaskDetailItem(task) {
       ${task.responseNote ? `<p class="kpi-task-detail-note"><strong>Phản hồi/Báo cáo:</strong> ${escapeHtml(task.responseNote)}</p>` : ""}
       ${latestReport?.note && latestReport.note !== task.responseNote ? `<p class="kpi-task-detail-note"><strong>Báo cáo gần nhất:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
       ${taskProgressReportListHtml(task)}
-      ${violations.length ? `<div class="task-violation">Tính lỗi KPI: ${escapeHtml(violations.join("; "))}</div>` : ""}
+      ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
     </article>
   `;
 }
@@ -11007,6 +11398,7 @@ function taskDeadlineTimestamp(task) {
 
 function taskStatusBadgeClass(status) {
   if (status === "Quá hạn") return "bad";
+  if (status === TASK_STATUS_RECURRENCE_STOPPED) return "neutral";
   if (isTaskFinishedStatus(status)) return "good";
   return "warn";
 }
@@ -11349,6 +11741,7 @@ function taskHasReportableCompletionEventOnDate(task, reportDate) {
 }
 
 function taskOccurredInDailyReport(task, reportDate) {
+  if (isRecurrenceStoppedTask(task)) return false;
   const date = dailyReportDateValue(reportDate);
   const dueDate = dailyReportDatePart(task?.due);
   const dueInReportDay = dueDate === date;
@@ -11416,7 +11809,7 @@ function dailyWorkReportData(reportDate) {
   const date = dailyReportDateValue(reportDate);
   const visibleTaskById = new Map();
   state.tasks.forEach((task, index) => {
-    if (!canViewTaskRecord(task)) return;
+    if (isRecurrenceStoppedTask(task) || !canViewTaskRecord(task)) return;
     const key = String(task?.id || "").trim() || `task-row-${index}`;
     if (!visibleTaskById.has(key)) visibleTaskById.set(key, task);
   });
@@ -11598,6 +11991,7 @@ function weeklyWorkReportCompletionEventDate(task, range) {
 }
 
 function taskOccurredInWeeklyWorkReport(task, range) {
+  if (isRecurrenceStoppedTask(task)) return false;
   const dueDate = dailyReportDatePart(task?.due);
   const dueInRange = dueDate >= range.startDate && dueDate <= range.endDate;
   const createdDate = dailyReportDatePart(task?.createdAt);
@@ -11622,7 +12016,7 @@ function weeklyWorkReportData(anchorDate) {
   const range = weeklyWorkReportDateRange(anchorDate);
   const visibleTaskById = new Map();
   state.tasks.forEach((task, index) => {
-    if (!canViewTaskRecord(task)) return;
+    if (isRecurrenceStoppedTask(task) || !canViewTaskRecord(task)) return;
     const key = String(task?.id || "").trim() || `task-row-${index}`;
     if (!visibleTaskById.has(key)) visibleTaskById.set(key, task);
   });
@@ -11748,6 +12142,7 @@ function monthlyWorkReportCutoffDate(period) {
 }
 
 function taskOccurredInMonthlyWorkReport(task, period, cutoffDate = monthlyWorkReportCutoffDate(period)) {
+  if (isRecurrenceStoppedTask(task)) return false;
   const selectedPeriod = monthlyWorkReportPeriodValue(period);
   const dueInReportPeriod = periodFromTimestamp(task?.due) === selectedPeriod;
   const createdUnfinishedInReportPeriod = periodFromTimestamp(task?.createdAt) === selectedPeriod && !taskIsCompletedByReportCutoff(task, cutoffDate);
@@ -11975,6 +12370,7 @@ async function exportMonthlyWorkReportPdf() {
 
 function dashboardTasksForPeriod(period = state.activePeriod) {
   return state.tasks
+    .filter((task) => !isRecurrenceStoppedTask(task))
     .filter((task) => taskMatchesDisplayScope(task))
     .filter((task) => canViewTaskRecord(task))
     .slice()
@@ -11983,6 +12379,7 @@ function dashboardTasksForPeriod(period = state.activePeriod) {
 
 function dashboardDepartmentTasks(departmentId) {
   return state.tasks
+    .filter((task) => !isRecurrenceStoppedTask(task))
     .filter((task) => taskHasParticipantInDepartment(task, departmentId))
     .filter((task) => taskMatchesDisplayScope(task))
     .filter((task) => canViewTaskRecord(task))
@@ -12186,7 +12583,7 @@ function renderDashboardDepartmentStatus(period = state.activePeriod) {
 }
 
 function dashboardOperationalTasks() {
-  return state.tasks.filter((task) => personById(task.ownerId) && taskMatchesDisplayScope(task) && canViewTaskRecord(task));
+  return state.tasks.filter((task) => !isRecurrenceStoppedTask(task) && personById(task.ownerId) && taskMatchesDisplayScope(task) && canViewTaskRecord(task));
 }
 
 function dashboardOperationRows(visibleTasks = dashboardOperationalTasks(), today = new Date()) {
@@ -13795,6 +14192,7 @@ function applyKpiCatalogDraft(draft) {
     behaviorRules: cloneKpiCatalog(state.behaviorRules),
   };
   migrateKpiCatalogHistory(previousConfig, nextConfig);
+  migrateTaskCategoriesForCatalogChange(previousConfig.roles, nextConfig.roles);
   state.departments = nextConfig.departments;
   state.roles = nextConfig.roles;
   state.behaviorRules = nextConfig.behaviorRules;
@@ -15374,7 +15772,15 @@ function renderModuleAccessControls() {
       `;
     })
     .join("");
+  renderSystemLunaControls();
   renderSystemThemeControls();
+}
+
+function renderSystemLunaControls() {
+  const toggle = byId("systemLunaEnabled");
+  if (!toggle || !isAdmin()) return;
+  state.systemCustomization = normalizeSystemCustomization(state.systemCustomization);
+  toggle.checked = state.systemCustomization.lunaEnabled;
 }
 
 function systemThemePreviewHtml(theme) {
@@ -15464,8 +15870,11 @@ function applySystemCustomization() {
   root.style.setProperty("--app-popup-width", `${layout.popupWidth}px`);
   root.style.setProperty("--app-wide-popup-width", `${layout.widePopupWidth}px`);
   const theme = state.systemCustomization.theme;
+  document.body.dataset.lunaEnabled = String(state.systemCustomization.lunaEnabled);
   Object.entries(themePalette(theme)).forEach(([name, value]) => root.style.setProperty(name, value));
   document.body.dataset.systemTheme = theme.preset;
+  window.dispatchEvent(new CustomEvent("phuc-thinh-theme-change", { detail: { preset: theme.preset, primary: theme.primary } }));
+  window.dispatchEvent(new CustomEvent("phuc-thinh-luna-visibility-change", { detail: { enabled: state.systemCustomization.lunaEnabled } }));
   renderTopbarThemeVisual(theme);
   const themeMeta = document.querySelector('meta[name="theme-color"]');
   if (themeMeta) themeMeta.setAttribute("content", themePalette(theme)["--primary"]);
@@ -16230,30 +16639,57 @@ function openPopupCustomizeDialog(key) {
   openModal("popupCustomizeDialog");
 }
 
+function renderAccountDepartmentFilterOptions(accounts) {
+  const select = byId("accountDirectoryDepartmentFilter");
+  const selected = select.value;
+  const departmentIds = new Set(accounts.map(accountDepartmentIdForStatistics));
+  const options = departments
+    .filter((department) => departmentIds.has(department.id))
+    .map((department) => ({ value: department.id, label: department.name }));
+  departmentIds.forEach((departmentId) => {
+    if (departmentId === "unassigned") options.push({ value: departmentId, label: "Chưa cập nhật phòng" });
+    else if (!departments.some((department) => department.id === departmentId)) {
+      options.push({ value: departmentId, label: "Phòng chưa có trong danh mục" });
+    }
+  });
+  const validSelection = options.some((option) => option.value === selected) ? selected : "";
+  fillSelect(select, [{ value: "", label: "Tất cả phòng" }, ...options], validSelection);
+  return select.value;
+}
+
 function renderAccountTable() {
   const tbody = byId("accountTable");
   const accountForm = byId("accountForm");
   const adminQuickTools = byId("accountAdminQuickTools");
+  const accountDirectoryFilters = byId("accountDirectoryFilters");
+  const accountDirectoryToolbar = document.querySelector(".account-directory-toolbar");
   const accountScrollActions = byId("accountScrollActions");
   const canUseAdminTools = isAdmin();
+  const canEditAccount = canManageAccounts() || canEditOwnAccount();
   const canViewAccountDirectory = canManageAccounts() || canViewSystemContent();
-  accountForm?.classList.toggle("is-hidden", !canManageAccounts() && !canEditOwnAccount());
+  accountForm?.classList.toggle("is-hidden", !canEditAccount);
   adminQuickTools?.classList.toggle("is-hidden", !canUseAdminTools);
+  accountDirectoryFilters?.classList.toggle("is-hidden", !canViewAccountDirectory);
+  accountDirectoryToolbar?.classList.toggle("has-account-search", canUseAdminTools);
+  accountDirectoryToolbar?.classList.toggle("has-department-filter", canViewAccountDirectory);
   accountScrollActions?.classList.toggle("is-hidden", !canUseAdminTools);
   if (!canViewAccountDirectory && !canEditOwnAccount()) {
     tbody.innerHTML = byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"5\"");
     return;
   }
   const searchText = canUseAdminTools ? normalizeSearchText(byId("accountSearch")?.value || "") : "";
-  const accounts = (canViewAccountDirectory ? state.accounts : [currentAccount()].filter(Boolean)).filter((account) => {
+  const visibleAccounts = canViewAccountDirectory ? state.accounts : [currentAccount()].filter(Boolean);
+  const selectedDepartment = renderAccountDepartmentFilterOptions(visibleAccounts);
+  const accounts = visibleAccounts.filter((account) => {
+    if (selectedDepartment && accountDepartmentIdForStatistics(account) !== selectedDepartment) return false;
     if (!searchText) return true;
     const person = personById(account.personId);
     const department = departmentById(account.departmentId || person?.departmentId);
     return normalizeSearchText([account.displayName, account.username, person?.name, department?.name, accountRoleLabels[account.role] || account.role].join(" ")).includes(searchText);
   });
   if (!accounts.length) {
-    tbody.innerHTML = searchText
-      ? '<tr><td colspan="5" class="empty-cell">Không có tài khoản phù hợp.</td></tr>'
+    tbody.innerHTML = searchText || selectedDepartment
+      ? '<tr><td colspan="5" class="empty-cell">Không có tài khoản phù hợp với bộ lọc.</td></tr>'
       : byId("emptyRowTemplate").innerHTML.replace("colspan=\"8\"", "colspan=\"5\"");
     return;
   }
@@ -16462,14 +16898,16 @@ function clientDeadlineNotificationItems() {
   if (!account) return [];
   const acknowledgements = notificationAcknowledgements();
   const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setHours(23, 59, 59, 999);
+  const reminderWindow = new Date(now);
+  reminderWindow.setDate(reminderWindow.getDate() + 1);
+  reminderWindow.setHours(23, 59, 59, 999);
   return (state.tasks || [])
     .filter((task) => taskNotificationIsRelevant(task, account))
     .filter((task) => task?.due && !isTaskFinishedStatus(normalizeTaskStatus(task.status)) && !taskCompletionIsApproved(task) && !taskCompletionNeedsReview(task))
     .map((task) => {
       const dueDate = new Date(`${task.due}T23:59:59`);
-      if (Number.isNaN(dueDate.getTime()) || dueDate > tomorrow) return null;
+      if (Number.isNaN(dueDate.getTime()) || dueDate > reminderWindow) return null;
+      if (dueDate > now) return null;
       const overdue = dueDate.getTime() < now.getTime();
       const id = `task-deadline:${task.id}:${task.due}`;
       const acknowledgement = acknowledgements.get(id);
@@ -16478,7 +16916,7 @@ function clientDeadlineNotificationItems() {
         recipientAccountId: account.id,
         category: "task",
         priority: overdue ? "danger" : "warning",
-        title: overdue ? "Công việc đã quá hạn" : "Công việc đến hạn hôm nay",
+        title: overdue ? "Công việc đã quá hạn" : dueToday ? "Công việc đến hạn hôm nay" : "Công việc sắp đến hạn",
         message: task.title || "Công việc chưa có tên",
         createdAt: `${task.due}T08:00:00+07:00`,
         scheduledAt: `${task.due}T23:59:59+07:00`,
@@ -16492,6 +16930,192 @@ function clientDeadlineNotificationItems() {
     .filter(Boolean);
 }
 
+function ingestDailyTaskReminderNotifications() {
+  const account = currentAccount();
+  if (!account || !canAccessView("tasks")) return [];
+  const todayParts = vietnamDateParts();
+  const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
+  const tomorrowDate = new Date(Date.UTC(Number(todayParts.year), Number(todayParts.month) - 1, Number(todayParts.day) + 1));
+  const tomorrow = `${tomorrowDate.getUTCFullYear()}-${String(tomorrowDate.getUTCMonth() + 1).padStart(2, "0")}-${String(tomorrowDate.getUTCDate()).padStart(2, "0")}`;
+  const createdAt = new Date().toISOString();
+  const existing = new Set(notificationCenter.localItems.map((item) => item.id));
+  const incoming = (state.tasks || [])
+    .filter((task) => taskNotificationIsRelevant(task, account))
+    .filter((task) => task?.due === today || task?.due === tomorrow)
+    .filter((task) => !isTaskFinishedStatus(normalizeTaskStatus(task.status)) && !taskCompletionIsApproved(task) && !taskCompletionNeedsReview(task))
+    .map((task) => {
+      const dueToday = task.due === today;
+      return normalizeNotificationItem({
+        id: `assistant-task-reminder:${account.id}:${dueToday ? "today" : "upcoming"}:${task.due}:${task.id}`,
+        recipientAccountId: account.id,
+        category: "task",
+        priority: dueToday ? "warning" : "info",
+        title: dueToday ? "Công việc cần làm hôm nay" : "Công việc sắp đến hạn",
+        message: `${task.title || "Công việc chưa có tên"} · hạn ${task.due}`,
+        createdAt,
+        scheduledAt: createdAt,
+        targetType: "task",
+        targetId: task.id,
+        localOnly: true,
+      }, { localOnly: true });
+    })
+    .filter((item) => item && !existing.has(item.id));
+  if (!incoming.length) return [];
+  notificationCenter.localItems = [...notificationCenter.localItems, ...incoming].slice(-NOTIFICATION_MAX_LOCAL_ITEMS);
+  persistLocalNotificationItems();
+  return incoming.map((item) => item.id);
+}
+
+function ingestBulletinUpdateNotifications() {
+  const account = currentAccount();
+  if (!account || !canAccessView("bulletin") || typeof visibleBulletins !== "function") return [];
+  const posts = visibleBulletins().filter((post) => post.status !== "draft");
+  const fingerprint = (post) => `${String(post.id || "")}:${String(post.updatedAt || post.publishDate || post.createdAt || "")}`;
+  const storageKey = `phuc-thinh-assistant-bulletins-v1:${account.id}`;
+  let seen = bulletinNotificationSeenFallback.get(account.id) || new Set();
+  let hasStoredBaseline = false;
+  try {
+    const stored = localStorage.getItem(storageKey);
+    if (stored !== null) {
+      hasStoredBaseline = true;
+      const parsed = JSON.parse(stored);
+      seen = new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+    }
+  } catch {
+    hasStoredBaseline = seen.size > 0;
+  }
+  const current = posts.map((post) => ({ post, key: fingerprint(post) }));
+  if (!hasStoredBaseline) {
+    seen = new Set(current.map((item) => item.key));
+    bulletinNotificationSeenFallback.set(account.id, seen);
+    try { localStorage.setItem(storageKey, JSON.stringify([...seen].slice(-250))); } catch { /* Keep the in-memory baseline. */ }
+    return [];
+  }
+  const unseen = current.filter((item) => item.key && !seen.has(item.key));
+  current.forEach((item) => seen.add(item.key));
+  bulletinNotificationSeenFallback.set(account.id, seen);
+  try { localStorage.setItem(storageKey, JSON.stringify([...seen].slice(-250))); } catch { /* Keep the in-memory deduplication set. */ }
+  const existing = new Set(notificationCenter.localItems.map((item) => item.id));
+  const createdAt = new Date().toISOString();
+  const incoming = unseen.map(({ post, key }) => normalizeNotificationItem({
+    id: `bulletin-update:${account.id}:${key}`,
+    recipientAccountId: account.id,
+    category: "system",
+    priority: "info",
+    title: "Tin mới trên Bảng tin",
+    message: String(post.title || "Tin bài vừa được cập nhật"),
+    createdAt,
+    scheduledAt: createdAt,
+    targetType: "bulletin",
+    targetId: post.id,
+    localOnly: true,
+  }, { localOnly: true })).filter((item) => item && !existing.has(item.id));
+  if (!incoming.length) return [];
+  notificationCenter.localItems = [...notificationCenter.localItems, ...incoming].slice(-NOTIFICATION_MAX_LOCAL_ITEMS);
+  persistLocalNotificationItems();
+  return incoming.map((item) => item.id);
+}
+
+function recoverActiveAssistantReminderIds(items = []) {
+  const account = currentAccount();
+  if (!account) return [];
+  const todayParts = vietnamDateParts();
+  const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
+  const tomorrowDate = new Date(Date.UTC(Number(todayParts.year), Number(todayParts.month) - 1, Number(todayParts.day) + 1));
+  const tomorrow = `${tomorrowDate.getUTCFullYear()}-${String(tomorrowDate.getUTCMonth() + 1).padStart(2, "0")}-${String(tomorrowDate.getUTCDate()).padStart(2, "0")}`;
+  const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
+  return items.filter((item) => {
+    if (!item.localOnly || item.readAt || item.dismissedAt) return false;
+    const id = String(item.id || "");
+    if (id.startsWith(`assistant-task-reminder:${account.id}:`)) {
+      return id.includes(`:${today}:`) || id.includes(`:${tomorrow}:`);
+    }
+    if (id.startsWith(`calendar-reminder:${account.id}:`) || id.startsWith(`bulletin-update:${account.id}:`) || id.startsWith("birthday:")) {
+      const createdAt = new Date(item.createdAt || 0).getTime();
+      return Number.isFinite(createdAt) && createdAt >= recentCutoff;
+    }
+    return false;
+  }).map((item) => item.id);
+}
+
+function lunaNotificationPreferences(accountId = notificationCurrentAccountId()) {
+  const defaults = { proactiveEnabled: true, quietHoursEnabled: false, quietHoursStart: "22:00", quietHoursEnd: "07:00" };
+  if (!accountId) return defaults;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LUNA_NOTIFICATION_PREFERENCES_PREFIX + ":" + accountId) || "null");
+    if (!parsed || typeof parsed !== "object") return defaults;
+    const validTime = (value, fallback) => /^\d{2}:\d{2}$/.test(String(value || "")) ? String(value) : fallback;
+    return {
+      proactiveEnabled: parsed.proactiveEnabled !== false,
+      quietHoursEnabled: parsed.quietHoursEnabled === true,
+      quietHoursStart: validTime(parsed.quietHoursStart, defaults.quietHoursStart),
+      quietHoursEnd: validTime(parsed.quietHoursEnd, defaults.quietHoursEnd),
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function lunaQuietHoursActive(preferences, date = new Date()) {
+  if (!preferences.quietHoursEnabled) return false;
+  const toMinutes = (time) => {
+    const parts = String(time || "").split(":").map(Number);
+    return parts.length === 2 && parts.every(Number.isFinite) ? parts[0] * 60 + parts[1] : -1;
+  };
+  const start = toMinutes(preferences.quietHoursStart);
+  const end = toMinutes(preferences.quietHoursEnd);
+  if (start < 0 || end < 0 || start === end) return false;
+  const now = date.getHours() * 60 + date.getMinutes();
+  return start < end ? now >= start && now < end : now >= start || now < end;
+}
+
+function lunaProactiveNotificationSuppressed() {
+  const preferences = lunaNotificationPreferences();
+  return !preferences.proactiveEnabled || lunaQuietHoursActive(preferences);
+}
+
+window.virtualAssistantShouldSuppressProactive = lunaProactiveNotificationSuppressed;
+
+function renderLunaNotificationPreferences() {
+  const preferences = lunaNotificationPreferences();
+  const proactive = byId("lunaProactiveEnabled");
+  const quietEnabled = byId("lunaQuietHoursEnabled");
+  const quietStart = byId("lunaQuietHoursStart");
+  const quietEnd = byId("lunaQuietHoursEnd");
+  if (!proactive || !quietEnabled || !quietStart || !quietEnd) return;
+  proactive.checked = preferences.proactiveEnabled;
+  quietEnabled.checked = preferences.quietHoursEnabled;
+  quietStart.value = preferences.quietHoursStart;
+  quietEnd.value = preferences.quietHoursEnd;
+  quietStart.disabled = quietEnd.disabled = !preferences.quietHoursEnabled;
+}
+
+function persistLunaNotificationPreferences() {
+  const accountId = notificationCurrentAccountId();
+  if (!accountId) return;
+  const preferences = {
+    proactiveEnabled: byId("lunaProactiveEnabled").checked,
+    quietHoursEnabled: byId("lunaQuietHoursEnabled").checked,
+    quietHoursStart: byId("lunaQuietHoursStart").value || "22:00",
+    quietHoursEnd: byId("lunaQuietHoursEnd").value || "07:00",
+  };
+  try { localStorage.setItem(LUNA_NOTIFICATION_PREFERENCES_PREFIX + ":" + accountId, JSON.stringify(preferences)); } catch { /* Preferences remain active for this page session. */ }
+  renderLunaNotificationPreferences();
+}
+
+function setupLunaNotificationPreferences() {
+  ["lunaProactiveEnabled", "lunaQuietHoursEnabled", "lunaQuietHoursStart", "lunaQuietHoursEnd"].forEach((id) => {
+    byId(id)?.addEventListener("change", persistLunaNotificationPreferences);
+  });
+  renderLunaNotificationPreferences();
+}
+
+function notificationIsScheduledAnnouncementInFuture(item, now = Date.now()) {
+  if (String(item?.targetType || "") !== "luna-announcement" || !item?.scheduledAt) return false;
+  const scheduledAt = new Date(item.scheduledAt).getTime();
+  return Number.isFinite(scheduledAt) && scheduledAt > now;
+}
+
 function notificationItemsForCurrentAccount() {
   resetNotificationRuntimeForAccount();
   const accountId = notificationCurrentAccountId();
@@ -16500,6 +17124,7 @@ function notificationItemsForCurrentAccount() {
   const acknowledgements = notificationAcknowledgements();
   const source = (state.notifications || [])
     .filter((item) => item && item.notificationType !== "acknowledgement" && String(item.recipientAccountId || "") === accountId)
+    .filter((item) => !notificationIsScheduledAnnouncementInFuture(item))
     .map((item) => normalizeNotificationItem(item))
     .filter(Boolean);
   source.forEach((item) => {
@@ -16549,10 +17174,21 @@ function renderNotificationCenterPosition() {
 
 function renderNotificationCenter({ present = true } = {}) {
   resetNotificationRuntimeForAccount();
+  const forceIds = present
+    ? [...ingestDailyTaskReminderNotifications(), ...ingestBulletinUpdateNotifications()]
+    : [];
   const bell = byId("notificationBell");
   const count = byId("notificationUnreadCount");
   const panel = byId("notificationCenter");
   const items = notificationItemsForCurrentAccount();
+  if (present) forceIds.push(...recoverActiveAssistantReminderIds(items));
+  if (present) {
+    const now = Date.now();
+    const dueAnnouncements = items.filter((item) => item.targetType === "luna-announcement"
+      && item.scheduledAt && new Date(item.scheduledAt).getTime() <= now
+      && !item.readAt && !item.dismissedAt && !notificationCenter.presentedIds.has(item.id));
+    forceIds.push(...dueAnnouncements.map((item) => item.id));
+  }
   const unread = items.filter((item) => !item.readAt).length;
   if (count) {
     count.textContent = unread > 9 ? "9+" : String(unread);
@@ -16597,19 +17233,8 @@ function renderNotificationCenter({ present = true } = {}) {
           </article>`).join("")
       : '<p class="notification-empty">Không có thông báo phù hợp.</p>';
   }
-  const browserButton = byId("notificationBrowserPermission");
-  if (browserButton) {
-    const supported = typeof Notification !== "undefined";
-    const permission = supported ? Notification.permission : "unsupported";
-    browserButton.disabled = !supported || permission === "granted" || permission === "denied";
-    browserButton.textContent = permission === "granted"
-      ? "Thông báo trình duyệt đã bật"
-      : permission === "denied"
-        ? "Trình duyệt đang chặn thông báo"
-        : supported ? "Bật thông báo trình duyệt" : "Trình duyệt không hỗ trợ thông báo";
-  }
   renderNotificationCenterPosition();
-  if (present) presentNewNotificationToasts(items);
+  if (present) presentNewNotificationToasts(items, { forceIds });
 }
 
 function saveNotificationAcknowledgement(item, updates) {
@@ -16693,12 +17318,15 @@ function openNotificationTarget(item) {
   if (!item) return;
   markNotificationRead(item);
   notificationCenter.isOpen = false;
-  if (item.targetType === "task" && item.targetId && state.tasks.some((task) => task.id === item.targetId)) {
+  if (item.targetType === "task" && item.targetId && canAccessView("tasks") && state.tasks.some((task) => task.id === item.targetId && canOpenTask(task))) {
     switchView("tasks");
     openTaskDetailDialog(item.targetId);
-  } else if (item.targetType === "calendar" && item.targetId && typeof openCalendarDetailDialog === "function") {
+  } else if (item.targetType === "calendar" && item.targetId && canAccessView("calendar") && typeof openCalendarDetailDialog === "function") {
     switchView("calendar");
     openCalendarDetailDialog(item.targetId);
+  } else if (item.targetType === "bulletin" && item.targetId && canAccessView("bulletin") && visibleBulletins().some((post) => String(post.id) === String(item.targetId))) {
+    switchView("bulletin");
+    openBulletinDetailDialog(item.targetId);
   }
   renderNotificationCenter({ present: false });
 }
@@ -16711,6 +17339,16 @@ function dismissNotificationQuickToast(id) {
 }
 
 function showNotificationQuickToast(item) {
+  if (item && typeof window.virtualAssistantNotify === "function" && currentAccount()) {
+    window.virtualAssistantNotify(item);
+    return;
+  }
+  if (!item) return;
+  showSystemToast(item.title, item.message, {
+    tone: item.priority === "danger" ? "warning" : item.priority,
+    duration: 10000,
+  });
+  return;
   const container = byId("notificationQuickToasts");
   if (!container || !item || notificationCenter.activeToastIds.has(item.id)) return;
   notificationCenter.activeToastIds.add(item.id);
@@ -16739,17 +17377,20 @@ function presentNewNotificationToasts(items, { forceIds = [] } = {}) {
   if (!notificationCenter.accountId) return;
   const force = new Set(forceIds);
   if (!notificationCenter.initialized) {
+    const newUnread = items.filter((item) => force.has(item.id) && !notificationCenter.presentedIds.has(item.id) && !item.readAt && !item.dismissedAt);
     items.forEach((item) => notificationCenter.presentedIds.add(item.id));
     notificationCenter.initialized = true;
+    if (!lunaProactiveNotificationSuppressed()) newUnread.forEach(showNotificationQuickToast);
     persistNotificationPresentedIds();
     return;
   }
   const now = Date.now();
   items.filter((item) => !item.readAt && !item.dismissedAt).forEach((item) => {
+    if (notificationCenter.presentedIds.has(item.id)) return;
     const isFresh = notificationTimestamp(item) >= now - 15 * 60 * 1000;
-    if (!force.has(item.id) && (!isFresh || notificationCenter.presentedIds.has(item.id))) return;
+    if (!force.has(item.id) && !isFresh) return;
     notificationCenter.presentedIds.add(item.id);
-    showNotificationQuickToast(item);
+    if (!lunaProactiveNotificationSuppressed()) showNotificationQuickToast(item);
   });
   persistNotificationPresentedIds();
 }
@@ -16779,29 +17420,22 @@ function ingestCalendarReminderNotifications(events = []) {
   persistLocalNotificationItems();
   renderNotificationCenter({ present: false });
   presentNewNotificationToasts(notificationItemsForCurrentAccount(), { forceIds: newItems.map((item) => item.id) });
-  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-    newItems.forEach((item) => {
-      try {
-        const browserNotification = new Notification(item.title, { body: item.message, tag: item.id, icon: "app-icon-phuc-thinh.png" });
-        browserNotification.onclick = () => { window.focus(); openNotificationTarget(item); browserNotification.close(); };
-      } catch {
-        // The in-application quick popup remains the reliable fallback.
-      }
-    });
-  }
 }
 
 function toggleNotificationCenter(forceOpen) {
-  notificationCenter.isOpen = typeof forceOpen === "boolean" ? forceOpen : !notificationCenter.isOpen;
+  if (typeof window.virtualAssistantOpenNotifications === "function") {
+    if (forceOpen !== false) window.virtualAssistantOpenNotifications();
+    return;
+  }
+  notificationCenter.isOpen = false;
   renderNotificationCenter({ present: false });
-  if (notificationCenter.isOpen) byId("notificationCenter")?.querySelector(".notification-item")?.focus({ preventScroll: true });
 }
 
 function setupNotificationCenterEvents() {
-  byId("notificationBell")?.addEventListener("click", () => toggleNotificationCenter());
+  byId("notificationBell")?.addEventListener("click", () => window.virtualAssistantOpenNotifications?.());
   document.querySelectorAll("[data-notification-toggle]").forEach((button) => button.addEventListener("click", () => {
     document.getElementById("mobileMenuPopup")?.classList.remove("is-active");
-    toggleNotificationCenter(true);
+    window.virtualAssistantOpenNotifications?.();
   }));
   byId("notificationCenterClose")?.addEventListener("click", () => toggleNotificationCenter(false));
   byId("notificationMarkAllRead")?.addEventListener("click", markAllNotificationsRead);
@@ -16828,10 +17462,6 @@ function setupNotificationCenterEvents() {
     const item = notificationItemsForCurrentAccount().find((candidate) => candidate.id === row.dataset.notificationId);
     if (item) openNotificationTarget(item);
   });
-  byId("notificationBrowserPermission")?.addEventListener("click", async () => {
-    if (typeof Notification === "undefined" || Notification.permission !== "default") return;
-    try { await Notification.requestPermission(); } finally { renderNotificationCenter({ present: false }); }
-  });
   document.addEventListener("click", (event) => {
     if (!notificationCenter.isOpen) return;
     if (event.target.closest("#notificationCenter, #notificationBell, [data-notification-toggle]")) return;
@@ -16841,18 +17471,27 @@ function setupNotificationCenterEvents() {
     if (event.key === "Escape" && notificationCenter.isOpen) toggleNotificationCenter(false);
   });
   window.addEventListener("resize", () => renderNotificationCenterPosition());
+  window.setInterval(() => {
+    if (!document.hidden && currentAccount()) renderNotificationCenter();
+  }, 60 * 1000);
+  window.addEventListener("focus", () => {
+    if (currentAccount()) renderNotificationCenter();
+  });
 }
 
 function renderCurrentUser() {
   const account = currentAccount();
   const person = currentPerson();
   const department = departmentById(currentDepartmentId());
-  byId("changePasswordButton")?.classList.toggle("is-hidden", !account);
-  byId("mobileChangePasswordButton")?.classList.toggle("is-hidden", !account);
+  const canEditAccount = canManageAccounts() || canEditOwnAccount();
+  byId("accountChangePasswordButton")?.classList.toggle("is-hidden", !account || !canEditAccount);
+  byId("accountPasswordFallback")?.classList.toggle("is-hidden", !account || canEditAccount);
   byId("currentUserLabel").textContent = account ? account.displayName : "Chưa đăng nhập";
   byId("currentUserMeta").textContent = account
     ? `${accountRoleLabels[account.role] || account.role}${department ? ` · ${department.name}` : ""}${person ? ` · ${person.name}` : ""}`
     : "";
+  renderLunaNotificationPreferences();
+  window.virtualAssistantSyncAccount?.();
   renderNotificationCenter();
 }
 
@@ -16996,16 +17635,22 @@ function applyAccessControls() {
     accessControlAccountId = "";
     document.body.classList.remove("is-customize-mode");
     syncMobileNavigationAccess();
+    window.virtualAssistantSyncAccount?.();
     return "";
   }
 
   renderCurrentUser();
+  void ensureLunaAnnouncementRealtimeConnection();
   document.querySelectorAll(".admin-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isDirector());
   });
   document.querySelectorAll(".admin-only-action").forEach((element) => {
     element.classList.toggle("is-hidden", !isAdmin());
   });
+  if (!isAdmin()) {
+    byId("assistantAnnouncementComposer")?.classList.add("is-hidden");
+    byId("assistantAnnouncementToggle")?.setAttribute("aria-expanded", "false");
+  }
   document.querySelectorAll(".summary-action").forEach((element) => {
     element.classList.toggle("is-hidden", !canViewSystemContent());
   });
@@ -17144,9 +17789,9 @@ function newGpmbWorkflowPreviewState() {
   return {
     caseName: "Đợt GPMB Dự án đường Vành đai 3",
     anchorDate: gpmbPreviewTodayIso(),
-    activeStepId: "notice",
-    selectedStepId: "notice",
-    conditions: { noCooperation: false, noHandover: false },
+    activeStepId: "p1-01",
+    selectedStepId: "p1-01",
+    conditions: { noCooperation: false, noHandover: false, resettlementRequired: false },
     manualStarts: {},
     durationOverrides: {},
     lastImpact: "Chọn một bước để thử thay đổi lịch. Bản thử không lưu dữ liệu vào hệ thống.",
@@ -17161,11 +17806,20 @@ function ensureGpmbWorkflowPreviewState() {
 function gpmbPreviewConditionLabel(key) {
   if (key === "noCooperation") return "có ý kiến không đồng thuận hoặc không phối hợp";
   if (key === "noHandover") return "có trường hợp chưa bàn giao đất";
+  if (key === "resettlementRequired") return "có trường hợp bố trí tái định cư";
   return "có điều kiện phát sinh";
 }
 
+function gpmbWorkflowStepActivationLabel(step) {
+  return ["activationKey", "activationAlsoKey"].filter((key) => step?.[key]).map((key) => {
+    const expected = key === "activationKey" ? step.activationValue !== false : step.activationAlsoValue !== false;
+    const label = gpmbPreviewConditionLabel(step[key]);
+    return expected ? label : `không ${label}`;
+  }).join(" và ");
+}
+
 function gpmbPreviewStepIsScheduled(step, preview = ensureGpmbWorkflowPreviewState()) {
-  return !step.activationKey || preview.conditions[step.activationKey] === true;
+  return gpmbStepIsEnabled(step, preview.conditions);
 }
 
 function gpmbPreviewStepDays(step, preview = ensureGpmbWorkflowPreviewState()) {
@@ -17252,10 +17906,12 @@ function renderGpmbWorkflowPreview() {
   const activeSelect = byId("gpmbPreviewActiveStep");
   const noCooperation = byId("gpmbPreviewNoCooperation");
   const noHandover = byId("gpmbPreviewNoHandover");
+  const resettlementRequired = byId("gpmbPreviewResettlementRequired");
   if (caseName) caseName.value = preview.caseName;
   if (anchorDate) anchorDate.value = preview.anchorDate;
   if (noCooperation) noCooperation.checked = preview.conditions.noCooperation;
   if (noHandover) noHandover.checked = preview.conditions.noHandover;
+  if (resettlementRequired) resettlementRequired.checked = preview.conditions.resettlementRequired;
   if (activeSelect) {
     activeSelect.innerHTML = scheduledRows
       .map((row) => `<option value="${escapeHtml(row.step.id)}">Bước ${String(row.index + 1).padStart(2, "0")}: ${escapeHtml(row.step.title)}</option>`)
@@ -17265,7 +17921,7 @@ function renderGpmbWorkflowPreview() {
 
   const lastScheduled = [...scheduledRows].pop();
   const activeLabel = activeRow ? `Bước ${String(activeRow.index + 1).padStart(2, "0")}` : "-";
-  const branchCount = Number(preview.conditions.noCooperation) + Number(preview.conditions.noHandover);
+  const branchCount = Number(preview.conditions.noCooperation) + Number(preview.conditions.noHandover) + Number(preview.conditions.resettlementRequired);
   byId("gpmbPreviewStepCount").textContent = String(GPMB_WORKFLOW_TEMPLATE.length);
   byId("gpmbPreviewActiveLabel").textContent = activeLabel;
   byId("gpmbPreviewExpectedEnd").textContent = lastScheduled ? formatDate(lastScheduled.end) : "-";
@@ -17279,8 +17935,8 @@ function renderGpmbWorkflowPreview() {
     const isSelected = row.step.id === selectedRow?.step.id;
     const schedule = row.isScheduled ? `${formatDate(row.start)} - ${formatDate(row.end)}` : "Chưa đưa vào lịch";
     const note = !row.isScheduled
-      ? `Kích hoạt khi ${gpmbPreviewConditionLabel(row.step.activationKey)}.`
-      : row.step.legalNote || `Phụ thuộc: ${row.dependency}.`;
+      ? `Kích hoạt khi ${gpmbWorkflowStepActivationLabel(row.step)}.`
+      : row.step.timeRule || row.step.legalBasis || `Phụ thuộc: ${row.dependency}.`;
     return `<button class="gpmb-preview-step is-${status.tone}${isSelected ? " is-selected" : ""}" type="button" data-gpmb-preview-step="${escapeHtml(row.step.id)}"${isSelected ? " aria-current=\"step\"" : ""}>
       <span class="gpmb-preview-step-order">${String(row.index + 1).padStart(2, "0")}</span>
       <span class="gpmb-preview-step-main"><strong>${escapeHtml(row.step.title)}</strong><small>${escapeHtml(note)}</small></span>
@@ -17393,7 +18049,9 @@ function gpmbWorkflowStatusLabel(status) {
 }
 
 function gpmbWorkflowStepLabel(step) {
-  const index = GPMB_WORKFLOW_TEMPLATE.findIndex((item) => item.id === step?.id);
+  const template = gpmbStepTemplateById(step?.id);
+  if (template?.phase && template?.ordinal) return `Bước ${template.phase}-${String(template.ordinal).padStart(2, "0")}`;
+  const index = GPMB_LEGACY_WORKFLOW_TEMPLATE.findIndex((item) => item.id === step?.id);
   return `Bước ${String(index + 1).padStart(2, "0")}`;
 }
 
@@ -17407,8 +18065,9 @@ function gpmbWorkflowStepStatusLabel(status) {
 }
 
 function gpmbWorkflowConditionLabel(key) {
+  if (key === "resettlementRequired") return "có trường hợp bố trí tái định cư";
   return key === "noHandover"
-    ? "chưa bàn giao đất"
+    ? "có trường hợp chưa bàn giao đất"
     : "có ý kiến không đồng thuận hoặc không phối hợp";
 }
 
@@ -17462,9 +18121,23 @@ function gpmbWorkflowTaskFromStep(workflow, step, actor = currentActorInfo()) {
   const previousIndex = (workflow.steps || []).findIndex((item) => item.id === step.id) - 1;
   const previousStep = previousIndex >= 0 ? workflow.steps[previousIndex] : null;
   const owner = personById(step.ownerId);
+  const template = gpmbStepTemplateById(step.id, workflow);
+  const taskDetails = [
+    `Đợt GPMB: ${String(workflow.title || "")}`,
+    `Bước: ${String(step.title || "")}`,
+    template?.owner ? `Đơn vị thực hiện: ${template.owner}` : "",
+    template?.documents ? `Hồ sơ kèm theo: ${template.documents}` : "",
+    template?.deliverable ? `Sản phẩm ban hành: ${template.deliverable}` : "",
+    template?.legalBasis ? `Quy định/căn cứ: ${template.legalBasis}` : "",
+    template?.durationBasis === "source"
+      ? `Thời hạn theo Excel: ${template.timeRule}`
+      : `Thời lượng kế hoạch mặc định: ${step.days || template?.days || 1} ngày (Excel không quy định số ngày cụ thể).${template?.timeRule ? ` Ghi chú: ${template.timeRule}` : ""}`,
+    template?.notes ? `Ghi chú: ${template.notes}` : "",
+  ].filter(Boolean).join("\n");
+  const taskTitle = `GPMB · ${gpmbWorkflowStepLabel(step)} · ${String(step.title || "").replace(/\s+/g, " ").trim()}`;
   const task = {
     id: gpmbWorkflowTaskId(workflow.id, step.id),
-    title: `GPMB · ${gpmbWorkflowStepLabel(step)} · ${step.title}`,
+    title: taskTitle.slice(0, 220),
     projectId: workflow.projectId,
     projectName: workflow.projectName,
     ownerId: step.ownerId || "",
@@ -17472,7 +18145,7 @@ function gpmbWorkflowTaskFromStep(workflow, step, actor = currentActorInfo()) {
     collaboratorNames: Array.isArray(step.collaboratorNames) && step.collaboratorNames.length
       ? step.collaboratorNames
       : gpmbWorkflowCollaboratorNames(step.collaboratorIds),
-    category: gpmbStepTemplateById(step.id)?.category || GPMB_WORKFLOW_CATEGORY,
+    category: template?.category || GPMB_WORKFLOW_CATEGORY,
     kind: TASK_KIND_REGULAR,
     workType: "arising",
     priority: "high",
@@ -17487,7 +18160,7 @@ function gpmbWorkflowTaskFromStep(workflow, step, actor = currentActorInfo()) {
     status: "Chuẩn bị thực hiện",
     progress: 0,
     qualityPercent: "",
-    note: `${workflow.title}\n${step.documents}${step.activationKey ? `\nChỉ áp dụng khi ${gpmbWorkflowConditionLabel(step.activationKey)}.` : ""}`,
+    note: taskDetails.slice(0, 20000),
     dependencyIds: previousStep?.taskId ? [previousStep.taskId] : [],
     attachments: [],
     progressReports: [],
@@ -17705,6 +18378,7 @@ function createGpmbWorkflow() {
   const conditions = {
     noCooperation: !!byId("gpmbWorkflowNoCooperation")?.checked,
     noHandover: !!byId("gpmbWorkflowNoHandover")?.checked,
+    resettlementRequired: !!byId("gpmbWorkflowResettlementRequired")?.checked,
   };
   const actor = currentActorInfo();
   const workflow = applyRecordAudit({
@@ -17713,6 +18387,7 @@ function createGpmbWorkflow() {
     projectId: project.id,
     projectName: project.name,
     startDate,
+    workflowVersion: 2,
     conditions,
     status: GPMB_WORKFLOW_ACTIVE,
     currentStepId: GPMB_WORKFLOW_TEMPLATE.find((step) => gpmbStepIsEnabled(step, conditions))?.id || "",
@@ -17738,6 +18413,7 @@ function openGpmbWorkflowDetailDialog(workflowId) {
   byId("gpmbWorkflowDetailMeta").textContent = `${workflow.projectName || "Chưa gắn dự án"} · Khởi tạo ${formatDate(workflow.startDate)} · ${gpmbWorkflowStatusLabel(workflow.status)}`;
   byId("gpmbWorkflowDetailNoCooperation").checked = workflow.conditions?.noCooperation === true;
   byId("gpmbWorkflowDetailNoHandover").checked = workflow.conditions?.noHandover === true;
+  byId("gpmbWorkflowDetailResettlementRequired").checked = workflow.conditions?.resettlementRequired === true;
   const canManage = canManageGpmbWorkflows() && workflow.status !== GPMB_WORKFLOW_COMPLETED;
   const canAdjustTimeline = canAdjustGpmbWorkflowTimeline();
   document.querySelectorAll(".gpmb-workflow-detail-manage").forEach((element) => element.classList.toggle("is-hidden", !canManage));
@@ -17756,16 +18432,33 @@ function closeGpmbWorkflowDetailDialog() {
 function renderGpmbWorkflowDetailSteps(workflow, canManage = false, canAdjustTimeline = false) {
   const container = byId("gpmbWorkflowDetailSteps");
   if (!container) return;
-  container.innerHTML = (workflow.steps || []).map((step) => {
-    const template = gpmbStepTemplateById(step.id);
-    const conditional = template?.activationKey ? ` · Chỉ khi ${gpmbWorkflowConditionLabel(template.activationKey)}` : "";
+  container.innerHTML = (workflow.steps || []).map((step, index, source) => {
+    const template = gpmbStepTemplateById(step.id, workflow);
+    const phaseHeading = template?.phase && source[index - 1]?.phase !== template.phase
+      ? `<h3 class="gpmb-workflow-phase-heading">Giai đoạn ${escapeHtml(template.phase)} · ${escapeHtml(template.phaseTitle)}</h3>`
+      : "";
+    const activationConditions = [template?.activationKey, template?.activationAlsoKey].filter(Boolean);
+    const conditional = activationConditions.length
+      ? `Chỉ khi ${gpmbWorkflowStepActivationLabel(template)}`
+      : "";
+    const stepDetails = [
+      template?.owner ? `Đơn vị thực hiện: ${template.owner}` : "",
+      template?.documents ? `Hồ sơ kèm theo: ${template.documents}` : "",
+      template?.deliverable ? `Sản phẩm: ${template.deliverable}` : "",
+      template?.legalBasis ? `Căn cứ: ${template.legalBasis}` : "",
+      template?.durationBasis === "source"
+        ? `Thời hạn theo Excel: ${template.timeRule}`
+        : `Thời lượng kế hoạch mặc định: ${step.days || template?.days || 1} ngày (Excel không quy định số ngày cụ thể).${template?.timeRule ? ` Ghi chú: ${template.timeRule}` : ""}`,
+      template?.notes ? `Ghi chú: ${template.notes}` : "",
+      template?.defaultSkipped ? "Bước được lưu theo tài liệu nhưng mặc định không thực hiện." : "",
+    ].filter(Boolean);
     const locked = !canManage || !!step.taskId || step.status === GPMB_STEP_COMPLETED;
     const timelineLocked = locked || !canAdjustTimeline;
     const collaborators = gpmbWorkflowCollaboratorIds(step.collaboratorIds, step.ownerId);
     const collaboratorSummary = collaborators.length ? `Đã chọn ${collaborators.length} người` : "Chọn người phối hợp";
-    return `<article class="gpmb-workflow-step-row is-${escapeHtml(step.status)}">
-      <div class="gpmb-workflow-step-number">${gpmbWorkflowStepLabel(step).replace("Bước ", "")}</div>
-      <div class="gpmb-workflow-step-summary"><strong>${escapeHtml(step.title)}</strong><small>${escapeHtml(step.documents)}${escapeHtml(conditional)}</small></div>
+    return `${phaseHeading}<article class="gpmb-workflow-step-row is-${escapeHtml(step.status)}">
+      <div class="gpmb-workflow-step-number">${escapeHtml(gpmbWorkflowStepLabel(step).replace("Bước ", ""))}</div>
+      <div class="gpmb-workflow-step-summary"><strong>${escapeHtml(step.title)}</strong><small>${escapeHtml(conditional || step.documents || "")}</small>${stepDetails.length ? `<details><summary>Hồ sơ, sản phẩm, căn cứ và ghi chú</summary><div>${stepDetails.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}</div></details>` : ""}</div>
       <label>Phụ trách<select data-gpmb-step-owner="${escapeHtml(step.id)}" ${locked ? "disabled" : ""}>${gpmbWorkflowActivePeopleOptions(step.ownerId)}</select></label>
       <div class="gpmb-workflow-step-collaborators${locked ? " is-locked" : ""}"><span>Phối hợp</span><details><summary>${escapeHtml(collaboratorSummary)}</summary><div class="checkbox-list">${gpmbWorkflowCollaboratorCheckboxes(collaborators, step.ownerId, `data-gpmb-step-collaborator="${escapeHtml(step.id)}"`, locked)}</div></details></div>
       <label>Bắt đầu<input type="date" data-gpmb-step-start="${escapeHtml(step.id)}" value="${escapeHtml(step.startDate)}" ${timelineLocked ? "disabled" : ""}></label>
@@ -17782,13 +18475,14 @@ function saveGpmbWorkflowDetail() {
   const conditions = {
     noCooperation: !!byId("gpmbWorkflowDetailNoCooperation")?.checked,
     noHandover: !!byId("gpmbWorkflowDetailNoHandover")?.checked,
+    resettlementRequired: !!byId("gpmbWorkflowDetailResettlementRequired")?.checked,
   };
   const steps = (workflow.steps || []).map((step, index, source) => {
-    const template = gpmbStepTemplateById(step.id);
+    const template = gpmbStepTemplateById(step.id, workflow);
     if (step.taskId || step.status === GPMB_STEP_COMPLETED) return { ...step };
     const enabled = gpmbStepIsEnabled(template, conditions);
     if (!enabled) return { ...step, status: GPMB_STEP_SKIPPED, startDate: "", due: "", taskId: "" };
-    const previous = source.slice(0, index).filter((item) => gpmbStepIsEnabled(gpmbStepTemplateById(item.id), conditions)).at(-1);
+    const previous = source.slice(0, index).filter((item) => gpmbStepIsEnabled(gpmbStepTemplateById(item.id, workflow), conditions)).at(-1);
     const minimum = previous?.due ? addDaysToIsoDate(previous.due, 1) : workflow.startDate;
     const requestedStart = canAdjustTimeline
       ? gpmbIsoDate(document.querySelector(`[data-gpmb-step-start="${step.id}"]`)?.value) || minimum
@@ -17813,7 +18507,7 @@ function saveGpmbWorkflowDetail() {
     };
   });
   const index = state.gpmbWorkflows.findIndex((item) => item.id === workflow.id);
-  state.gpmbWorkflows[index] = applyRecordAudit({ ...workflow, conditions, steps }, workflow);
+  state.gpmbWorkflows[index] = applyRecordAudit({ ...workflow, workflowVersion: workflow.workflowVersion || 1, conditions, steps }, workflow);
   if (!usingSupabaseSync()) ensureGpmbWorkflowProgressionLocally(workflow.id);
   logActivity({ action: "Điều chỉnh quy trình GPMB", module: "Công việc", targetType: "gpmb-workflow", targetId: workflow.id, detail: workflow.title });
   saveState();
@@ -17910,6 +18604,47 @@ function openNewTaskFormDialog() {
   resetTaskForm();
   showTaskFormDialog();
 }
+
+window.virtualAssistantApplyTaskDraft = (draft = {}) => {
+  if (!canCreateRegularTasks() || !byId("taskFormDialog") || byId("taskFormDialog").classList.contains("is-hidden")) return false;
+  const title = byId("taskTitle");
+  title.value = String(draft.title || "").trim();
+  title.dispatchEvent(new Event("input", { bubbles: true }));
+  const projectSelect = byId("taskProjectId");
+  if (draft.projectId && Array.from(projectSelect.options).some((option) => option.value === String(draft.projectId))) {
+    projectSelect.value = String(draft.projectId);
+    projectSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  const ownerSelect = byId("taskOwner");
+  if (draft.ownerId && canCreateRegularTaskForPerson(String(draft.ownerId))
+    && Array.from(ownerSelect.options).some((option) => option.value === String(draft.ownerId))) {
+    ownerSelect.value = String(draft.ownerId);
+    ownerSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))
+    && Number.isFinite(new Date(String(value) + "T00:00:00").getTime());
+  if (validDate(draft.startDate)) byId("taskStartDate").value = draft.startDate;
+  if (validDate(draft.due)) byId("taskDue").value = draft.due;
+  return true;
+};
+
+window.virtualAssistantApplyProgressDraft = (draft = {}) => {
+  const task = state.tasks.find((item) => String(item.id) === String(draft.taskId || ""));
+  if (!task || !canOpenTask(task) || !canUpdateTaskProgress(task)
+    || Number(task.progress || 0) !== Number(draft.currentProgress)) return false;
+  const nextProgress = Number(draft.nextProgress);
+  if (!Number.isInteger(nextProgress) || nextProgress < 0 || nextProgress > 100) return false;
+  openTaskDetailDialog(task.id);
+  const reportButton = byId("taskDetailActions").querySelector('[data-task-detail-action="report"]');
+  if (!reportButton) return false;
+  reportButton.click();
+  const input = byId(isAssignedTask(task) ? "assignmentTaskProgress" : "taskProgress");
+  if (!input || input.disabled) return false;
+  input.value = String(nextProgress);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  return true;
+};
 
 function syncPersonFormDialogHeading() {
   byId("personFormDialogTitle").textContent = byId("personId").value ? "Cập nhật nhân sự" : "Thêm nhân sự";
@@ -18838,6 +19573,7 @@ function renderAll(options = {}) {
   applySystemCustomization();
   const viewId = applyAccessControls();
   if (!currentAccount()) return;
+  renderLunaAnnouncementTargetOptions();
   if (repairInvalidTaskCompletionStates()) saveState();
   ensureRecurringTasksForPeriod();
   byId("activePeriod").value = state.activePeriod;
@@ -18871,6 +19607,7 @@ function handoverRecurringSourcesForPerson(personId) {
     taskOwnerPersonId(task) === String(personId || "")
     && normalizeTaskKind(task) === TASK_KIND_REGULAR
     && !task.recurrenceSourceId
+    && !task.recurrenceStoppedAt
     && normalizeTaskRecurrence(task) !== TASK_RECURRENCE_NONE
   ));
 }
@@ -19274,6 +20011,7 @@ byId("loginForm").addEventListener("submit", async (event) => {
 byId("logoutButton").addEventListener("click", () => {
   logoutSharedSession();
   localStorage.removeItem(SESSION_KEY);
+  window.virtualAssistantSyncAccount?.();
   renderAll();
 });
 
@@ -20244,6 +20982,7 @@ byId("personDepartment").addEventListener("change", () => {
 });
 byId("personRole").addEventListener("change", () => updatePersonSectionHeadOptions());
 byId("personSearch").addEventListener("input", debounce(renderPeopleTable, 200));
+byId("peopleDepartmentFilter").addEventListener("change", renderPeopleTable);
 byId("clearPersonSearch").addEventListener("click", () => {
   byId("personSearch").value = "";
   renderPeopleTable();
@@ -20493,8 +21232,8 @@ byId("accountForm").addEventListener("submit", (event) => {
 });
 
 byId("resetAccountForm").addEventListener("click", resetAccountForm);
-byId("changePasswordButton")?.addEventListener("click", openOwnPasswordChangeDialog);
-byId("mobileChangePasswordButton")?.addEventListener("click", openOwnPasswordChangeDialog);
+byId("accountChangePasswordButton")?.addEventListener("click", openOwnPasswordChangeDialog);
+byId("accountChangePasswordFallback")?.addEventListener("click", openOwnPasswordChangeDialog);
 byId("changePasswordForm")?.addEventListener("submit", submitOwnPasswordChange);
 byId("changePasswordClose")?.addEventListener("click", closeOwnPasswordChangeDialog);
 byId("cancelPasswordChange")?.addEventListener("click", closeOwnPasswordChangeDialog);
@@ -20561,6 +21300,23 @@ byId("moduleAccessList").addEventListener("change", (event) => {
   renderAll();
 });
 
+byId("systemLunaEnabled").addEventListener("change", (event) => {
+  if (!isAdmin()) return;
+  state.systemCustomization = normalizeSystemCustomization(state.systemCustomization);
+  const enabled = Boolean(event.target.checked);
+  state.systemCustomization.lunaEnabled = enabled;
+  logActivity({
+    action: "Cập nhật",
+    module: "Cấu hình hệ thống",
+    targetType: "lunaVisibility",
+    targetId: enabled ? "enabled" : "disabled",
+    title: "Hiển thị trợ lý Luna",
+    details: enabled ? "Bật Luna trên toàn hệ thống" : "Tắt Luna trên toàn hệ thống",
+  });
+  saveState();
+  renderAll();
+});
+
 byId("systemThemePreset").addEventListener("change", updateSystemThemeFormState);
 ["systemThemeCustomName", "systemThemePrimary", "systemThemePrimaryDark", "systemThemeAccent", "systemThemeBackground"].forEach((id) => {
   byId(id).addEventListener("input", updateSystemThemeFormState);
@@ -20592,6 +21348,190 @@ byId("systemThemeForm").addEventListener("submit", (event) => {
 });
 
 byId("accountSearch").addEventListener("input", debounce(renderAccountTable, 160));
+byId("accountDirectoryDepartmentFilter").addEventListener("change", renderAccountTable);
+
+function bindAccessibleTablist(tablist, tabAttribute) {
+  if (!tablist) return;
+  const selector = `[${tabAttribute}]`;
+  const activateTab = (selectedTab) => {
+    tablist.querySelectorAll(selector).forEach((tab) => {
+      const active = tab === selectedTab;
+      tab.classList.toggle("is-active", active);
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      const panel = byId(tab.getAttribute(tabAttribute));
+      panel?.classList.toggle("is-hidden", !active);
+      panel?.setAttribute("aria-hidden", String(!active));
+      if (panel) panel.inert = !active;
+    });
+  };
+
+  tablist.addEventListener("click", (event) => {
+    const selectedTab = event.target.closest(selector);
+    if (selectedTab && tablist.contains(selectedTab)) activateTab(selectedTab);
+  });
+  tablist.addEventListener("keydown", (event) => {
+    const tabs = [...tablist.querySelectorAll(selector)];
+    const currentIndex = tabs.indexOf(event.target.closest(selector));
+    if (currentIndex < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const nextIndex = event.key === "Home" ? 0
+      : event.key === "End" ? tabs.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+    tabs[nextIndex].click();
+    tabs[nextIndex].focus();
+  });
+}
+
+bindAccessibleTablist(document.querySelector(".account-task-stats-tablist"), "data-account-task-tab");
+bindAccessibleTablist(document.querySelector(".account-usage-tablist"), "data-account-usage-tab");
+
+function renderLunaAnnouncementTargetOptions() {
+  const select = byId("lunaAnnouncementDepartments");
+  if (!select || !isAdmin()) return;
+  const selected = new Set(Array.from(select.selectedOptions || []).map((option) => option.value));
+  select.innerHTML = (state.departments || []).slice()
+    .sort((left, right) => String(left.name || "").localeCompare(String(right.name || ""), "vi"))
+    .map((department) => '<option value="' + escapeHtml(department.id) + '"' + (selected.has(String(department.id)) ? " selected" : "")
+      + ">" + escapeHtml(department.name || "Phòng chưa đặt tên") + "</option>").join("");
+}
+
+function lunaAnnouncementAudienceText(departmentIds, roleIds) {
+  const departments = (state.departments || []).filter((department) => departmentIds.includes(String(department.id))).map((department) => department.name);
+  const roleLabels = { admin: "Admin", director: "Ban giám đốc", manager: "Trưởng phòng", deputy_manager: "Phó phòng", section_head: "Trưởng bộ phận/Trưởng nhóm", employee: "Nhân viên" };
+  const parts = [];
+  if (departments.length) parts.push("phòng " + departments.join(", "));
+  if (roleIds.length) parts.push("nhóm " + roleIds.map((role) => roleLabels[role] || role).join(", "));
+  return parts.length ? parts.join(" và ") : "toàn Ban";
+}
+
+function renderLunaAnnouncementReceiptResults(payload) {
+  const container = byId("lunaAnnouncementReceiptResults");
+  if (!container) return;
+  container.classList.remove("is-hidden");
+  if (Array.isArray(payload && payload.announcements)) {
+    container.innerHTML = payload.announcements.length
+      ? payload.announcements.map((item) => '<article class="assistant-announcement-receipt"><span><strong>' + escapeHtml(item.message || "Thông điệp Luna") + "</strong><br>"
+        + escapeHtml((item.readCount || 0) + "/" + (item.recipientCount || 0) + " đã xem · " + (item.scheduledAt ? new Date(item.scheduledAt).toLocaleString("vi-VN") : new Date(item.createdAt).toLocaleString("vi-VN")))
+        + '</span><button type="button" data-luna-receipt-id="' + escapeHtml(item.announcementId) + '">Chi tiết</button></article>').join("")
+      : "Chưa có thông điệp nào để tra cứu.";
+    return;
+  }
+  const recipients = Array.isArray(payload && payload.recipients) ? payload.recipients : [];
+  container.innerHTML = "<strong>" + escapeHtml((payload.readCount || 0) + "/" + (payload.recipientCount || 0) + " tài khoản đã xem") + "</strong>"
+    + recipients.map((item) => '<div class="assistant-announcement-receipt"><span>' + escapeHtml(item.displayName || "Tài khoản") + "<br>"
+      + escapeHtml([item.department, item.role, item.readAt ? "Đã xem" : "Chưa xem"].filter(Boolean).join(" · "))
+      + "</span><span>" + escapeHtml(item.readAt ? new Date(item.readAt).toLocaleString("vi-VN") : "Chưa xem") + "</span></div>").join("");
+}
+
+async function loadLunaAnnouncementReceipts(announcementId = "") {
+  const status = byId("lunaAnnouncementStatus");
+  if (!isAdmin()) return;
+  if (!usingSupabaseSync() || !sharedSync.session) {
+    status.textContent = "Tra cứu lượt xem cần hệ thống online.";
+    return;
+  }
+  status.textContent = "Đang tải trạng thái đã xem…";
+  try {
+    const { response, payload } = await sharedJsonRequest("luna-announcement-receipts", { method: "GET", query: announcementId ? { announcementId } : {} });
+    if (!response.ok) throw new Error(payload && payload.error || "Không tải được trạng thái người nhận.");
+    renderLunaAnnouncementReceiptResults(payload);
+    status.textContent = "";
+  } catch (error) {
+    byId("lunaAnnouncementReceiptResults").classList.add("is-hidden");
+    status.textContent = error && error.message || "Không tải được trạng thái người nhận.";
+  }
+}
+
+byId("lunaAnnouncementReceipts").addEventListener("click", () => loadLunaAnnouncementReceipts());
+byId("lunaAnnouncementReceiptResults").addEventListener("click", (event) => {
+  const announcementId = event.target.closest("[data-luna-receipt-id]") && event.target.closest("[data-luna-receipt-id]").dataset.lunaReceiptId;
+  if (announcementId) loadLunaAnnouncementReceipts(announcementId);
+});
+
+byId("assistantAnnouncementToggle").addEventListener("click", (event) => {
+  if (!isAdmin()) return;
+  const toggle = event.currentTarget;
+  const composer = byId("assistantAnnouncementComposer");
+  const isOpen = !composer.classList.contains("is-hidden");
+  composer.classList.toggle("is-hidden", isOpen);
+  toggle.setAttribute("aria-expanded", String(!isOpen));
+  if (!isOpen) {
+    renderLunaAnnouncementTargetOptions();
+    byId("lunaAnnouncementMessage").focus();
+  }
+});
+
+byId("lunaAnnouncementForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const messageInput = byId("lunaAnnouncementMessage");
+  const status = byId("lunaAnnouncementStatus");
+  const submitButton = byId("lunaAnnouncementSubmit");
+  const message = String(messageInput.value || "").trim();
+  const departmentIds = Array.from(byId("lunaAnnouncementDepartments").selectedOptions).map((option) => option.value).filter(Boolean);
+  const roleIds = Array.from(byId("lunaAnnouncementRoles").selectedOptions).map((option) => option.value).filter(Boolean);
+  const scheduledLocal = byId("lunaAnnouncementSchedule").value;
+  const scheduledDate = scheduledLocal ? new Date(scheduledLocal) : null;
+  if (scheduledLocal && (!scheduledDate || !Number.isFinite(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now())) {
+    status.textContent = "Thời điểm phát phải ở tương lai.";
+    byId("lunaAnnouncementSchedule").focus();
+    return;
+  }
+  const scheduledAt = scheduledDate ? scheduledDate.toISOString() : "";
+  if (!isAdmin()) {
+    status.textContent = "Chỉ admin mới có quyền gửi thông điệp toàn Ban.";
+    return;
+  }
+  if (!message || message.length > 1200) {
+    status.textContent = "Nội dung bắt buộc và không được vượt quá 1.200 ký tự.";
+    messageInput.focus();
+    return;
+  }
+  if (!usingSupabaseSync() || !sharedSync.session) {
+    status.textContent = "Cần đăng nhập hệ thống online để gửi thông điệp toàn Ban.";
+    return;
+  }
+  if (sharedSync.lunaBroadcastSupported !== true) {
+    status.textContent = "Máy chủ chưa hỗ trợ phát thông điệp Realtime. Cần cập nhật Edge Function và migration trước khi gửi.";
+    return;
+  }
+
+  const audience = lunaAnnouncementAudienceText(departmentIds, roleIds);
+  const confirmation = "Gửi thông điệp đến " + audience + (scheduledAt ? " vào " + scheduledDate.toLocaleString("vi-VN") : " ngay") + "?";
+  if (!window.confirm(confirmation)) return;
+  const requestBody = { message, departmentIds, roleIds, scheduledAt };
+  const fingerprint = JSON.stringify(requestBody);
+  if (!lunaAnnouncementPendingId || lunaAnnouncementPendingFingerprint !== fingerprint) {
+    lunaAnnouncementPendingId = window.crypto.randomUUID();
+    lunaAnnouncementPendingFingerprint = fingerprint;
+  }
+  submitButton.disabled = true;
+  status.textContent = scheduledAt ? "Đang lưu lịch phát…" : "Đang lưu và phát thông điệp…";
+  try {
+    const { response, payload } = await sharedJsonRequest("luna-announcement", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ announcementId: lunaAnnouncementPendingId, ...requestBody }),
+    });
+    if (!response.ok) throw new Error(payload?.error || "Máy chủ không chấp nhận thông điệp.");
+    lunaAnnouncementLastId = lunaAnnouncementPendingId;
+    lunaAnnouncementPendingId = "";
+    lunaAnnouncementPendingFingerprint = "";
+    messageInput.value = "";
+    const recipientCount = Math.max(0, Number(payload?.recipientCount) || 0);
+    byId("lunaAnnouncementReceiptResults").classList.add("is-hidden");
+    status.textContent = scheduledAt
+      ? "Đã lên lịch phát tới " + recipientCount + " tài khoản " + audience + " lúc " + scheduledDate.toLocaleString("vi-VN") + "."
+      : payload?.realtimePublished === true
+        ? "Luna đã phát thông điệp tới " + recipientCount + " tài khoản " + audience + "."
+        : "Đã lưu cho " + recipientCount + " tài khoản; người đang online sẽ nhận khi đồng bộ lại.";
+    queueLunaAnnouncementRefresh();
+  } catch (error) {
+    status.textContent = error?.message || "Không gửi được thông điệp. Nội dung được giữ lại để thử lại.";
+  } finally {
+    submitButton.disabled = false;
+  }
+});
 
 byId("accountTable").addEventListener("click", (event) => {
   const editId = event.target.dataset.editAccount;
@@ -21321,6 +22261,10 @@ byId("taskDetailActions").addEventListener("click", (event) => {
   if (!action || !task) return;
   if (action === "cancel-edit") {
     openTaskDetailDialog(taskId);
+    return;
+  }
+  if (action === "stop-recurrence" && canStopTaskRecurrence(task)) {
+    void stopRecurringTask(taskId);
     return;
   }
   if (action === "edit" && canEditTaskDetails(task)) {
@@ -22304,6 +23248,7 @@ resetBulletinForm();
 resetArchiveForm();
 applySidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
 setupNotificationCenterEvents();
+setupLunaNotificationPreferences();
 renderAll();
 requestDurableBrowserStorage();
 migrateBulletinMediaToIndexedDb();

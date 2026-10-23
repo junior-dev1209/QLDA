@@ -249,7 +249,6 @@ function renderCalendarView() {
   });
   byId("calendarIcs").disabled = calendarUi.tab === "conclusions";
   byId("calendarReminderMinutes").value = String(calendarReminderMinutes());
-  byId("calendarEnableNotifications").textContent = typeof Notification !== "undefined" && Notification.permission === "granted" ? "Đã bật thông báo thiết bị" : "Bật thông báo thiết bị";
   calendarRenderRows();
   calendarRenderMobileRows();
 }
@@ -572,14 +571,6 @@ document.addEventListener("DOMContentLoaded", () => {
     try { localStorage.setItem(`calendar-reminder-minutes-${currentAccount()?.id || ""}`, byId("calendarReminderMinutes").value); }
     catch { alert("Không lưu được thiết lập nhắc trên thiết bị này."); }
     checkCalendarReminders();
-  });
-  byId("calendarEnableNotifications").addEventListener("click", async () => {
-    if (typeof Notification === "undefined") { alert("Trình duyệt này không hỗ trợ thông báo thiết bị. Nhắc lịch trong ứng dụng vẫn hoạt động."); return; }
-    try {
-      const result = await Notification.requestPermission();
-      if (result !== "granted") alert("Chưa có quyền thông báo thiết bị. Nhắc lịch trong ứng dụng vẫn hoạt động.");
-    } catch { alert("Không thể bật thông báo thiết bị. Nhắc lịch trong ứng dụng vẫn hoạt động."); }
-    renderCalendarView();
   });
   byId("calendarDismissReminders").addEventListener("click", clearCalendarReminders);
   byId("calendarReminderList").addEventListener("click", (event) => {

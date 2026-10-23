@@ -1348,6 +1348,34 @@ select[multiple],
   font-weight: 650;
 }
 
+.account-password-fallback {
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.account-directory-filters {
+  display: flex;
+  justify-content: stretch;
+  min-width: 0;
+}
+
+.account-directory-filters label {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.luna-announcement-status {
+  align-self: center;
+  flex: 1 1 280px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
 h2,
 h3 {
   margin: 0;
@@ -3569,6 +3597,11 @@ h3 {
   background: #fff4d9;
 }
 
+.badge.neutral {
+  color: #566976;
+  background: #edf2f5;
+}
+
 .badge.bad {
   color: var(--bad);
   background: #fde8e6;
@@ -4132,6 +4165,42 @@ h3 {
   flex: 0 0 auto;
 }
 
+.system-luna-settings {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+}
+
+.system-luna-settings h3 {
+  margin: 0 0 4px;
+  color: var(--primary-dark);
+}
+
+.system-luna-settings .section-note {
+  margin: 0;
+}
+
+.system-luna-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.system-luna-toggle input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
 .system-theme-panel {
   display: grid;
   gap: 12px;
@@ -4358,6 +4427,13 @@ body.is-customization-resizing {
 
 .account-presence-head .eyebrow {
   margin-bottom: 4px;
+}
+
+.account-presence-tabs,
+.account-presence-tab-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
 }
 
 .account-presence-actions {
@@ -4617,6 +4693,57 @@ body.is-customization-resizing {
   gap: 10px;
 }
 
+.account-task-stats-tabs {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.account-task-stats-tablist,
+.account-usage-tablist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.account-usage-tablist {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 440px);
+}
+
+.account-task-stats-tab {
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 13px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.account-task-stats-tab:hover {
+  color: var(--primary-dark);
+  background: var(--surface-2);
+}
+
+.account-task-stats-tab.is-active,
+.account-task-stats-tab[aria-selected="true"] {
+  color: var(--primary-dark);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.account-task-stats-panel {
+  min-width: 0;
+}
+
 .account-task-creation-total {
   flex: 0 0 auto;
   color: var(--primary-dark);
@@ -4814,8 +4941,20 @@ body.is-customization-resizing {
 
 .account-admin-quick-tools {
   display: flex;
-  justify-content: flex-end;
+  justify-content: stretch;
+  min-width: 0;
+}
+
+.account-directory-toolbar {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(220px, 280px);
+  align-items: end;
+  gap: 12px;
   margin: 12px 0 8px;
+}
+
+.account-directory-toolbar:not(.has-account-search) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (max-width: 640px) {
@@ -4957,6 +5096,11 @@ body.is-customization-resizing {
   .account-search-field {
     width: 100%;
   }
+
+  .account-directory-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+  }
 }
 
 .custom-fields-container {
@@ -5042,6 +5186,11 @@ body.is-customization-resizing {
   .system-theme-form,
   .theme-color-fields {
     grid-template-columns: 1fr;
+  }
+
+  .system-luna-settings {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .system-theme-form .form-actions {
@@ -6222,6 +6371,27 @@ td:last-child {
   outline-offset: 2px;
 }
 
+.task-stop-recurrence-button {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid #c8d4dc;
+  border-radius: 7px;
+  background: #f5f8fa;
+  color: #405563;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.task-stop-recurrence-button:hover {
+  border-color: #aebfc9;
+  background: #eaf0f3;
+}
+
+.task-stop-recurrence-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, #405563 24%, transparent);
+  outline-offset: 2px;
+}
+
 .row-actions .task-icon-button,
 .task-detail-actions .task-icon-button {
   display: inline-flex;
@@ -6252,7 +6422,7 @@ td:last-child {
 
 .filter-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(160px, 200px);
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 220px) auto;
   gap: 12px;
 }
 
@@ -14549,6 +14719,9 @@ html.is-authenticated #loginScreen,
   box-shadow: 0 16px 42px rgba(15, 45, 58, 0.2);
 }
 
+.notification-center,
+.notification-quick-toasts { display: none !important; }
+
 .notification-center.is-hidden {
   display: none;
 }
@@ -14924,15 +15097,20 @@ html.is-authenticated #loginScreen,
 .gpmb-workflow-detail-form { display: grid; gap: 13px; }
 .gpmb-workflow-detail-options { display: flex; flex-wrap: wrap; gap: 9px 16px; align-items: center; padding: 10px 12px; border: 1px solid #dce7e9; background: #f8fbfb; }
 .gpmb-workflow-detail-options p { flex: 1 0 100%; margin: 0; color: #5f7780; font-size: 0.77rem; }
-.gpmb-workflow-detail-steps { display: grid; gap: 7px; }
-.gpmb-workflow-step-row { display: grid; grid-template-columns: 34px minmax(220px, 2fr) minmax(150px, 1.15fr) minmax(154px, 1.15fr) 125px 102px minmax(138px, 0.8fr); gap: 9px; align-items: center; padding: 10px; border: 1px solid #dce5e7; border-radius: 6px; background: #fff; }
+.gpmb-workflow-detail-steps { display: grid; gap: 7px; max-height: min(62vh, 680px); overflow: auto; align-content: start; padding-right: 4px; }
+.gpmb-workflow-phase-heading { grid-column: 1 / -1; position: sticky; top: 0; z-index: 2; margin: 8px 0 0; padding: 8px 10px; color: #174b5a; background: #eef6f7; border-left: 3px solid #278294; font-size: 0.84rem; }
+.gpmb-workflow-step-row { display: grid; grid-template-columns: 42px minmax(220px, 2fr) minmax(150px, 1.15fr) minmax(154px, 1.15fr) 125px 102px minmax(138px, 0.8fr); gap: 9px; align-items: center; padding: 10px; border: 1px solid #dce5e7; border-radius: 6px; background: #fff; }
 .gpmb-workflow-step-row.is-active { border-left: 3px solid #17829a; background: #f3fafb; }
 .gpmb-workflow-step-row.is-completed { background: #f7fbf9; }
 .gpmb-workflow-step-row.is-skipped { opacity: 0.72; background: #fbfbfa; }
-.gpmb-workflow-step-number { display: grid; place-items: center; width: 28px; height: 28px; color: #fff; background: #426b77; border-radius: 50%; font-size: 0.73rem; font-weight: 700; }
+.gpmb-workflow-step-number { display: grid; place-items: center; width: 38px; height: 28px; color: #fff; background: #426b77; border-radius: 5px; font-size: 0.7rem; font-weight: 700; }
 .gpmb-workflow-step-summary { display: grid; gap: 3px; min-width: 0; }
 .gpmb-workflow-step-summary strong { color: #173b48; font-size: 0.8rem; line-height: 1.35; }
 .gpmb-workflow-step-summary small { color: #637c85; font-size: 0.71rem; line-height: 1.35; }
+.gpmb-workflow-step-summary details { color: #506b74; font-size: 0.72rem; line-height: 1.4; }
+.gpmb-workflow-step-summary details summary { width: fit-content; color: #0d6576; cursor: pointer; font-weight: 700; }
+.gpmb-workflow-step-summary details div { margin-top: 5px; padding: 7px 9px; background: #f4f8f8; border-left: 2px solid #4191a0; }
+.gpmb-workflow-step-summary details p { margin: 2px 0; white-space: pre-wrap; }
 .gpmb-workflow-step-row label { display: grid; gap: 4px; color: #52707a; font-size: 0.69rem; font-weight: 700; }
 .gpmb-workflow-step-row label select, .gpmb-workflow-step-row label input { min-width: 0; min-height: 32px; padding: 5px 7px; font-size: 0.76rem; }
 .gpmb-workflow-step-collaborators { display: grid; gap: 4px; color: #52707a; font-size: 0.69rem; font-weight: 700; }
@@ -14951,7 +15129,7 @@ html.is-authenticated #loginScreen,
 .gpmb-workflow-step-state small { color: #607984; font-size: 0.7rem; line-height: 1.3; }
 
 @media (max-width: 1000px) {
-  .gpmb-workflow-step-row { grid-template-columns: 34px minmax(0, 1fr) minmax(160px, 1fr) minmax(130px, 0.8fr); }
+  .gpmb-workflow-step-row { grid-template-columns: 42px minmax(0, 1fr) minmax(160px, 1fr) minmax(130px, 0.8fr); }
   .gpmb-workflow-step-row > label:nth-of-type(2), .gpmb-workflow-step-row > label:nth-of-type(3), .gpmb-workflow-step-collaborators, .gpmb-workflow-step-state { grid-column: span 1; }
 }
 
@@ -14960,7 +15138,7 @@ html.is-authenticated #loginScreen,
   .gpmb-workflow-policy span + span { border-top: 1px solid #d7e4e6; border-left: 0; }
   .gpmb-workflow-manager-head-actions { width: 100%; }
   .gpmb-workflow-manager-head-actions button { flex: 1 1 0; min-width: 0; }
-  .gpmb-workflow-step-row { grid-template-columns: 31px minmax(0, 1fr); gap: 8px; }
+  .gpmb-workflow-step-row { grid-template-columns: 42px minmax(0, 1fr); gap: 8px; }
   .gpmb-workflow-step-summary { grid-column: 2; }
   .gpmb-workflow-step-row label, .gpmb-workflow-step-collaborators, .gpmb-workflow-step-state { grid-column: span 2; }
   .gpmb-workflow-step-row label { grid-template-columns: 102px minmax(0, 1fr); align-items: center; }

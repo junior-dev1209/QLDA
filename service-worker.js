@@ -1,17 +1,33 @@
-const RELEASE_VERSION = "3.4.14";
-const CACHE_NAME = "phuc-thinh-kpi-v3414";
+const RELEASE_VERSION = "3.4.64";
+const CACHE_NAME = "phuc-thinh-kpi-v3464";
 const APP_SHELL = [
   "index.html",
   "styles.css",
   "work-calendar.css",
   "work-calendar.js",
+  "virtual-assistant.css",
+  "virtual-assistant.js",
   "auth-bootstrap.js",
   "people-data.js",
+  "gpmb-workflow-data.js",
   "supabase-config.js",
   "script.js",
   "manifest.webmanifest",
   "app-icon-phuc-thinh.png",
   "assets/notification-bell-glass.png",
+  "assets/virtual-assistant.png",
+  "assets/luna-outfit-field.png",
+  "assets/luna-outfit-aodai-red.png",
+  "assets/luna-outfit-aodai-heritage.png",
+  "assets/luna-flower.webp",
+  "assets/luna-cake.webp",
+  "assets/luna-notes.webp",
+  "assets/luna-research.webp",
+  "assets/luna-happy.webp",
+  "assets/luna-outfit-festival.webp",
+  "assets/luna-outfit-rose.webp",
+  "assets/luna-outfit-heritage.webp",
+  "assets/luna-outfit-anniversary.webp",
 ].map((asset) => `./${asset}?v=${encodeURIComponent(RELEASE_VERSION)}`);
 const APP_SHELL_URLS = new Set(APP_SHELL.map((asset) => new URL(asset, self.registration.scope).href));
 const NAVIGATION_FALLBACK = new URL(APP_SHELL[0], self.registration.scope).href;

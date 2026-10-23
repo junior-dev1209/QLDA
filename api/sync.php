@@ -5,6 +5,7 @@ const PASSWORD_HASH_ALGORITHM = 'pbkdf2-sha256-v1';
 const PASSWORD_HASH_ITERATIONS = 310000;
 const PASSWORD_SALT_BYTES = 16;
 const PASSWORD_HASH_BYTES = 32;
+const SYNC_DEPLOYMENT_VERSION = '2026.10.20.1';
 
 /*
  * Shared state API for the Phuc Thinh workforce application.
@@ -54,6 +55,7 @@ if ($action === 'status') {
         'initialized' => $snapshot['revision'] > 0,
         'revision' => $snapshot['revision'],
         'updatedAt' => $snapshot['updatedAt'],
+        'deploymentVersion' => SYNC_DEPLOYMENT_VERSION,
     ]);
 }
 
@@ -88,6 +90,64 @@ if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         'updatedAt' => $snapshot['updatedAt'],
         'state' => sanitizedState($snapshot['state']),
     ]);
+}
+
+if ($action === 'change-password' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $payload = readJsonBody();
+    $currentPassword = (string) ($payload['currentPassword'] ?? '');
+    $newPassword = (string) ($payload['newPassword'] ?? '');
+    $newPasswordLength = function_exists('mb_strlen') ? mb_strlen($newPassword, 'UTF-8') : strlen($newPassword);
+    if ($currentPassword === '' || $newPassword === '' || $newPasswordLength > 128 || strlen($newPassword) > 512) {
+        respond(['error' => 'A current password and a new password of at most 128 characters are required.'], 422);
+    }
+
+    $lock = fopen($lockFile, 'c+');
+    if ($lock === false) {
+        respond(['error' => 'Cannot lock shared state.'], 503);
+    }
+    $locked = flock($lock, LOCK_EX);
+    if (!$locked) {
+        fclose($lock);
+        respond(['error' => 'Cannot lock shared state.'], 503);
+    }
+
+    $responsePayload = [];
+    $responseStatus = 200;
+    try {
+        $snapshot = readSnapshot($stateFile);
+        $actorId = (string) ($_SESSION['accountId'] ?? '');
+        $accountIndex = null;
+        foreach (($snapshot['state']['accounts'] ?? []) as $index => $candidate) {
+            if ($actorId !== '' && is_array($candidate) && hash_equals((string) ($candidate['id'] ?? ''), $actorId)) {
+                $accountIndex = $index;
+                break;
+            }
+        }
+        if ($accountIndex === null) {
+            $responsePayload = ['error' => 'Authentication required.'];
+            $responseStatus = 401;
+        } else {
+            $account = $snapshot['state']['accounts'][$accountIndex];
+            if (!empty($account['disabled'])) {
+                $responsePayload = ['error' => 'Authentication required.'];
+                $responseStatus = 401;
+            } elseif (!accountPasswordMatches($account, $currentPassword)) {
+                $responsePayload = ['error' => 'Current password is incorrect.'];
+                $responseStatus = 400;
+            } else {
+                setAccountPasswordCredential($account, $newPassword);
+                $snapshot['state']['accounts'][$accountIndex] = $account;
+                $snapshot['revision'] = max(0, (int) $snapshot['revision']) + 1;
+                $snapshot['updatedAt'] = gmdate('c');
+                writeSnapshot($stateFile, $snapshot);
+                $responsePayload = ['ok' => true, 'revision' => $snapshot['revision'], 'updatedAt' => $snapshot['updatedAt']];
+            }
+        }
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+    respond($responsePayload, $responseStatus);
 }
 
 if ($action === 'logout' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -164,6 +224,49 @@ if ($action === 'state' && in_array($_SERVER['REQUEST_METHOD'], ['PUT', 'POST'],
     respond($responsePayload, $responseStatus);
 }
 
+if ($action === 'stop-recurring-task' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $payload = readJsonBody();
+    $taskId = trim((string) ($payload['taskId'] ?? ''));
+    if ($taskId === '' || strlen($taskId) > 128) {
+        respond(['error' => 'Invalid recurring task reference.'], 422);
+    }
+    $actor = requireSessionAccount($stateFile);
+    $lock = fopen($lockFile, 'c+');
+    if ($lock === false || !flock($lock, LOCK_EX)) {
+        if (is_resource($lock)) fclose($lock);
+        respond(['error' => 'Cannot lock shared state.'], 503);
+    }
+
+    $responsePayload = [];
+    $responseStatus = 200;
+    try {
+        $current = readSnapshot($stateFile);
+        $actor = requireSessionAccountFromState($current['state']);
+        $result = stopRecurringTaskInState($current['state'], $actor, $taskId);
+        if (isset($result['error'])) {
+            $responsePayload = ['error' => $result['error']];
+            $responseStatus = (int) ($result['status'] ?? 403);
+        } else {
+            $nextSnapshot = [
+                'revision' => $current['revision'] + 1,
+                'updatedAt' => gmdate('c'),
+                'state' => $result['state'],
+            ];
+            writeSnapshot($stateFile, $nextSnapshot);
+            $responsePayload = [
+                'revision' => $nextSnapshot['revision'],
+                'updatedAt' => $nextSnapshot['updatedAt'],
+                'state' => sanitizedState($nextSnapshot['state']),
+                'stoppedOccurrences' => $result['stoppedOccurrences'],
+            ];
+        }
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+    respond($responsePayload, $responseStatus);
+}
+
 if ($action === 'file' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     requireSessionAccount($stateFile);
     $key = safeFileKey((string) ($_POST['key'] ?? ''));
@@ -212,6 +315,163 @@ if ($action === 'file' && $_SERVER['REQUEST_METHOD'] === 'DELETE') {
 }
 
 respond(['error' => 'Unknown endpoint.'], 404);
+
+function stopRecurringTaskInState(array $state, array $actor, string $taskId): array
+{
+    $tasks = is_array($state['tasks'] ?? null) ? $state['tasks'] : [];
+    $clicked = null;
+    foreach ($tasks as $task) {
+        if (is_array($task) && (string) ($task['id'] ?? '') === $taskId) {
+            $clicked = $task;
+            break;
+        }
+    }
+    if (!$clicked) return ['error' => 'The recurring task was not found.', 'status' => 404];
+
+    $sourceId = trim((string) ($clicked['recurrenceSourceId'] ?? ''))
+        ?: trim((string) ($clicked['recurrenceSeriesId'] ?? ''))
+        ?: trim((string) ($clicked['id'] ?? ''));
+    $source = null;
+    foreach ($tasks as $task) {
+        if (!is_array($task) || !empty($task['recurrenceSourceId'])) continue;
+        if ((string) ($task['id'] ?? '') === $sourceId || phpTaskRecurrenceSeriesKey($task) === phpTaskRecurrenceSeriesKey($clicked)) {
+            $source = $task;
+            break;
+        }
+    }
+    if (!$source || !phpTaskHasRecurrence($source) || !empty($source['recurrenceStoppedAt'])) {
+        return ['error' => 'This recurring series is already stopped or no longer active.', 'status' => 409];
+    }
+    if (!phpCanStopRecurringSeries($state, $actor, $source)) {
+        return ['error' => 'Permission denied.', 'status' => 403];
+    }
+
+    $today = (new DateTimeImmutable('now', new DateTimeZone('Asia/Ho_Chi_Minh')))->format('Y-m-d');
+    $timestamp = gmdate('c');
+    $actorId = (string) ($actor['id'] ?? '');
+    $actorName = trim((string) ($actor['displayName'] ?? $actor['username'] ?? 'Tài khoản'));
+    $seriesKey = phpTaskRecurrenceSeriesKey($source);
+    $stoppedOccurrences = 0;
+    $updatedCount = 0;
+
+    foreach ($tasks as &$task) {
+        if (!is_array($task) || phpTaskRecurrenceSeriesKey($task) !== $seriesKey) continue;
+        $status = trim((string) ($task['status'] ?? 'Chuẩn bị thực hiện'));
+        $dueOrStart = trim((string) ($task['due'] ?? $task['startDate'] ?? ''));
+        $futureUnstarted = (string) ($task['id'] ?? '') !== (string) ($source['id'] ?? '')
+            && $dueOrStart > $today
+            && $status === 'Chuẩn bị thực hiện'
+            && (float) ($task['progress'] ?? 0) === 0.0;
+        $task['recurrenceStoppedAt'] = $timestamp;
+        $task['recurrenceStoppedById'] = $actorId;
+        $task['recurrenceStoppedByName'] = $actorName;
+        $task['recurrenceStopDate'] = $today;
+        $task['updatedAt'] = $timestamp;
+        $task['updatedBy'] = $actorName;
+        $task['updatedById'] = $actorId;
+        if ($futureUnstarted) {
+            $stoppedOccurrences++;
+            $task['status'] = 'Đã ngừng';
+            $reports = is_array($task['progressReports'] ?? null) ? $task['progressReports'] : [];
+            $reports[] = [
+                'id' => 'task-report-' . bin2hex(random_bytes(12)),
+                'progress' => 0,
+                'status' => 'Đã ngừng',
+                'previousStatus' => $status,
+                'action' => 'Dừng kỳ định kỳ',
+                'note' => 'Kỳ công việc được ngừng khi dừng chuỗi định kỳ từ ' . $today . '.',
+                'createdAt' => $timestamp,
+                'createdById' => $actorId,
+                'createdBy' => $actorName,
+            ];
+            $task['progressReports'] = $reports;
+        }
+        $updatedCount++;
+    }
+    unset($task);
+    $state['tasks'] = $tasks;
+
+    $owner = phpTaskPersonForReference($state, (string) ($source['ownerId'] ?? ''));
+    $activityLog = is_array($state['activityLog'] ?? null) ? $state['activityLog'] : [];
+    $activityLog[] = [
+        'id' => 'server-sync-' . bin2hex(random_bytes(12)),
+        'action' => 'Dừng định kỳ',
+        'module' => 'Công việc',
+        'targetType' => 'task-recurrence',
+        'targetId' => $seriesKey,
+        'personId' => (string) ($owner['id'] ?? $source['ownerId'] ?? ''),
+        'departmentId' => (string) ($owner['departmentId'] ?? ''),
+        'period' => substr((string) ($source['due'] ?? ''), 0, 7),
+        'title' => (string) ($source['title'] ?? 'Chuỗi công việc định kỳ'),
+        'details' => 'Đã dừng sinh kỳ mới; ' . $stoppedOccurrences . ' kỳ tương lai chưa bắt đầu được đánh dấu Đã ngừng. ' . $updatedCount . ' bản ghi trong chuỗi đã lưu dấu vết dừng.',
+        'createdAt' => $timestamp,
+        'createdBy' => $actorName,
+        'createdById' => $actorId,
+    ];
+    $state['activityLog'] = array_slice($activityLog, -5000);
+    return ['state' => $state, 'stoppedOccurrences' => $stoppedOccurrences];
+}
+
+function phpTaskRecurrenceSeriesKey(array $task): string
+{
+    return trim((string) ($task['recurrenceSeriesId'] ?? ''))
+        ?: trim((string) ($task['recurrenceSourceId'] ?? ''))
+        ?: trim((string) ($task['id'] ?? ''));
+}
+
+function phpTaskHasRecurrence(array $task): bool
+{
+    if (strtolower(trim((string) ($task['kind'] ?? 'regular'))) !== 'regular') return false;
+    $recurrence = strtolower(trim((string) ($task['recurrence'] ?? $task['periodicity'] ?? '')));
+    return in_array($recurrence, ['daily', 'weekly', 'monthly', 'quarterly', 'hàng ngày', 'hàng tuần', 'hàng tháng', 'hàng quý', 'hang ngay', 'hang tuan', 'hang thang', 'hang quy'], true);
+}
+
+function phpTaskPersonForReference(array $state, string $reference): ?array
+{
+    foreach (($state['people'] ?? []) as $person) {
+        if (is_array($person) && (string) ($person['id'] ?? '') === $reference) return $person;
+    }
+    foreach (($state['accounts'] ?? []) as $account) {
+        if (!is_array($account) || (string) ($account['id'] ?? '') !== $reference) continue;
+        $personId = (string) ($account['personId'] ?? '');
+        foreach (($state['people'] ?? []) as $person) {
+            if (is_array($person) && (string) ($person['id'] ?? '') === $personId) return $person;
+        }
+    }
+    return null;
+}
+
+function phpTaskResponsiblePerson(array $state, array $source, string $date): ?array
+{
+    $ownerReference = trim((string) ($source['ownerId'] ?? ''));
+    $history = is_array($source['recurrenceHandoverHistory'] ?? null) ? $source['recurrenceHandoverHistory'] : [];
+    usort($history, static fn($left, $right) => strcmp((string) ($left['effectiveDate'] ?? ''), (string) ($right['effectiveDate'] ?? '')));
+    foreach ($history as $entry) {
+        if (!is_array($entry) || (string) ($entry['effectiveDate'] ?? '') > $date || empty($entry['toPersonId'])) continue;
+        $ownerReference = (string) $entry['toPersonId'];
+    }
+    return phpTaskPersonForReference($state, $ownerReference);
+}
+
+function phpCanStopRecurringSeries(array $state, array $actor, array $source): bool
+{
+    $role = strtolower(trim((string) ($actor['role'] ?? '')));
+    if (in_array($role, ['admin', 'director'], true)) return true;
+    $today = (new DateTimeImmutable('now', new DateTimeZone('Asia/Ho_Chi_Minh')))->format('Y-m-d');
+    $owner = phpTaskResponsiblePerson($state, $source, $today);
+    if (!$owner) return false;
+    $actorPersonId = (string) ($actor['personId'] ?? '');
+    $actorPerson = phpTaskPersonForReference($state, (string) ($actor['id'] ?? ''));
+    if ($actorPersonId === '') $actorPersonId = (string) ($actorPerson['id'] ?? '');
+    if ($actorPersonId !== '' && $actorPersonId === (string) ($owner['id'] ?? '')) return true;
+    $positionId = strtolower((string) ($actorPerson['roleId'] ?? ''));
+    $managesDepartment = in_array($role, ['manager', 'deputy_manager'], true)
+        || str_starts_with($positionId, 'truong-phong-')
+        || str_starts_with($positionId, 'pho-phong-');
+    if (!$managesDepartment) return false;
+    $actorDepartment = (string) ($actor['departmentId'] ?? phpTaskPersonForReference($state, (string) ($actor['id'] ?? ''))['departmentId'] ?? '');
+    return $actorDepartment !== '' && $actorDepartment === (string) ($owner['departmentId'] ?? '');
+}
 
 function respond(array $payload, int $status = 200): void
 {
@@ -405,7 +665,7 @@ function passwordHashBytes(string $password, string $salt): string
 
 function accountPasswordMatches(array $account, string $password): bool
 {
-    if ($password === '' || strlen($password) > 256) {
+    if ($password === '' || strlen($password) > 512) {
         return false;
     }
     if (!hasPasswordHash($account)) {
@@ -421,7 +681,7 @@ function accountPasswordMatches(array $account, string $password): bool
 
 function setAccountPasswordCredential(array &$account, string $password): void
 {
-    if ($password === '' || strlen($password) > 256) {
+    if ($password === '' || strlen($password) > 512) {
         throw new InvalidArgumentException('A valid password is required.');
     }
     $salt = random_bytes(PASSWORD_SALT_BYTES);

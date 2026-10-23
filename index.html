@@ -6,17 +6,18 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.4.14">
+  <meta name="application-version" content="3.4.64">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
-  <link rel="manifest" href="manifest.webmanifest?v=3.4.14">
-  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.4.14" type="image/png">
-  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.4.14">
-  <script src="supabase-config.js?v=3.4.14"></script>
-  <script src="auth-bootstrap.js?v=3.4.14"></script>
-  <link rel="stylesheet" href="styles.css?v=3.4.14">
-  <link rel="stylesheet" href="work-calendar.css?v=3.4.14">
+  <link rel="manifest" href="manifest.webmanifest?v=3.4.64">
+  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.4.64" type="image/png">
+  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.4.64">
+  <script src="supabase-config.js?v=3.4.64"></script>
+  <script src="auth-bootstrap.js?v=3.4.64"></script>
+  <link rel="stylesheet" href="styles.css?v=3.4.64">
+  <link rel="stylesheet" href="work-calendar.css?v=3.4.64">
+  <link rel="stylesheet" href="virtual-assistant.css?v=3.4.64">
 </head>
 <body>
   <section id="loginScreen" class="login-screen">
@@ -38,7 +39,7 @@
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.4.14</strong>
+          <strong data-app-version>Phiên bản 3.4.64</strong>
         </p>
       </form>
     </div>
@@ -60,10 +61,9 @@
         <div class="user-chip-details">
           <strong id="currentUserLabel">Chưa đăng nhập</strong>
           <span id="currentUserMeta"></span>
-          <button id="changePasswordButton" class="account-password-action" type="button">Đổi mật khẩu</button>
         </div>
-        <button id="notificationBell" class="notification-bell" type="button" aria-label="Mở trung tâm thông báo" aria-haspopup="dialog" aria-expanded="false" title="Thông báo">
-          <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.14" alt="" aria-hidden="true" decoding="async">
+        <button id="notificationBell" class="notification-bell" type="button" aria-label="Mở thông báo của Luna" aria-haspopup="dialog" aria-expanded="false" title="Thông báo từ Luna">
+        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.64" alt="" aria-hidden="true" decoding="async">
           <span id="notificationUnreadCount" class="notification-bell-count is-hidden" aria-label="0 thông báo chưa đọc">0</span>
         </button>
       </div>
@@ -97,9 +97,6 @@
     </div>
     <p id="notificationCenterStatus" class="notification-center-status"></p>
     <div id="notificationCenterList" class="notification-center-list" aria-live="polite"></div>
-    <footer class="notification-center-foot">
-      <button id="notificationBrowserPermission" class="ghost" type="button">Bật thông báo trình duyệt</button>
-    </footer>
   </section>
 
   <section id="changePasswordDialog" class="modal-backdrop is-hidden" aria-hidden="true">
@@ -709,6 +706,7 @@
         </section>
         <div class="filter-row">
           <input id="personSearch" placeholder="Tìm kiếm nhân sự theo tên, phòng, vị trí, điện thoại, trình độ, địa chỉ...">
+          <select id="peopleDepartmentFilter" aria-label="Lọc nhân sự theo phòng"></select>
           <button id="clearPersonSearch" class="ghost" type="button">Xóa tìm kiếm</button>
         </div>
         <div id="peopleFilterNote" class="filter-note is-hidden">
@@ -759,8 +757,7 @@
               <button type="button" class="ghost calendar-icon" id="calendarNext" aria-label="Tuần sau" title="Tuần sau">›</button>
               <button type="button" class="ghost" id="calendarToday">Tuần này</button>
             </div>
-            <label class="calendar-reminder-setting">Nhắc trước<select id="calendarReminderMinutes"><option value="5">5 phút</option><option value="15" selected>15 phút</option><option value="30">30 phút</option><option value="60">1 giờ</option><option value="0">Tắt nhắc</option></select></label>
-            <button type="button" class="ghost" id="calendarEnableNotifications">Bật thông báo thiết bị</button>
+            <label class="calendar-reminder-setting">Trợ lý nhắc trước<select id="calendarReminderMinutes"><option value="5">5 phút</option><option value="15" selected>15 phút</option><option value="30">30 phút</option><option value="60">1 giờ</option><option value="0">Tắt nhắc</option></select></label>
             <details class="calendar-export"><summary>Xuất lịch</summary><div><button type="button" class="ghost" id="calendarExcel">Xuất Excel</button><button type="button" class="ghost" id="calendarIcs">Xuất lịch (.ics)</button></div></details>
           </div>
           <p id="calendarAvailability" class="calendar-notice is-hidden" role="status"></p>
@@ -1014,6 +1011,7 @@
             <option>Đang thực hiện</option>
             <option>Hoàn thành</option>
             <option>Quá hạn</option>
+            <option>Đã ngừng</option>
           </select>
           <label class="task-date-filter">Từ ngày
             <input id="taskDateFrom" type="date" aria-label="Lọc công việc từ ngày">
@@ -1263,6 +1261,17 @@
             <p class="section-note">Admin luôn có quyền quản trị toàn bộ hệ thống.</p>
           </div>
           <div id="moduleAccessList" class="module-access-list"></div>
+          <section class="system-luna-settings" aria-labelledby="systemLunaHeading">
+            <div>
+              <p class="eyebrow">Trợ lý ảo</p>
+              <h3 id="systemLunaHeading">Trợ lý Luna</h3>
+              <p class="section-note">Ẩn hoặc hiển thị Luna và các lời nhắc chủ động trên toàn hệ thống.</p>
+            </div>
+            <label class="system-luna-toggle" for="systemLunaEnabled">
+              <input id="systemLunaEnabled" type="checkbox">
+              <span>Hiển thị trợ lý Luna</span>
+            </label>
+          </section>
           <section id="systemThemePanel" class="system-theme-panel is-hidden">
             <div class="section-head system-theme-head">
               <div>
@@ -1311,7 +1320,7 @@
           <div class="section-head account-presence-head">
             <div>
               <p class="eyebrow">Giám sát sử dụng</p>
-              <h3>Tài khoản trực tuyến</h3>
+              <h3>Hoạt động tài khoản</h3>
             </div>
             <div class="account-presence-actions">
               <label class="account-usage-filter" for="accountUsageDepartmentFilter">
@@ -1323,109 +1332,128 @@
               <button id="refreshAccountPresence" class="ghost" type="button">Làm mới</button>
             </div>
           </div>
-          <p id="accountPresenceStatus" class="section-note"></p>
-          <div class="account-presence-metrics" aria-label="Thống kê đăng nhập">
-            <div>
-              <span>Đang trực tuyến</span>
-              <strong id="accountPresenceOnlineCount">-</strong>
+          <div class="account-presence-tabs">
+            <div class="account-usage-tablist" role="tablist" aria-label="Các chế độ giám sát sử dụng">
+              <button id="accountPresenceOnlineTab" class="account-task-stats-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="accountPresenceOnlinePanel" data-account-usage-tab="accountPresenceOnlinePanel">Tài khoản trực tuyến</button>
+              <button id="accountPresenceUsageTab" class="account-task-stats-tab" type="button" role="tab" aria-selected="false" aria-controls="accountPresenceUsagePanel" data-account-usage-tab="accountPresenceUsagePanel" tabindex="-1">Thống kê sử dụng</button>
             </div>
-            <div>
-              <span>Đăng nhập hôm nay</span>
-              <strong id="accountPresenceTodayCount">-</strong>
-            </div>
-            <div>
-              <span>Đăng nhập tháng này</span>
-              <strong id="accountPresenceMonthCount">-</strong>
-            </div>
-            <div>
-              <span>Lượt truy cập hôm nay</span>
-              <strong id="accountVisitTodayCount">-</strong>
-            </div>
-            <div>
-              <span>Lượt truy cập tháng này</span>
-              <strong id="accountVisitMonthCount">-</strong>
-            </div>
+            <section id="accountPresenceOnlinePanel" class="account-presence-tab-panel" role="tabpanel" aria-labelledby="accountPresenceOnlineTab">
+              <p id="accountPresenceStatus" class="section-note"></p>
+              <div class="account-presence-metrics" aria-label="Thống kê đăng nhập">
+                <div>
+                  <span>Đang trực tuyến</span>
+                  <strong id="accountPresenceOnlineCount">-</strong>
+                </div>
+                <div>
+                  <span>Đăng nhập hôm nay</span>
+                  <strong id="accountPresenceTodayCount">-</strong>
+                </div>
+                <div>
+                  <span>Đăng nhập tháng này</span>
+                  <strong id="accountPresenceMonthCount">-</strong>
+                </div>
+                <div>
+                  <span>Lượt truy cập hôm nay</span>
+                  <strong id="accountVisitTodayCount">-</strong>
+                </div>
+                <div>
+                  <span>Lượt truy cập tháng này</span>
+                  <strong id="accountVisitMonthCount">-</strong>
+                </div>
+              </div>
+              <div id="accountPresenceList" class="account-presence-list"></div>
+            </section>
+            <section id="accountPresenceUsagePanel" class="account-presence-tab-panel is-hidden" role="tabpanel" aria-labelledby="accountPresenceUsageTab" aria-hidden="true" inert>
+              <div class="account-usage-monitor-grid">
+                <section class="account-usage-card" aria-labelledby="accountInactiveDayTitle">
+                  <div class="account-usage-card-head">
+                    <div>
+                      <p class="eyebrow">Theo ngày</p>
+                      <h4 id="accountInactiveDayTitle">Chưa đăng nhập</h4>
+                    </div>
+                    <strong id="accountInactiveDayCount">-</strong>
+                  </div>
+                  <div id="accountInactiveDayList" class="account-usage-list"></div>
+                </section>
+                <section class="account-usage-card" aria-labelledby="accountInactiveWeekTitle">
+                  <div class="account-usage-card-head">
+                    <div>
+                      <p class="eyebrow">Theo tuần</p>
+                      <h4 id="accountInactiveWeekTitle">Chưa đăng nhập</h4>
+                    </div>
+                    <strong id="accountInactiveWeekCount">-</strong>
+                  </div>
+                  <div id="accountInactiveWeekList" class="account-usage-list"></div>
+                </section>
+                <section class="account-usage-card" aria-labelledby="accountInactiveMonthTitle">
+                  <div class="account-usage-card-head">
+                    <div>
+                      <p class="eyebrow">Theo tháng</p>
+                      <h4 id="accountInactiveMonthTitle">Chưa đăng nhập</h4>
+                    </div>
+                    <strong id="accountInactiveMonthCount">-</strong>
+                  </div>
+                  <div id="accountInactiveMonthList" class="account-usage-list"></div>
+                </section>
+              </div>
+              <section class="account-usage-history" aria-labelledby="accountUsageHistoryTitle">
+                <div class="account-usage-history-head">
+                  <div>
+                    <p class="eyebrow">Lượt truy cập</p>
+                    <h4 id="accountUsageHistoryTitle">Thống kê theo ngày và tháng</h4>
+                  </div>
+                  <span id="accountUsageHistoryStatus" class="muted"></span>
+                </div>
+                <section class="account-usage-visit-section" aria-labelledby="accountUsageDailyVisitTitle">
+                  <div class="account-usage-visit-section-head">
+                    <h5 id="accountUsageDailyVisitTitle">30 ngày gần nhất</h5>
+                    <span>Tổng hợp đăng nhập hợp lệ và phiên sử dụng đầu tiên trong ngày</span>
+                  </div>
+                  <div id="accountUsageDailyVisitHistory" class="account-usage-history-list account-usage-daily-visit-list"></div>
+                </section>
+                <section class="account-usage-visit-section" aria-labelledby="accountUsageMonthlyVisitTitle">
+                  <div class="account-usage-visit-section-head">
+                    <h5 id="accountUsageMonthlyVisitTitle">12 tháng gần nhất</h5>
+                    <span>Tổng hợp theo tháng</span>
+                  </div>
+                  <div id="accountUsageMonthlyHistory" class="account-usage-history-list"></div>
+                </section>
+              </section>
+            </section>
           </div>
-          <div id="accountPresenceList" class="account-presence-list"></div>
-          <section class="account-usage-history account-task-creation-stats" aria-labelledby="accountTaskCreationTitle">
-            <div class="account-usage-history-head">
-              <div>
-                <p class="eyebrow">Công việc</p>
-                <h4 id="accountTaskCreationTitle">Công việc đã tạo và liên quan theo tài khoản</h4>
-              </div>
-              <strong id="accountTaskCreationTotal" class="account-task-creation-total">-</strong>
+          <div class="account-task-stats-tabs">
+            <div class="account-task-stats-tablist" role="tablist" aria-label="Thống kê công việc theo tài khoản">
+              <button id="accountTaskCreationTab" class="account-task-stats-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="accountTaskCreationPanel" data-account-task-tab="accountTaskCreationPanel">Công việc</button>
+              <button id="accountTaskOverdueTab" class="account-task-stats-tab" type="button" role="tab" aria-selected="false" aria-controls="accountTaskOverduePanel" data-account-task-tab="accountTaskOverduePanel" tabindex="-1">Quá hạn</button>
             </div>
-            <div id="accountTaskCreationList" class="account-task-creation-list"></div>
-          </section>
-          <section class="account-usage-history account-task-overdue-stats" aria-labelledby="accountTaskOverdueTitle">
-            <div class="account-usage-history-head">
-              <div>
-                <p class="eyebrow">Công việc quá hạn</p>
-                <h4 id="accountTaskOverdueTitle">Công việc quá hạn liên quan theo tài khoản</h4>
-              </div>
-              <div class="account-task-overdue-actions">
-                <strong id="accountTaskOverdueTotal" class="account-task-creation-total">-</strong>
-                <button id="exportAllOverdueTasks" class="ghost compact account-overdue-export" type="button" disabled>Xuất tất cả</button>
-              </div>
-            </div>
-            <div id="accountTaskOverdueList" class="account-task-creation-list account-task-overdue-list"></div>
-          </section>
-          <div class="account-usage-monitor-grid">
-            <section class="account-usage-card" aria-labelledby="accountInactiveDayTitle">
-              <div class="account-usage-card-head">
+            <section id="accountTaskCreationPanel" class="account-usage-history account-task-creation-stats account-task-stats-panel" role="tabpanel" aria-labelledby="accountTaskCreationTab">
+              <div class="account-usage-history-head">
                 <div>
-                  <p class="eyebrow">Theo ngày</p>
-                  <h4 id="accountInactiveDayTitle">Chưa đăng nhập</h4>
+                  <p class="eyebrow">Công việc</p>
+                  <h4 id="accountTaskCreationTitle">Công việc đã tạo và liên quan theo tài khoản</h4>
                 </div>
-                <strong id="accountInactiveDayCount">-</strong>
+                <strong id="accountTaskCreationTotal" class="account-task-creation-total">-</strong>
               </div>
-              <div id="accountInactiveDayList" class="account-usage-list"></div>
+              <div id="accountTaskCreationList" class="account-task-creation-list"></div>
             </section>
-            <section class="account-usage-card" aria-labelledby="accountInactiveWeekTitle">
-              <div class="account-usage-card-head">
+            <section id="accountTaskOverduePanel" class="account-usage-history account-task-overdue-stats account-task-stats-panel is-hidden" role="tabpanel" aria-labelledby="accountTaskOverdueTab" aria-hidden="true" inert>
+              <div class="account-usage-history-head">
                 <div>
-                  <p class="eyebrow">Theo tuần</p>
-                  <h4 id="accountInactiveWeekTitle">Chưa đăng nhập</h4>
+                  <p class="eyebrow">Công việc quá hạn</p>
+                  <h4 id="accountTaskOverdueTitle">Công việc quá hạn liên quan theo tài khoản</h4>
                 </div>
-                <strong id="accountInactiveWeekCount">-</strong>
-              </div>
-              <div id="accountInactiveWeekList" class="account-usage-list"></div>
-            </section>
-            <section class="account-usage-card" aria-labelledby="accountInactiveMonthTitle">
-              <div class="account-usage-card-head">
-                <div>
-                  <p class="eyebrow">Theo tháng</p>
-                  <h4 id="accountInactiveMonthTitle">Chưa đăng nhập</h4>
+                <div class="account-task-overdue-actions">
+                  <strong id="accountTaskOverdueTotal" class="account-task-creation-total">-</strong>
+                  <button id="exportAllOverdueTasks" class="ghost compact account-overdue-export" type="button" disabled>Xuất tất cả</button>
                 </div>
-                <strong id="accountInactiveMonthCount">-</strong>
               </div>
-              <div id="accountInactiveMonthList" class="account-usage-list"></div>
+              <div id="accountTaskOverdueList" class="account-task-creation-list account-task-overdue-list"></div>
             </section>
           </div>
-          <section class="account-usage-history" aria-labelledby="accountUsageHistoryTitle">
-            <div class="account-usage-history-head">
-              <div>
-                <p class="eyebrow">Lượt truy cập</p>
-                <h4 id="accountUsageHistoryTitle">Thống kê theo ngày và tháng</h4>
-              </div>
-              <span id="accountUsageHistoryStatus" class="muted"></span>
-            </div>
-            <section class="account-usage-visit-section" aria-labelledby="accountUsageDailyVisitTitle">
-              <div class="account-usage-visit-section-head">
-                <h5 id="accountUsageDailyVisitTitle">30 ngày gần nhất</h5>
-                <span>Tổng hợp đăng nhập hợp lệ và phiên sử dụng đầu tiên trong ngày</span>
-              </div>
-              <div id="accountUsageDailyVisitHistory" class="account-usage-history-list account-usage-daily-visit-list"></div>
-            </section>
-            <section class="account-usage-visit-section" aria-labelledby="accountUsageMonthlyVisitTitle">
-              <div class="account-usage-visit-section-head">
-                <h5 id="accountUsageMonthlyVisitTitle">12 tháng gần nhất</h5>
-                <span>Tổng hợp theo tháng</span>
-              </div>
-            <div id="accountUsageMonthlyHistory" class="account-usage-history-list"></div>
-            </section>
-          </section>
         </section>
+        <div id="accountPasswordFallback" class="form-actions account-password-fallback is-hidden">
+          <button id="accountChangePasswordFallback" class="ghost" type="button">Đổi mật khẩu</button>
+        </div>
         <form id="accountForm" class="form-grid">
           <input type="hidden" id="accountId">
           <label>Tên hiển thị
@@ -1478,15 +1506,23 @@
           </fieldset>
           <div class="form-actions wide">
             <button type="submit">Lưu tài khoản</button>
+            <button id="accountChangePasswordButton" class="ghost" type="button">Đổi mật khẩu</button>
             <!-- 🌟 ĐÃ BỔ SUNG NÚT XÓA TÀI KHOẢN ẨN SẴN Ở ĐÂY -->
             <button id="deleteAccountBtn" class="ghost danger-action is-hidden" type="button" style="color: #e53e3e; border-color: #fed7d7; background: #fff5f5;">Xóa tài khoản</button>
             <button id="resetAccountForm" class="ghost" type="button">Làm mới</button>
           </div>
         </form>
-        <div id="accountAdminQuickTools" class="account-admin-quick-tools is-hidden">
-          <label class="account-search-field">Tìm kiếm nhanh
-            <input id="accountSearch" type="search" autocomplete="off" placeholder="Tên hiển thị, tên đăng nhập, nhân sự, phòng...">
-          </label>
+        <div class="account-directory-toolbar">
+          <div id="accountAdminQuickTools" class="account-admin-quick-tools is-hidden">
+            <label class="account-search-field">Tìm kiếm nhanh
+              <input id="accountSearch" type="search" autocomplete="off" placeholder="Tên hiển thị, tên đăng nhập, nhân sự, phòng...">
+            </label>
+          </div>
+          <div id="accountDirectoryFilters" class="account-directory-filters is-hidden">
+            <label for="accountDirectoryDepartmentFilter">Lọc theo phòng
+              <select id="accountDirectoryDepartmentFilter"></select>
+            </label>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -1628,6 +1664,7 @@
             <fieldset class="wide gpmb-workflow-condition-field">
               <legend>Nhánh nghiệp vụ có thể phát sinh</legend>
               <label class="checkbox-option"><input id="gpmbWorkflowNoCooperation" type="checkbox"><span>Có ý kiến không đồng thuận hoặc không phối hợp</span></label>
+              <label class="checkbox-option"><input id="gpmbWorkflowResettlementRequired" type="checkbox"><span>Có trường hợp bố trí tái định cư</span></label>
               <label class="checkbox-option"><input id="gpmbWorkflowNoHandover" type="checkbox"><span>Có trường hợp chưa bàn giao đất</span></label>
             </fieldset>
             <div class="form-actions wide">
@@ -1684,6 +1721,7 @@
             <input id="gpmbWorkflowDetailId" type="hidden">
             <div class="gpmb-workflow-detail-options gpmb-workflow-detail-manage">
               <label class="checkbox-option"><input id="gpmbWorkflowDetailNoCooperation" type="checkbox"><span>Có ý kiến không đồng thuận hoặc không phối hợp</span></label>
+              <label class="checkbox-option"><input id="gpmbWorkflowDetailResettlementRequired" type="checkbox"><span>Có trường hợp bố trí tái định cư</span></label>
               <label class="checkbox-option"><input id="gpmbWorkflowDetailNoHandover" type="checkbox"><span>Có trường hợp chưa bàn giao đất</span></label>
               <p>Có thể thêm hoặc bỏ nhánh nhiệm vụ bất kỳ lúc nào; nhiệm vụ đã phát sinh được giữ lại để bảo toàn lịch sử. Các bước chưa phát sinh được tính lại theo quan hệ phụ thuộc. Chỉ Ban lãnh đạo và Quản trị viên được điều chỉnh thời hạn.</p>
             </div>
@@ -1802,7 +1840,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.4.14</strong>
+    <strong data-app-version>Phiên bản 3.4.64</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -2191,10 +2229,9 @@
       <div class="mobile-profile-info">
         <strong id="mobileUserLabel">Tài khoản</strong>
         <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
-        <button type="button" id="mobileChangePasswordButton" class="account-password-action">Đổi mật khẩu</button>
       </div>
-      <button type="button" class="mobile-notification-bell" data-notification-toggle aria-label="Mở trung tâm thông báo" title="Thông báo">
-        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.14" alt="" aria-hidden="true" decoding="async">
+      <button type="button" class="mobile-notification-bell" data-notification-toggle aria-label="Mở thông báo của Luna" title="Thông báo từ Luna">
+        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.64" alt="" aria-hidden="true" decoding="async">
         <span id="mobileNotificationUnreadCount" class="notification-bell-count is-hidden">0</span>
       </button>
       <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
@@ -2382,9 +2419,109 @@
   </aside>
   <aside id="notificationQuickToasts" class="notification-quick-toasts" aria-live="polite" aria-label="Nhắc nhở công việc"></aside>
 
+    <aside id="virtualAssistant" class="virtual-assistant is-hidden" aria-label="Luna">
+    <aside id="assistantQuickNotice" class="assistant-quick-notice is-hidden" role="status" aria-live="polite" aria-atomic="true" aria-label="Lời thoại từ Luna">
+      <button id="assistantQuickNoticeText" class="assistant-quick-notice-message" type="button" title="Bấm vào lời thoại để xem xong hoặc chuyển thông báo tiếp theo"></button>
+    </aside>
+    <button id="assistantLauncher" class="assistant-launcher" type="button" aria-label="Mở trợ lý Luna" aria-expanded="false" aria-controls="assistantPanel" title="Trên màn hình lớn, kéo hoặc dùng phím mũi tên để di chuyển">
+      <span class="assistant-launcher-signal" aria-hidden="true"></span>
+      <img class="assistant-launcher-pose assistant-launcher-pose--idle" src="assets/luna-outfit-field.png?v=3.4.64" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img class="assistant-launcher-pose assistant-launcher-pose--listening" data-src="assets/virtual-assistant-listening.png?v=3.4.64" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img class="assistant-launcher-pose assistant-launcher-pose--thinking" data-src="assets/luna-research.webp?v=3.4.64" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <span class="assistant-launcher-name">Luna</span>
+    </button>
+    <button id="assistantMinimize" class="assistant-minimize" type="button" aria-label="Thu nhỏ trợ lý" title="Thu nhỏ trợ lý">×</button>
+    <button id="assistantRestore" class="assistant-restore is-hidden" type="button" aria-label="Mở lại Luna" title="Mở lại Luna">
+      <img data-assistant-mini-src="assets/luna-outfit-field.png?v=3.4.64" alt="" aria-hidden="true" draggable="false" decoding="async">
+    </button>
+    <section id="assistantPanel" class="assistant-panel is-hidden" data-placement="above" role="dialog" aria-modal="false" aria-labelledby="assistantTitle" aria-hidden="true">
+      <header class="assistant-panel-head">
+        <div>
+          <p class="assistant-eyebrow">TRỢ LÝ ẢO</p>
+          <h2 id="assistantTitle">Luna</h2>
+          <p id="assistantAccountContext" class="assistant-account-context"></p>
+        </div>
+        <button id="assistantClose" class="assistant-close" type="button" aria-label="Đóng trợ lý" title="Đóng">×</button>
+      </header>
+      <div class="assistant-character-stage" data-state="idle">
+        <div class="assistant-character-status">
+          <span class="assistant-state-indicator" aria-hidden="true"></span>
+          <strong id="assistantStateLabel">Sẵn sàng hỗ trợ</strong>
+          <span class="assistant-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        </div>
+      </div>
+      <nav class="assistant-quick-actions" aria-label="Tác vụ trợ lý">
+        <button type="button" data-assistant-command="tình hình công việc của tôi">Tình hình</button>
+        <button type="button" data-assistant-command="công việc quá hạn">Quá hạn</button>
+        <button type="button" data-assistant-command="công việc hôm nay">Hôm nay</button>
+        <button type="button" data-assistant-command="mở thông báo">Thông báo</button>
+        <button id="assistantCreateTask" class="is-hidden" type="button" data-assistant-command="tạo công việc">Tạo việc</button>
+        <button id="assistantAnnouncementToggle" class="admin-only-action" type="button" aria-expanded="false" aria-controls="assistantAnnouncementComposer">Thông báo toàn ban</button>
+      </nav>
+      <section id="assistantAnnouncementComposer" class="assistant-announcement-composer is-hidden" aria-label="Gửi thông báo toàn Ban">
+        <p class="assistant-announcement-intro">Chọn người nhận và thời điểm phát. Chỉ tài khoản Admin được dùng chức năng này.</p>
+        <form id="lunaAnnouncementForm">
+          <label for="lunaAnnouncementMessage">Nội dung thông điệp
+            <textarea id="lunaAnnouncementMessage" rows="3" maxlength="1200" required placeholder="Nhập thông tin cần thông báo đến toàn Ban..."></textarea>
+          </label>
+          <div class="assistant-announcement-targets">
+            <label for="lunaAnnouncementDepartments">Phòng nhận
+              <select id="lunaAnnouncementDepartments" multiple size="3" aria-describedby="lunaAnnouncementTargetHint"></select>
+            </label>
+            <label for="lunaAnnouncementRoles">Nhóm tài khoản
+              <select id="lunaAnnouncementRoles" multiple size="3" aria-describedby="lunaAnnouncementTargetHint">
+                <option value="admin">Admin</option>
+                <option value="director">Ban giám đốc</option>
+                <option value="manager">Trưởng phòng</option>
+                <option value="deputy_manager">Phó phòng</option>
+                <option value="section_head">Trưởng bộ phận/Trưởng nhóm</option>
+                <option value="employee">Nhân viên</option>
+              </select>
+            </label>
+            <label for="lunaAnnouncementSchedule">Thời điểm phát
+              <input id="lunaAnnouncementSchedule" type="datetime-local">
+            </label>
+          </div>
+          <p id="lunaAnnouncementTargetHint" class="assistant-announcement-hint">Để trống cả hai danh sách để gửi toàn Ban. Chọn cả phòng và nhóm sẽ áp dụng đồng thời cả hai điều kiện.</p>
+          <div class="assistant-announcement-actions">
+            <button id="lunaAnnouncementSubmit" type="submit">Gửi thông điệp</button>
+            <button id="lunaAnnouncementReceipts" class="ghost" type="button">Tra cứu đã xem</button>
+            <span id="lunaAnnouncementStatus" class="luna-announcement-status" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+        <div id="lunaAnnouncementReceiptResults" class="luna-announcement-receipts is-hidden" aria-live="polite"></div>
+      </section>
+      <details class="assistant-notification-preferences">
+        <summary>Thiết lập nhắc việc</summary>
+        <div class="assistant-notification-preferences-body">
+          <label class="assistant-preference-toggle"><input id="lunaProactiveEnabled" type="checkbox" checked> Hiện popup nhắc việc</label>
+          <label class="assistant-preference-quiet"><input id="lunaQuietHoursEnabled" type="checkbox"> Bật giờ yên lặng</label>
+          <div class="assistant-quiet-time-row">
+            <label for="lunaQuietHoursStart">Từ <input id="lunaQuietHoursStart" type="time" value="22:00"></label>
+            <label for="lunaQuietHoursEnd">Đến <input id="lunaQuietHoursEnd" type="time" value="07:00"></label>
+          </div>
+          <p>Thiết lập áp dụng trên trình duyệt này. Thông báo vẫn nằm trong trung tâm để xem lại.</p>
+        </div>
+      </details>
+      <div id="assistantMessages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+      <form id="assistantComposer" class="assistant-composer">
+        <label class="assistant-composer-input-label" for="assistantInput">Tin nhắn cho trợ lý</label>
+        <div class="assistant-composer-row">
+          <input id="assistantInput" type="text" maxlength="500" autocomplete="off" placeholder="Hỏi Luna về công việc, quy trình, nhân sự...">
+          <button id="assistantVoiceButton" class="assistant-voice-button" type="button" aria-label="Nhập bằng giọng nói" title="Nhập bằng giọng nói">Nói</button>
+          <button class="assistant-send-button" type="submit">Gửi</button>
+        </div>
+        <p id="assistantVoiceNotice" class="assistant-voice-notice">Chỉ ghi âm sau khi bấm Nói; hãy kiểm tra nội dung nhận dạng trước khi gửi.</p>
+      </form>
+    </section>
+    <span class="assistant-speech-tail" aria-hidden="true">▼</span>
+  </aside>
+
   <!-- System data must load before the application runtime. -->
-  <script src="people-data.js?v=3.4.14"></script>
-  <script src="work-calendar.js?v=3.4.14"></script>
-  <script src="script.js?v=3.4.14"></script>
+  <script src="people-data.js?v=3.4.64"></script>
+  <script src="gpmb-workflow-data.js?v=3.4.64"></script>
+  <script src="work-calendar.js?v=3.4.64"></script>
+  <script src="virtual-assistant.js?v=3.4.64"></script>
+  <script src="script.js?v=3.4.64"></script>
 </body>
 </html>
