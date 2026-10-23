@@ -37,7 +37,7 @@ assert.equal(clientSandbox.canManageProjectCatalog(), false, "Ban giám đốc c
 assert.equal(clientSandbox.canViewProjectCatalog(), true, "Ban giám đốc phải xem được Danh mục dự án.");
 assert.match(extractFunction(client, "renderTaskProjectCatalog"), /classList\.toggle\("is-hidden", !canManage\)/, "Biểu mẫu danh mục dự án phải ẩn với người chỉ có quyền xem.");
 assert.match(extractFunction(client, "renderTaskProjectCatalog"), /\$\{canManage \? `<div class="project-catalog-actions">/, "Nút sửa/xóa dự án chỉ hiển thị cho người có quyền quản lý.");
-assert.match(extractFunction(client, "renderAccountTable"), /accountForm\?\.classList\.toggle\("is-hidden", !canManageAccounts\(\) && !canEditOwnAccount\(\)\)/, "Ban giám đốc chỉ xem danh sách, không thấy biểu mẫu sửa tài khoản.");
+assert.match(extractFunction(client, "renderAccountTable"), /const canEditAccount = canManageAccounts\(\) \|\| canEditOwnAccount\(\);[\s\S]*accountForm\?\.classList\.toggle\("is-hidden", !canEditAccount\)/, "Ban giám đốc chỉ xem danh sách, không thấy biểu mẫu sửa tài khoản.");
 assert.match(client, /canEditOwnAccount\(\) && account\.id === currentAccount\(\)\?\.id/, "Mở tài khoản từ lịch sử phải tôn trọng quyền sửa tài khoản cá nhân.");
 
 const serverSandbox = {

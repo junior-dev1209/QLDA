@@ -26,7 +26,7 @@ assert.match(headers, /X-Frame-Options "DENY"/, "Hosting phải chặn clickjack
 
 async function verifyCredentialRuntime() {
   const runtimeSource = stripTypeScriptTypes(
-    edge.replace(/^import[^\n]*\n/, "const createClient = () => ({});"),
+    edge.replace(/^import[^\n]*\n/gm, "").replace(/^/, "const createClient = () => ({});\n"),
   );
   const createRuntime = new Function("Deno", "crypto", `${runtimeSource}; return { setAccountPasswordCredential, accountPasswordMatches, hasPasswordHash, sanitizedAccount };`);
   const runtime = createRuntime({

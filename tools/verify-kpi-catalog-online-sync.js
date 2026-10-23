@@ -90,7 +90,7 @@ assert.equal(
   "synchronizePersonDetailInlineEditor",
 ].forEach((marker) => assert.ok(source.includes(marker), `Missing client safeguard: ${marker}`));
 [
-  "const deploymentVersion = \"2026.10.21.1\"",
+  "const deploymentVersion = \"2026.10.23.1\"",
   "function mergeKpiCriteriaArrayChange",
   "function mergeKpiCatalogRecordChange",
   "function validKpiCatalogUpdate",

@@ -35,6 +35,7 @@ const state = {
 const sandbox = {
   state,
   TASK_STATUS_CLOSED: "Đã kết thúc",
+  TASK_STATUS_RECURRENCE_STOPPED: "Đã ngừng",
   TASK_STATUS_COMPLETED: "Hoàn thành",
   TASK_STATUS_PREPARING: "Chuẩn bị thực hiện",
   personById: (id) => state.people.find((person) => person.id === id),

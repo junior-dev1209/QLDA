@@ -106,8 +106,8 @@ assert.match(client, /downloadDashboardPopupExcel\(dashboardDetailExport\)/, "Po
 assert.match(css, /\.dashboard-workload-list[\s\S]*max-height: calc\(\(var\(--dashboard-workload-row-height\) \* 5\) \+ var\(--dashboard-workload-header-height\) \+ 1px\);[\s\S]*overflow-y: auto;/, "Danh sách thống kê công việc phải hiện năm dòng và cuộn riêng.");
 assert.match(css, /\.dashboard-workload-row\.dashboard-link:hover[\s\S]*transform: none;[\s\S]*box-shadow: none;/, "Hiệu ứng chọn dòng nhân sự phải nhẹ nhàng.");
 assert.match(css, /\.dashboard-operation-item\.dashboard-link:hover[\s\S]*background: #f4f8fa;[\s\S]*transform: none;[\s\S]*box-shadow: none;/, "Hiệu ứng chọn thẻ điều hành phải nhẹ nhàng.");
-assert.match(manifest, /"version": "3\.4\.14"/, "Manifest chưa tăng phiên bản giao diện.");
-assert.match(serviceWorker, /phuc-thinh-kpi-v3414/, "Service worker chưa đổi cache để nhận giao diện mới.");
+assert.match(manifest, /"version": "3\.4\.64"/, "Manifest chưa tăng phiên bản giao diện.");
+assert.match(serviceWorker, /phuc-thinh-kpi-v3464/, "Service worker chưa đổi cache để nhận giao diện mới.");
 
 const departmentFilterSandbox = {
   departments: [

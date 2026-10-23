@@ -132,7 +132,7 @@ const directory = plain(server.calendarPublicDirectory(db));
 assert.equal(directory[0].password, undefined);
 assert.equal(directory[0].phone, undefined);
 
-const statusContext = { TASK_STATUS_PREPARING: "Chuẩn bị thực hiện", TASK_STATUS_CLOSED: "Kết thúc", TASK_STATUS_COMPLETED: "Hoàn thành", normalizeTaskStatus: (value) => value, Date,
+const statusContext = { TASK_STATUS_PREPARING: "Chuẩn bị thực hiện", TASK_STATUS_CLOSED: "Kết thúc", TASK_STATUS_COMPLETED: "Hoàn thành", TASK_STATUS_RECURRENCE_STOPPED: "Đã ngừng", normalizeTaskStatus: (value) => value, Date,
   taskDeadlineDate: (task) => task.due ? new Date(`${task.due}T23:59:00`) : null,
   normalizeSearchText: (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase() };
 vm.createContext(statusContext);

@@ -7,18 +7,22 @@ const edge = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
 const php = fs.readFileSync("api/sync.php", "utf8");
 
 for (const marker of [
-  'id="changePasswordButton"',
-  'id="mobileChangePasswordButton"',
+  'id="accountChangePasswordButton"',
   'id="changePasswordForm"',
   'id="currentPasswordForChange"',
   'id="newPasswordForChange"',
   'id="confirmPasswordForChange"',
 ]) assert.ok(html.includes(marker), `Thiếu điều khiển đổi mật khẩu: ${marker}`);
+assert.ok(html.indexOf('id="accountChangePasswordButton"') > html.indexOf('id="accounts"'), "Nút đổi mật khẩu phải nằm trong mục Tài khoản.");
+assert.match(html, /<button type="submit">Lưu tài khoản<\/button>\s*<button id="accountChangePasswordButton"/, "Nút đổi mật khẩu phải nằm cạnh nút lưu tài khoản.");
+assert.ok(html.includes('id="accountChangePasswordFallback"'), "Tài khoản không có quyền sửa biểu mẫu vẫn cần nút đổi mật khẩu.");
+assert.doesNotMatch(html, /id="(?:changePasswordButton|mobileChangePasswordButton)"/, "Không để nút đổi mật khẩu ở hồ sơ thanh menu.");
 assert.match(client, /async function submitOwnPasswordChange/);
 assert.match(client, /sharedJsonRequest\("change-password"/);
 assert.match(client, /newPassword !== confirmation/);
 assert.match(client, /sharedSync\.session \|\| isOfflineFileRuntime\(\)/, "Đổi mật khẩu phải cần phiên máy chủ đang hoạt động.");
-assert.match(client, /changePasswordButton.*classList\.toggle\("is-hidden", !account\)/, "Nút đổi mật khẩu phải khả dụng cho mọi tài khoản đang đăng nhập.");
+assert.match(client, /accountChangePasswordButton.*classList\.toggle\("is-hidden", !account \|\| !canEditAccount\)/, "Nút đổi mật khẩu trong biểu mẫu chỉ hiện khi biểu mẫu được phép sử dụng.");
+assert.match(client, /accountPasswordFallback.*classList\.toggle\("is-hidden", !account \|\| canEditAccount\)/, "Tài khoản không sửa được biểu mẫu vẫn phải truy cập đổi mật khẩu.");
 assert.match(edge, /if \(action === "change-password" && request\.method === "POST"\)/);
 assert.match(edge, /accountPasswordMatches\(account, currentPassword\)/, "Supabase phải xác nhận mật khẩu hiện tại trước khi thay đổi.");
 assert.match(edge, /setAccountPasswordCredential\(nextAccount, newPassword\)/, "Mật khẩu mới phải được băm bằng cơ chế máy chủ hiện có.");

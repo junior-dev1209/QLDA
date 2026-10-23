@@ -34,7 +34,12 @@ const elements = {
 };
 const sandbox = {
   roles,
+  state: { tasks: [] },
   personById: (id) => people.find((person) => person.id === id) || null,
+  taskParticipantPersonId: (id) => String(id || ""),
+  normalizeTaskKind: () => "regular",
+  isGpmbWorkflowTask: () => false,
+  isAdmin: () => true,
   normalizeSearchText: (value) => String(value || "").toLocaleLowerCase("vi"),
   byId: (id) => elements[id] || null,
   fillSelect: (select, options, selected) => {
@@ -48,6 +53,7 @@ vm.createContext(sandbox);
   "taskCategoryRoleForPerson",
   "taskCategoryOptionsForPerson",
   "updateTaskCategoryOptions",
+  "migrateTaskCategoriesForCatalogChange",
 ].forEach((name) => vm.runInContext(extractFunction(name), sandbox));
 
 assert.deepEqual(
@@ -87,11 +93,39 @@ assert.equal(elements.taskCategory.value, "Nhiệm vụ A1", "Form tạo mới p
 elements.taskId.value = "existing-task";
 elements.taskCategory.value = "Nhiệm vụ B1";
 sandbox.updateTaskCategoryOptions("Nhiệm vụ B1");
-assert.equal(elements.taskCategory.options[0].label, "Nhiệm vụ B1 (danh mục cũ, chưa khớp chức vụ)", "Dữ liệu lịch sử không khớp phải được đánh dấu rõ, không âm thầm đổi.");
 assert.deepEqual(
-  Array.from(elements.taskCategory.options.slice(1), (option) => option.value),
-  ["Nhiệm vụ A1", "Nhiệm vụ A2"],
-  "Danh mục mới trong màn hình sửa vẫn phải theo đúng chức vụ hiện tại.",
+  Array.from(elements.taskCategory.options, (option) => option.value),
+  ["Nhiệm vụ B1", "Nhiệm vụ A1", "Nhiệm vụ A2"],
+  "Biểu mẫu chỉnh sửa phải giữ giá trị cũ cần ánh xạ, thay vì âm thầm đổi danh mục.",
 );
+assert.equal(elements.taskCategory.value, "Nhiệm vụ B1", "Form chỉnh sửa phải giữ lại mục cũ cho đến khi có ánh xạ chính xác.");
+
+sandbox.state.tasks = [
+  { id: "renamed-category-task", ownerId: "person-a", category: "Nhiệm vụ A1" },
+  { id: "other-role-category-task", ownerId: "person-a", category: "Nhiệm vụ B1" },
+  { id: "current-task", ownerId: "person-a", category: "Nhiệm vụ A2" },
+  { id: "unknown-role-task", ownerId: "person-unknown", category: "Danh mục cũ" },
+];
+const updatedRoles = roles.map((role) => role.id === "role-one"
+  ? { ...role, criteria: [["Nhiệm vụ A1 mới", 50], ["Nhiệm vụ A2", 50]] }
+  : role);
+assert.equal(sandbox.migrateTaskCategoriesForCatalogChange(roles, updatedRoles), 1, "Đổi tên danh mục phải cập nhật công việc theo mục tương ứng cùng vị trí.");
+assert.equal(sandbox.state.tasks[0].category, "Nhiệm vụ A1 mới", "Công việc chọn mục cũ phải chuyển đúng sang mục mới được chỉnh từ mục đó.");
+assert.equal(sandbox.state.tasks[0].categoryCatalogUpdatedAt.length > 0, true, "Cần lưu dấu thời điểm đồng bộ danh mục.");
+assert.equal(sandbox.state.tasks[1].category, "Nhiệm vụ B1", "Danh mục khác vị trí không được chuyển sang danh mục đầu tiên.");
+assert.equal(sandbox.state.tasks[2].category, "Nhiệm vụ A2", "Danh mục không đổi phải được giữ nguyên.");
+assert.equal(sandbox.state.tasks[3].category, "Danh mục cũ", "Không được đoán danh mục khi chức vụ chưa có cấu hình.");
+sandbox.state.tasks = [{ id: "reordered-category-task", ownerId: "person-a", category: "Nhiệm vụ A1" }];
+const reorderedRoles = roles.map((role) => role.id === "role-one"
+  ? { ...role, criteria: [["Nhiệm vụ A2", 50], ["Nhiệm vụ A1", 50]] }
+  : role);
+assert.equal(sandbox.migrateTaskCategoriesForCatalogChange(roles, reorderedRoles), 0, "Chỉ sắp xếp lại thứ tự không được coi là đổi tên danh mục.");
+assert.equal(sandbox.state.tasks[0].category, "Nhiệm vụ A1", "Danh mục còn tồn tại phải được giữ nguyên dù vị trí thay đổi.");
+sandbox.state.tasks = [{ id: "case-change-task", ownerId: "person-a", category: "Nhiệm vụ A1" }];
+const recasedRoles = roles.map((role) => role.id === "role-one"
+  ? { ...role, criteria: [["nhiệm vụ A1", 50], ["Nhiệm vụ A2", 50]] }
+  : role);
+assert.equal(sandbox.migrateTaskCategoriesForCatalogChange(roles, recasedRoles), 1, "Đổi tên danh mục chỉ khác kiểu chữ vẫn phải đồng bộ giá trị chính xác.");
+assert.equal(sandbox.state.tasks[0].category, "nhiệm vụ A1", "Giá trị danh mục phải khớp chính xác tên mới.");
 
 console.log("task_category_role_scope=passed");

@@ -69,6 +69,7 @@ const sandbox = {
   canViewTaskRecord: () => true,
   clamp: (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0)),
   currentAccount: () => ({ displayName: "Admin tổng hợp" }),
+  isRecurrenceStoppedTask: (task) => task?.status === "Đã ngừng",
   formatScore: (value) => Number(value || 0).toFixed(1).replace(".0", ""),
   formatDate: (value) => {
     const [year, month, day] = String(value).slice(0, 10).split("-");
