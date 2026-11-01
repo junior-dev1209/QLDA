@@ -17,7 +17,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.10.23.1";
+const deploymentVersion = "2026.10.30.3";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -1422,6 +1422,13 @@ const taskProgressMutableFields = [
     "status",
     "progress",
     "followUpDate",
+    "deadlineExtensionStatus",
+    "deadlineExtensionRequestedDue",
+    "deadlineExtensionOriginalDue",
+    "deadlineExtensionReason",
+    "deadlineExtensionRequestedAt",
+    "deadlineExtensionRequestedById",
+    "deadlineExtensionRequestedByName",
     "blockerStatus",
     "blockerNote",
     "attachments",
@@ -1648,6 +1655,137 @@ function taskProgressOnlyChange(previous: JsonRecord, next: JsonRecord, allowCol
   return taskProgressLifecycleIsSafe(next) && taskProgressFieldsOnlyChange(previous, next, allowCollaboratorChanges);
 }
 
+const taskDeadlineExtensionRequestFields = [
+  "deadlineExtensionStatus",
+  "deadlineExtensionRequestedDue",
+  "deadlineExtensionOriginalDue",
+  "deadlineExtensionReason",
+  "deadlineExtensionRequestedAt",
+  "deadlineExtensionRequestedById",
+  "deadlineExtensionRequestedByName",
+] as const;
+
+const taskDeadlineExtensionReviewFields = [
+  "deadlineExtensionReviewedAt",
+  "deadlineExtensionReviewedById",
+  "deadlineExtensionReviewedByName",
+  "deadlineExtensionReviewNote",
+] as const;
+
+function taskDeadlineExtensionRequestChanged(previous: JsonRecord, next: JsonRecord): boolean {
+  return (previous.followUpDate || "") !== (next.followUpDate || "")
+    || taskDeadlineExtensionRequestFields.some((field) => !sameJson(previous[field], next[field]));
+}
+
+function validTaskIsoDate(value: unknown): boolean {
+  const date = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
+
+function normalizeTaskDeadlineExtensionRequest(
+  actor: JsonRecord,
+  previous: JsonRecord,
+  candidate: JsonRecord,
+): JsonRecord | null {
+  const requestFieldsChanged = taskDeadlineExtensionRequestFields.some((field) => !sameJson(previous[field], candidate[field]));
+  const followUpChanged = String(previous.followUpDate || "") !== String(candidate.followUpDate || "");
+  const followUpExceedsDue = String(candidate.followUpDate || "") > String(previous.due || "");
+  if (!requestFieldsChanged && !followUpChanged) return clone(candidate);
+  if (String(previous.deadlineExtensionStatus || "") === "pending") return null;
+  if (!requestFieldsChanged && !followUpExceedsDue) return clone(candidate);
+  if (gpmbWorkflowManagedTask(previous) || gpmbWorkflowManagedTask(candidate)) return null;
+
+  const requestedDue = String(candidate.deadlineExtensionRequestedDue || "").trim();
+  const followUpDate = String(candidate.followUpDate || "").trim();
+  const reason = String(candidate.deadlineExtensionReason || "").trim();
+  if (
+    String(candidate.deadlineExtensionStatus || "") !== "pending"
+    || !validTaskIsoDate(String(previous.due || ""))
+    || !validTaskIsoDate(requestedDue)
+    || requestedDue !== followUpDate
+    || requestedDue <= String(previous.due || "")
+    || String(candidate.due || "") !== String(previous.due || "")
+    || reason.length < 10
+    || !taskProgressOnlyChange(previous, candidate, true)
+  ) return null;
+
+  const requester = String(actor.displayName || actor.username || "Tài khoản").trim();
+  return {
+    ...candidate,
+    blockerNote: reason.slice(0, 1200),
+    deadlineExtensionStatus: "pending",
+    deadlineExtensionRequestedDue: requestedDue,
+    deadlineExtensionOriginalDue: String(previous.due || ""),
+    deadlineExtensionReason: reason.slice(0, 1200),
+    deadlineExtensionRequestedAt: new Date().toISOString(),
+    deadlineExtensionRequestedById: recordId(actor),
+    deadlineExtensionRequestedByName: requester,
+  };
+}
+
+function taskDeadlineExtensionReviewIntent(previous: JsonRecord, next: JsonRecord): boolean {
+  return String(previous.deadlineExtensionStatus || "") === "pending"
+    && ["approved", "rejected"].includes(String(next.deadlineExtensionStatus || ""));
+}
+
+function normalizeTaskDeadlineExtensionReview(
+  previous: JsonRecord,
+  candidate: JsonRecord,
+  actor: JsonRecord,
+): JsonRecord | null {
+  if (!taskDeadlineExtensionReviewIntent(previous, candidate)) return null;
+  const decision = String(candidate.deadlineExtensionStatus || "");
+  const note = String(candidate.deadlineExtensionReviewNote || "").trim();
+  const requestedDue = String(previous.deadlineExtensionRequestedDue || "");
+  const expectedDue = decision === "approved" ? requestedDue : String(previous.due || "");
+  const permitted = [
+    "due",
+    "deadlineExtensionStatus",
+    ...taskDeadlineExtensionReviewFields,
+    "progressReports",
+    "updatedAt",
+    "updatedBy",
+    "updatedById",
+  ];
+  if (
+    gpmbWorkflowManagedTask(previous)
+    || !validTaskIsoDate(String(previous.due || ""))
+    || !validTaskIsoDate(requestedDue)
+    || requestedDue !== String(previous.followUpDate || "")
+    || requestedDue <= String(previous.due || "")
+    || String(previous.deadlineExtensionOriginalDue || "") !== String(previous.due || "")
+    || String(candidate.due || "") !== expectedDue
+    || note.length < 3
+    || !appendOnly(previous.progressReports || [], candidate.progressReports || [])
+    || !sameJson(withoutKeys(previous, permitted), withoutKeys(candidate, permitted))
+  ) return null;
+
+  return {
+    ...candidate,
+    deadlineExtensionStatus: decision,
+    deadlineExtensionReviewedAt: new Date().toISOString(),
+    deadlineExtensionReviewedById: recordId(actor),
+    deadlineExtensionReviewedByName: String(actor.displayName || actor.username || "Tài khoản").trim(),
+    deadlineExtensionReviewNote: note.slice(0, 1200),
+    due: expectedDue,
+  };
+}
+
+function taskDeadlineExtensionReviewChange(previous: JsonRecord, next: JsonRecord): boolean {
+  return taskDeadlineExtensionReviewIntent(previous, next)
+    && taskDeadlineExtensionReviewFields.every((field) => String(next[field] || "").trim().length > 0)
+    && String(next.deadlineExtensionReviewNote || "").trim().length >= 3;
+}
+
+function canReviewTaskDeadlineExtension(state: JsonRecord, account: JsonRecord, task: JsonRecord): boolean {
+  if (isAdmin(account)) return true;
+  return hasDepartmentManagement(account)
+    && recordId(account) !== String(task.deadlineExtensionRequestedById || "")
+    && personIsInManagedDepartment(state, account, task.ownerId);
+}
+
 function taskProgressFieldsOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
   return sameJson(
     withoutKeys(previous, taskProgressFields(allowCollaboratorChanges)),
@@ -1708,6 +1846,8 @@ function rebaseTaskProgressReports(live: JsonRecord, base: JsonRecord, next: Jso
 
 function rebaseTaskProgressChange(live: JsonRecord, base: JsonRecord, next: JsonRecord): JsonRecord | null {
   if (!taskProgressOnlyChange(base, next, true)) return null;
+  const deadlineFields = ["due", "followUpDate", ...taskDeadlineExtensionRequestFields, ...taskDeadlineExtensionReviewFields];
+  if (deadlineFields.some((field) => !sameJson(live[field], base[field]))) return null;
   const changedFields = taskProgressFields(true).filter((field) => !sameJson(base[field], next[field]));
   if (!changedFields.length) return null;
   const rebased = clone(live);
@@ -1824,6 +1964,15 @@ function shouldNormalizeTaskProgressUpdate(
 
 function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
   if (isAdmin(account)) return true;
+  if (taskDeadlineExtensionReviewChange(previous, next) && canReviewTaskDeadlineExtension(state, account, previous)) return true;
+  if (
+    String(next.deadlineExtensionStatus || "") === "pending"
+    && taskDeadlineExtensionRequestChanged(previous, next)
+    && !gpmbWorkflowManagedTask(previous)
+    && !taskProgressIsLocked(previous)
+    && taskParticipantForAccount(state, previous, account)
+    && taskProgressOnlyChange(previous, next)
+  ) return true;
   if (!taskProgressIsLocked(previous) && taskParticipantForAccount(state, previous, account) && taskProgressOnlyChange(previous, next)) return true;
   const canManageDepartmentProgress = isDirector(account)
     || (hasDepartmentTaskAccess(account) && taskHasParticipantInDepartment(state, previous, accountDepartmentId(state, account)));
@@ -2255,7 +2404,7 @@ function lunaAnnouncementReceiptDetails(state: JsonRecord, announcementId: strin
 }
 
 function taskNotificationChanged(previous: JsonRecord, next: JsonRecord): boolean {
-  return ["status", "progress", "blockerStatus", "blockerNote", "completionReviewStatus", "qualityPercent", "updatedAt", "progressReports"]
+  return ["status", "progress", "blockerStatus", "blockerNote", "completionReviewStatus", "qualityPercent", "due", "deadlineExtensionStatus", "updatedAt", "progressReports"]
     .some((field) => !sameJson(previous[field], next[field]));
 }
 
@@ -2273,6 +2422,28 @@ function appendTaskChangeNotifications(state: JsonRecord, actor: JsonRecord, pre
     return createdIds;
   }
   if (!taskNotificationChanged(previous, next)) return createdIds;
+  const previousExtensionStatus = String(previous.deadlineExtensionStatus || "");
+  const nextExtensionStatus = String(next.deadlineExtensionStatus || "");
+  if (nextExtensionStatus === "pending" && previousExtensionStatus !== "pending") {
+    const reviewers = records(state, "accounts")
+      .filter((account) => !Boolean(account.disabled) && canReviewTaskDeadlineExtension(state, account, next))
+      .map(recordId);
+    emit(reviewers, {
+      category: "task",
+      priority: "warning",
+      title: "Đề nghị gia hạn công việc cần duyệt",
+      message: `${taskTitle} · đề nghị đến ${String(next.deadlineExtensionRequestedDue || "")}`,
+    });
+    return createdIds;
+  }
+  if (nextExtensionStatus === "approved" && previousExtensionStatus !== "approved") {
+    emit(participantRecipients, { category: "task", priority: "success", title: "Đề nghị gia hạn đã được chấp nhận", message: `${taskTitle} · hạn mới ${String(next.due || "")}` });
+    return createdIds;
+  }
+  if (nextExtensionStatus === "rejected" && previousExtensionStatus !== "rejected") {
+    emit(participantRecipients, { category: "task", priority: "warning", title: "Đề nghị gia hạn chưa được chấp nhận", message: `${taskTitle} · hạn hiện tại ${String(next.due || "")}` });
+    return createdIds;
+  }
   const wasCompleted = completedTaskStatus(previous.status);
   const isCompleted = completedTaskStatus(next.status);
   const previousReview = String(previous.completionReviewStatus || "");
@@ -2387,6 +2558,10 @@ function canAdjustGpmbWorkflowTimeline(actor: JsonRecord): boolean {
   return isAdmin(actor) || isDirector(actor);
 }
 
+function canSetGpmbInitialStepDurations(actor: JsonRecord): boolean {
+  return canAdjustGpmbWorkflowTimeline(actor) || hasDepartmentManagement(actor);
+}
+
 function gpmbCollaboratorIds(value: unknown, ownerId: unknown): string[] {
   const owner = String(ownerId || "").trim();
   const values = Array.isArray(value) ? value : String(value || "").split(",");
@@ -2403,6 +2578,7 @@ function gpmbWorkflowManagedTask(task: JsonRecord | undefined): boolean {
 
 function gpmbWorkflowTaskChangeAllowed(state: JsonRecord, actor: JsonRecord, previous: JsonRecord, next: JsonRecord): boolean {
   if (String(previous.gpmbWorkflowId || "") !== String(next.gpmbWorkflowId || "") || String(previous.gpmbStepId || "") !== String(next.gpmbStepId || "")) return false;
+  if (taskDeadlineExtensionRequestChanged(previous, next) && String(next.deadlineExtensionStatus || "") === "pending") return false;
   return (canUpdateTask(state, actor, previous, next) && taskProgressOnlyChange(previous, next, true))
     || (canReviewTaskCompletion(state, actor, previous) && taskCompletionReviewChange(previous, next))
     || (canAssessTaskQuality(state, actor, previous) && taskQualityOnlyChange(previous, next));
@@ -2415,6 +2591,9 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
   const project = records(state, "projectCatalog").find((item) => recordId(item) === projectId);
   const title = String(canAdjustCore ? candidate.title : previous?.title || "").trim().slice(0, 220);
   const canAdjustTimeline = !previous || canAdjustGpmbWorkflowTimeline(actor);
+  const canAdjustStepDurations = previous
+    ? canAdjustGpmbWorkflowTimeline(actor)
+    : canSetGpmbInitialStepDurations(actor);
   const startDate = canAdjustTimeline
     ? gpmbIsoDate(candidate.startDate)
     : gpmbIsoDate(previous?.startDate);
@@ -2440,6 +2619,7 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
     const requested = candidateSteps.get(template.id) || {};
     const prior = priorSteps.get(template.id);
     const enabled = gpmbStepEnabled(template, conditions);
+    const days = gpmbStepDuration(template, conditions, canAdjustStepDurations ? requested.days : prior?.days);
     if (prior?.taskId) {
       const preserved = { ...clone(prior), category: template.category };
       const preservedDue = gpmbIsoDate(preserved.due);
@@ -2447,12 +2627,11 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
       if (String(preserved.status || "") === "active") activeAssigned = true;
       return preserved;
     }
-    if (!enabled) return { ...template, activationKey: template.activationKey || "", activationAlsoKey: template.activationAlsoKey || "", days: template.days, startDate: "", due: "", ownerId: "", ownerName: "", collaboratorIds: [], collaboratorNames: [], status: "skipped", taskId: "", activatedAt: "", completedAt: "" };
+    if (!enabled) return { ...template, activationKey: template.activationKey || "", activationAlsoKey: template.activationAlsoKey || "", days, startDate: "", due: "", ownerId: "", ownerName: "", collaboratorIds: [], collaboratorNames: [], status: "skipped", taskId: "", activatedAt: "", completedAt: "" };
     const requestedStart = canAdjustTimeline
       ? gpmbIsoDate(requested.startDate)
       : gpmbIsoDate(prior?.startDate);
     const start = requestedStart && requestedStart >= cursor ? requestedStart : cursor;
-    const days = gpmbStepDuration(template, conditions, canAdjustTimeline ? requested.days : prior?.days);
     const ownerId = String(requested.ownerId || "").trim();
     const owner = personForId(state, ownerId);
     const collaboratorIds = gpmbCollaboratorIds(requested.collaboratorIds ?? prior?.collaboratorIds, ownerId);
@@ -2937,6 +3116,41 @@ function lunaAiSources(context: JsonRecord): JsonRecord[] {
   return sources.slice(0, 12);
 }
 
+function lunaAiExternalSources(output: JsonRecord[]): JsonRecord[] {
+  const cited = new Map<string, JsonRecord>();
+  const searched = new Map<string, JsonRecord>();
+  const append = (target: Map<string, JsonRecord>, value: unknown) => {
+    if (!isRecord(value)) return;
+    const source = isRecord(value.url_citation) ? value.url_citation : value;
+    let url: URL;
+    try {
+      url = new URL(String(source.url || ""));
+    } catch {
+      return;
+    }
+    if (!["http:", "https:"].includes(url.protocol)) return;
+    target.set(url.href, {
+      title: lunaPlainText(source.title || url.hostname, 180),
+      url: url.href,
+    });
+  };
+
+  output.forEach((item) => {
+    if (item.type === "message" && Array.isArray(item.content)) {
+      item.content.filter(isRecord).forEach((content) => {
+        if (content.type !== "output_text" || !Array.isArray(content.annotations)) return;
+        content.annotations.forEach((annotation) => append(cited, annotation));
+      });
+    }
+    if (item.type === "web_search_call" && isRecord(item.action) && Array.isArray(item.action.sources)) {
+      item.action.sources.forEach((source) => append(searched, source));
+    }
+  });
+
+  const sources = cited.size ? [...cited.values()] : [...searched.values()];
+  return sources.slice(0, 8);
+}
+
 function recordReferencesFile(record: JsonRecord, field: string, key: string): boolean {
   const files = record[field];
   return Array.isArray(files) && files.some((file) => isRecord(file) && String(file.remoteKey || "") === key);
@@ -3021,11 +3235,37 @@ function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number
   state.activityLog = activityLog.slice(-5000);
 }
 
+function addCalendarEventActivity(state: JsonRecord, actor: JsonRecord, action: string, event: JsonRecord): void {
+  const timestamp = new Date().toISOString();
+  const actorName = String(actor.displayName || actor.username || "Tài khoản");
+  const details = [
+    [String(event.date || ""), String(event.time || "")].filter(Boolean).join(" "),
+    String(event.location || "").trim(),
+  ].filter(Boolean).join(" · ");
+  const activityLog = records(state, "activityLog");
+  activityLog.push({
+    id: `server-sync-calendar-${crypto.randomUUID()}`,
+    timestamp,
+    actorId: String(actor.id || ""),
+    actorName,
+    actorRole: String(actor.role || ""),
+    action,
+    module: "Lịch công việc",
+    targetType: "calendar-event",
+    targetId: recordId(event),
+    title: String(event.title || "Cuộc họp"),
+    departmentId: Array.isArray(event.departmentIds) ? String(event.departmentIds[0] || "") : "",
+    details,
+  });
+  state.activityLog = activityLog.slice(-5000);
+}
+
 function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): { state: JsonRecord; denied: DeniedMutation[]; changed: number; serverNotificationIds: string[]; serverGeneratedTaskIds: string[]; serverUpdatedGpmbWorkflowIds: string[] } {
   const next = clone(current);
   next.moduleSettings = normalizeModuleSettings(next.moduleSettings);
   const denied: DeniedMutation[] = [];
   const serverNotificationIds: string[] = [];
+  const calendarAuditEvents: Array<{ action: string; event: JsonRecord }> = [];
   let changed = purgeRetiredAssignmentTasks(next);
 
   collections.forEach((collection) => {
@@ -3033,9 +3273,9 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
     if (!changes) return;
     const values = recordMap(next, collection);
     (changes.upserts || []).forEach((operation) => {
-      const id = String(operation?.id || "").trim();
+      let id = String(operation?.id || "").trim();
       const value = operation?.value;
-      const previous = values.get(id);
+      let previous = values.get(id);
       if (!id || !isRecord(value) || recordId(value) !== id) {
         denied.push({ scope: collection, id: id || "unknown", reason: "Invalid record." });
         return;
@@ -3051,6 +3291,21 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
           // never participates in a progress permission decision.
           candidate = preserveTaskOriginAudit(previous, candidate);
           if (taskBaseValue) taskBaseValue = preserveTaskOriginAudit(previous, taskBaseValue);
+          if (taskDeadlineExtensionReviewIntent(previous, candidate)) {
+            const reviewed = normalizeTaskDeadlineExtensionReview(previous, candidate, actor);
+            if (!reviewed) {
+              denied.push({ scope: collection, id, reason: "Invalid deadline extension review." });
+              return;
+            }
+            candidate = reviewed;
+          } else if (taskDeadlineExtensionRequestChanged(previous, candidate)) {
+            const requested = normalizeTaskDeadlineExtensionRequest(actor, previous, candidate);
+            if (!requested) {
+              denied.push({ scope: collection, id, reason: "Invalid deadline extension request." });
+              return;
+            }
+            candidate = requested;
+          }
         }
       }
       if (collection === "gpmbWorkflows") {
@@ -3072,16 +3327,26 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       }
       const comparisonBaseValue = collection === "tasks" && taskBaseValue ? taskBaseValue : operation.baseValue;
       if (previous && !sameJson(comparisonBaseValue, serverValue)) {
-        const rebased = collection === "tasks" && taskBaseValue
-          ? rebaseTaskProgressChange(previous, taskBaseValue, candidate)
-          : collection === "supportRequests" && supportRequestBaseValue
-            ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
-          : null;
-        if (!rebased) {
-          denied.push({ scope: collection, id, reason: "Record changed by another user." });
-          return;
+        if (collection === "activityLog" && String(candidate.actorId || candidate.createdById || "") === String(actor.id || "")) {
+          id = `client-activity-${crypto.randomUUID()}`;
+          candidate = { ...candidate, id };
+          previous = undefined;
+        } else if (collection === "calendarEvents" && comparisonBaseValue == null) {
+          id = `calendar-event-${crypto.randomUUID()}`;
+          candidate = { ...candidate, id };
+          previous = undefined;
+        } else {
+          const rebased = collection === "tasks" && taskBaseValue
+            ? rebaseTaskProgressChange(previous, taskBaseValue, candidate)
+            : collection === "supportRequests" && supportRequestBaseValue
+              ? rebaseSupportRequestReply(previous, supportRequestBaseValue, candidate, actor)
+              : null;
+          if (!rebased) {
+            denied.push({ scope: collection, id, reason: "Record changed by another user." });
+            return;
+          }
+          candidate = rebased;
         }
-        candidate = rebased;
       }
       if (!canUpsert(next, actor, collection, previous, candidate)) {
         denied.push({ scope: collection, id, reason: "Permission denied." });
@@ -3103,6 +3368,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       }
       values.set(id, saved);
       changed += 1;
+      if (collection === "calendarEvents") calendarAuditEvents.push({ action: previous ? "Cập nhật cuộc họp" : "Thêm cuộc họp", event: saved });
       if (collection === "tasks") {
         const notificationIds = appendTaskChangeNotifications(next, actor, previous, saved);
         serverNotificationIds.push(...notificationIds);
@@ -3123,6 +3389,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       }
       values.delete(id);
       changed += 1;
+      if (collection === "calendarEvents") calendarAuditEvents.push({ action: "Xóa cuộc họp", event: previous });
     });
     const oldOrder = records(next, collection).map(recordId).filter(Boolean);
     next[collection] = [...oldOrder.filter((id) => values.has(id)), ...Array.from(values.keys()).filter((id) => !oldOrder.includes(id))].map((id) => values.get(id)!);
@@ -3160,7 +3427,8 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
   changed += gpmbAdvance.taskIds.length + gpmbAdvance.workflowIds.length + gpmbAdvance.notificationIds.length;
   serverNotificationIds.push(...gpmbAdvance.notificationIds);
 
-  addServerActivity(next, actor, changed);
+  calendarAuditEvents.forEach((audit) => addCalendarEventActivity(next, actor, audit.action, audit.event));
+  if (changed > calendarAuditEvents.length) addServerActivity(next, actor, changed);
   return {
     state: next,
     denied,
@@ -3697,12 +3965,14 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
     await upsertProjectionRows("kpi_catalog", rows);
   }
 
-  // Every accepted command adds one server activity record, even when the
-  // client did not explicitly send a history item.
-  const latestServerActivity = records(state, "activityLog")
-    .filter((item) => recordId(item).startsWith("server-sync-"))
-    .slice(-1)[0];
-  if (latestServerActivity) await upsertProjectionRows("activity_log", projectionRecordRows([latestServerActivity], revision));
+  // Keep server-owned sync and calendar audit entries queryable without
+  // rewriting the full activity history on each command.
+  const serverActivities = records(state, "activityLog")
+    .filter((item) => recordId(item).startsWith("server-sync-"));
+  const latestServerActivity = serverActivities.filter((item) => !recordId(item).startsWith("server-sync-calendar-")).slice(-1);
+  const recentCalendarActivities = serverActivities.filter((item) => recordId(item).startsWith("server-sync-calendar-")).slice(-20);
+  const activityRows = [...latestServerActivity, ...recentCalendarActivities];
+  if (activityRows.length) await upsertProjectionRows("activity_log", projectionRecordRows(activityRows, revision));
   await updateRecordProjectionMarker(revision);
 }
 
@@ -3736,6 +4006,8 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
     if (!actor) throw new Error("Authentication required.");
     const result = applyPatch(current.state, actor, patch);
     lastDenied = result.denied;
+    const departmentStopEffects = stopRecurringTasksForDepartmentChanges(current.state, result.state, actor);
+    result.changed += departmentStopEffects.taskIds.length + departmentStopEffects.activityIds.length;
     if (!result.changed) return { snapshot: current, denied: lastDenied, changed: 0 };
     await secureMutatedAccountCredentials(result.state, patch);
     const { data, error } = await admin.rpc("kpi_update_shared_state", {
@@ -3767,13 +4039,22 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
                 deletes: patch.collections?.notifications?.deletes || [],
               },
             } : {}),
-            ...(result.serverGeneratedTaskIds.length ? {
+            ...(result.serverGeneratedTaskIds.length || departmentStopEffects.taskIds.length ? {
               tasks: {
                 upserts: [
                   ...(patch.collections?.tasks?.upserts || []),
-                  ...result.serverGeneratedTaskIds.map((id) => ({ id })),
+                  ...[...new Set([...result.serverGeneratedTaskIds, ...departmentStopEffects.taskIds])].map((id) => ({ id })),
                 ],
                 deletes: patch.collections?.tasks?.deletes || [],
+              },
+            } : {}),
+            ...(departmentStopEffects.activityIds.length ? {
+              activityLog: {
+                upserts: [
+                  ...(patch.collections?.activityLog?.upserts || []),
+                  ...departmentStopEffects.activityIds.map((id) => ({ id })),
+                ],
+                deletes: patch.collections?.activityLog?.deletes || [],
               },
             } : {}),
             ...(result.serverUpdatedGpmbWorkflowIds.length ? {
@@ -4049,14 +4330,14 @@ function recurringValueIsEnabled(task: JsonRecord): boolean {
   return ["daily", "weekly", "monthly", "quarterly", "hàng ngày", "hàng tuần", "hàng tháng", "hàng quý", "hang ngay", "hang tuan", "hang thang", "hang quy"].includes(recurrence);
 }
 
-function stopRecurringTaskInState(state: JsonRecord, actor: JsonRecord, taskId: string): { state: JsonRecord; stoppedOccurrences: number; revision: number; updatedAt: string } | null {
+function stopRecurringTaskInState(state: JsonRecord, actor: JsonRecord, taskId: string, automaticReason = ""): { state: JsonRecord; stoppedOccurrences: number; revision: number; updatedAt: string } | null {
   const clicked = records(state, "tasks").find((task) => recordId(task) === taskId);
   if (!clicked) throw new Error("The recurring task was not found.");
   const source = recurringSeriesSource(state, clicked);
   if (!source || !recurringValueIsEnabled(source) || String(source.recurrenceStoppedAt || "")) {
     throw new Error("This recurring series is already stopped or no longer active.");
   }
-  if (!canStopRecurringSeries(state, actor, source)) throw new Error("Permission denied.");
+  if (!automaticReason && !canStopRecurringSeries(state, actor, source)) throw new Error("Permission denied.");
 
   const seriesKey = taskRecurrenceSeriesKey(source);
   const today = vietnamDateKey();
@@ -4092,7 +4373,9 @@ function stopRecurringTaskInState(state: JsonRecord, actor: JsonRecord, taskId: 
           status: "Đã ngừng",
           previousStatus,
           action: "Dừng kỳ định kỳ",
-          note: `Kỳ công việc được ngừng khi dừng chuỗi định kỳ từ ${today}.`,
+          note: automaticReason
+            ? `Kỳ công việc tự động ngừng do ${automaticReason} từ ${today}.`
+            : `Kỳ công việc được ngừng khi dừng chuỗi định kỳ từ ${today}.`,
           createdAt: timestamp,
           createdById: actorId,
           createdBy: actorName,
@@ -4102,11 +4385,11 @@ function stopRecurringTaskInState(state: JsonRecord, actor: JsonRecord, taskId: 
     updatedCount += 1;
     return stampTaskAudit(nextState, task, candidate, actor);
   });
-  const owner = taskParticipantPerson(nextState, source.ownerId);
+  const owner = recurrenceOwnerForDate(nextState, source, today) || taskParticipantPerson(nextState, source.ownerId);
   const activityLog = records(nextState, "activityLog");
   activityLog.push({
     id: `server-sync-${crypto.randomUUID()}`,
-    action: "Dừng định kỳ",
+    action: automaticReason ? "Tự dừng định kỳ" : "Dừng định kỳ",
     module: "Công việc",
     targetType: "task-recurrence",
     targetId: seriesKey,
@@ -4114,13 +4397,56 @@ function stopRecurringTaskInState(state: JsonRecord, actor: JsonRecord, taskId: 
     departmentId: String(owner?.departmentId || ""),
     period: String(source.due || "").slice(0, 7),
     title: String(source.title || "Chuỗi công việc định kỳ"),
-    details: `Đã dừng sinh kỳ mới; ${stoppedOccurrences} kỳ tương lai chưa bắt đầu được đánh dấu Đã ngừng. ${updatedCount} bản ghi trong chuỗi đã lưu dấu vết dừng.`,
+    details: `Đã dừng sinh kỳ mới; ${stoppedOccurrences} kỳ tương lai chưa bắt đầu được đánh dấu Đã ngừng. ${updatedCount} bản ghi trong chuỗi đã lưu dấu vết dừng.${automaticReason ? ` Lý do: ${automaticReason}.` : ""}`,
     createdAt: timestamp,
     createdBy: actorName,
     createdById: actorId,
   });
   nextState.activityLog = activityLog.slice(-5000);
   return { state: nextState, stoppedOccurrences, revision: 0, updatedAt: timestamp };
+}
+
+function stopRecurringTasksForDepartmentChanges(previousState: JsonRecord, nextState: JsonRecord, actor: JsonRecord): { taskIds: string[]; activityIds: string[]; stoppedSeriesCount: number; stoppedOccurrences: number } {
+  const previousPeople = new Map(records(previousState, "people").map((person) => [recordId(person), person]));
+  const movedPeople = records(nextState, "people").filter((person) => {
+    const previous = previousPeople.get(recordId(person));
+    return previous && String(previous.departmentId || "") !== String(person.departmentId || "");
+  });
+  if (!movedPeople.length || !canManagePeople(nextState, actor)) {
+    return { taskIds: [], activityIds: [], stoppedSeriesCount: 0, stoppedOccurrences: 0 };
+  }
+
+  const today = vietnamDateKey();
+  const taskIds = new Set<string>();
+  const activityIds: string[] = [];
+  let stoppedSeriesCount = 0;
+  let stoppedOccurrences = 0;
+  for (const person of movedPeople) {
+    const previous = previousPeople.get(recordId(person))!;
+    const previousDepartment = records(previousState, "departments").find((item) => recordId(item) === String(previous.departmentId || ""));
+    const nextDepartment = records(nextState, "departments").find((item) => recordId(item) === String(person.departmentId || ""));
+    const reason = `nhân sự ${String(person.name || "được giao")} chuyển từ ${String(previousDepartment?.name || "phòng cũ")} sang ${String(nextDepartment?.name || "phòng mới")}`;
+    const sources = records(nextState, "tasks").filter((task) => !String(task.recurrenceSourceId || "")
+      && !assignedTask(task)
+      && recurringValueIsEnabled(task)
+      && !String(task.recurrenceStoppedAt || ""));
+    for (const source of sources) {
+      const responsible = recurrenceOwnerForDate(nextState, source, today) || taskParticipantPerson(nextState, source.ownerId);
+      if (String(responsible?.id || "") !== recordId(person)) continue;
+      const result = stopRecurringTaskInState(nextState, actor, recordId(source), reason);
+      if (!result) continue;
+      nextState.tasks = result.state.tasks;
+      nextState.activityLog = result.state.activityLog;
+      result.state.tasks.forEach((task) => {
+        if (taskRecurrenceSeriesKey(task) === taskRecurrenceSeriesKey(source)) taskIds.add(recordId(task));
+      });
+      const activity = result.state.activityLog.at(-1);
+      if (activity && recordId(activity)) activityIds.push(recordId(activity));
+      stoppedSeriesCount += 1;
+      stoppedOccurrences += result.stoppedOccurrences;
+    }
+  }
+  return { taskIds: [...taskIds], activityIds, stoppedSeriesCount, stoppedOccurrences };
 }
 
 async function stopRecurringTaskWithRetry(actorId: string, taskId: string): Promise<{ snapshot: StateSnapshot; stoppedOccurrences: number }> {
@@ -4654,8 +4980,12 @@ Deno.serve(async (request) => {
               "Chỉ đọc, giải thích, tóm tắt và tư vấn. Không khẳng định đã tạo, sửa, duyệt, xóa hoặc gửi dữ liệu; không có công cụ thao tác hệ thống.",
               "Khi nói về công việc, phân biệt ngày kế hoạch với trạng thái hiện tại; nêu ngày cụ thể nếu có. Nếu dữ liệu mâu thuẫn hoặc thiếu, nói rõ điều đó.",
               "Khi câu trả lời dựa trên dữ liệu hệ thống, nêu phạm vi được phân quyền và mốc cập nhật trong context. Không tự tạo tên hoặc dữ kiện nguồn không có trong context.",
+              "Chỉ dùng tìm kiếm web khi câu hỏi cần thông tin bên ngoài hoặc cập nhật; nếu dùng, gắn trích dẫn có thể đối chiếu với nguồn. Tuyệt đối không đưa tên người, tên dự án, tiêu đề công việc hoặc dữ liệu nội bộ trong context vào truy vấn web.",
             ].join(" "),
             input: JSON.stringify({ question: message, context }),
+            tools: [{ type: "web_search", search_context_size: "low" }],
+            tool_choice: "auto",
+            include: ["web_search_call.action.sources"],
             max_output_tokens: 500,
             reasoning: { effort: "low" },
             store: false,
@@ -4677,7 +5007,14 @@ Deno.serve(async (request) => {
           .join("\n\n")
           .slice(0, 4000);
         if (!reply) return json(request, { error: "Dịch vụ AI không trả về nội dung. Hãy thử lại với câu hỏi ngắn hơn." }, 502);
-        return json(request, { reply, model: lunaAiModel, scope: context.scope, updatedAt: current.updatedAt, sources: lunaAiSources(context) });
+        return json(request, {
+          reply,
+          model: lunaAiModel,
+          scope: context.scope,
+          updatedAt: current.updatedAt,
+          sources: lunaAiSources(context),
+          externalSources: lunaAiExternalSources(output),
+        });
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           return json(request, { error: "Yêu cầu AI quá thời gian chờ. Hãy kiểm tra kết nối rồi thử lại." }, 504);
@@ -4748,7 +5085,7 @@ Deno.serve(async (request) => {
               : 500;
         return json(request, { error: message }, status);
       }
-      const realtimePublished = scheduledAt ? false : await sendLunaAnnouncementBroadcast(body.announcementId);
+      const realtimePublished = await sendLunaAnnouncementBroadcast(body.announcementId);
       return json(request, {
         revision: updated.snapshot.revision,
         recipientCount: updated.recipientCount,
