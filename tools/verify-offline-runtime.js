@@ -58,10 +58,12 @@ if (missing.length) {
   throw new Error(`Offline runtime checks failed: ${missing.join(", ")}`);
 }
 
-const peopleScript = '<script src="people-data.js?v=3.4.64"></script>';
-const calendarScript = '<script src="work-calendar.js?v=3.4.64"></script>';
-const assistantScript = '<script src="virtual-assistant.js?v=3.4.64"></script>';
-const runtimeScript = '<script src="script.js?v=3.4.64"></script>';
+const releaseVersion = markup.match(/<meta name="application-version" content="([^"]+)">/)?.[1];
+if (!releaseVersion) throw new Error("Application release version is missing from index.html.");
+const peopleScript = `<script src="people-data.js?v=${releaseVersion}"></script>`;
+const calendarScript = `<script src="work-calendar.js?v=${releaseVersion}"></script>`;
+const assistantScript = `<script src="virtual-assistant.js?v=${releaseVersion}"></script>`;
+const runtimeScript = `<script src="script.js?v=${releaseVersion}"></script>`;
 if (!markup.includes(peopleScript) || !markup.includes(calendarScript) || !markup.includes(assistantScript) || !markup.includes(runtimeScript)) {
   throw new Error("Offline runtime scripts are missing from index.html.");
 }

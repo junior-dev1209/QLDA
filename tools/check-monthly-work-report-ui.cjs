@@ -117,9 +117,8 @@ async function run() {
       window.alert = (message) => { window.alertMessage = message; };
     });
     await page.addScriptTag({ content: reportFunctions.map(extractFunction).join("\n") });
-    assert.equal(await page.locator("#dashboardMonthlyReportPeriod").count(), 1);
-    assert.equal(await page.locator("#exportMonthlyWorkReportPdf").count(), 1);
-    await page.screenshot({ path: path.join(outputDirectory, "desktop-monthly-report-control.png"), fullPage: false });
+    assert.equal(await page.locator(".dashboard-report-actions").count(), 1, "Tổng quan giữ nhóm nút xuất báo cáo.");
+    await page.screenshot({ path: path.join(outputDirectory, "desktop-luna-report-entry.png"), fullPage: false });
     await page.evaluate(async () => {
       window.monthlyReportHtml = "";
       window.open = () => ({
@@ -155,7 +154,7 @@ async function run() {
     });
     await reportPage.close();
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: path.join(outputDirectory, "mobile-monthly-report-control.png"), fullPage: true });
+    await page.screenshot({ path: path.join(outputDirectory, "mobile-luna-report-entry.png"), fullPage: true });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, "Khu vực báo cáo tháng không được tràn ngang trên mobile.");
   } finally {
     await browser.close();

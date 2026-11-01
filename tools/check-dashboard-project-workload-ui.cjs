@@ -166,8 +166,7 @@ async function run() {
     assert.equal(await page.locator("#dashboardProjectTrendChart .dashboard-project-trend-line").count(), 2);
     assert.equal(await page.locator("#dashboardProjectTimelineChart [data-dashboard-project-timeline]").count(), 24);
     assert.equal(await page.locator("#dashboardProjectResourceChart [data-dashboard-project-analytics]").count(), 6);
-    assert.equal(await page.locator("#dashboardDailyReportDate").count(), 1);
-    assert.equal(await page.locator("#exportDailyWorkReportPdf").count(), 1);
+    assert.equal(await page.locator(".dashboard-report-actions").count(), 1, "Tổng quan giữ nguyên các điều khiển báo cáo.");
     await page.screenshot({ path: path.join(outputDirectory, "desktop-projects.png"), fullPage: true });
     await page.evaluate(() => setDashboardAnalyticsTab("projects"));
     assert.equal(await page.locator("#dashboardAnalyticsProjects").isVisible(), true, "Project analytics tab should become visible.");
@@ -186,7 +185,6 @@ async function run() {
     assert.equal(await page.evaluate(() => lastPopup.tasks.length), 1, "A project milestone should open only the work in its reporting bucket.");
 
     await page.evaluate(() => {
-      byId("dashboardDailyReportDate").value = "2026-09-18";
       window.dailyReportHtml = "";
       window.open = () => ({
         document: { open() {}, write(value) { window.dailyReportHtml = value; }, close() {} },
@@ -196,7 +194,7 @@ async function run() {
     });
     const dailyReportHtml = await page.evaluate(() => window.dailyReportHtml);
     assert.match(dailyReportHtml, /Báo cáo công việc hàng ngày/, "Daily PDF report should include the report heading.");
-    assert.match(dailyReportHtml, /Dự án đường Vành đai 3/, "Daily PDF report should include projects with work on the selected date.");
+    assert.match(dailyReportHtml, /Dự án đường Vành đai 3/, "Daily PDF report should include projects with work on today's date.");
     assert.match(dailyReportHtml, /window\.print\(\)/, "Daily PDF report should open the native Save as PDF flow.");
 
     await page.evaluate(() => { dashboardWorkloadView = "people"; renderDashboardOperations([]); });

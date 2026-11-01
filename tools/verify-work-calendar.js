@@ -78,6 +78,8 @@ function extract(text, name) {
   return text.slice(start, end < 0 ? text.length : end);
 }
 const server = {
+  Date,
+  crypto: require("node:crypto").webcrypto,
   records: (state, name) => state[name] || [], recordId: (record) => record.id,
   isRecord: (record) => !!record && typeof record === "object",
   clone: (record) => JSON.parse(JSON.stringify(record)),
@@ -126,6 +128,15 @@ assert.equal(server.canUpsert(db, admin, "tasks", undefined, { sourceCalendarEve
 assert.equal(server.canUpsert(db, admin, "tasks", undefined, { sourceCalendarEventId: "e1" }), true);
 assert.equal(server.canUpsert(db, employee, "tasks", undefined, { sourceCalendarEventId: "e1" }), false);
 assert.equal(server.canUpsert(db, calendarEditor, "tasks", undefined, { sourceCalendarEventId: "e1" }), true);
+vm.runInContext(stripTypeScriptTypes(extract(edge, "addCalendarEventActivity")), server);
+const calendarAuditState = { activityLog: [] };
+server.addCalendarEventActivity(calendarAuditState, manager, "Thêm cuộc họp", meeting);
+assert.equal(calendarAuditState.activityLog[0].targetType, "calendar-event");
+assert.equal(calendarAuditState.activityLog[0].targetId, meeting.id);
+assert.equal(calendarAuditState.activityLog[0].actorId, manager.id);
+assert.match(calendarAuditState.activityLog[0].id, /^server-sync-calendar-/);
+assert.match(edge, /collection === "calendarEvents" && comparisonBaseValue == null[\s\S]*calendar-event-\$\{crypto\.randomUUID\(\)\}/, "Lịch mới bị trùng ID phải được cấp ID mới thay vì bị từ chối.");
+assert.match(calendarSource, /calendarAuditIsServerOwned[\s\S]*deploymentVersionAtLeast\(sharedSync\.deploymentVersion, "2026\.10\.27\.2"\)[\s\S]*if \(!calendarAuditIsServerOwned\) \{\s*logActivity/, "Frontend chỉ ghi nhật ký lịch cục bộ khi máy chủ chưa hỗ trợ audit nguyên tử.");
 assert.equal(server.normalizeTaskCompletionLifecycle({ status: "Quá hạn", progress: 0 }).status, "Chuẩn bị thực hiện");
 assert.equal(server.normalizeTaskCompletionLifecycle({ status: "Quá hạn", progress: 40 }).status, "Đang thực hiện");
 const directory = plain(server.calendarPublicDirectory(db));

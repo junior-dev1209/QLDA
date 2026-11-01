@@ -34,6 +34,7 @@ const sandbox = {
   recurrenceSeriesIsActive: () => true,
   canStopTaskRecurrence: () => true,
   dailyReportDateValue: () => today,
+  recurrenceOwnerForDue: (task) => ({ id: task.ownerId, departmentId: "dept-1" }),
   isTaskFinishedStatus: (status) => ["Hoàn thành", "Đã ngừng"].includes(String(status || "")),
   currentActorInfo: () => ({ id: "account-owner", name: "Nguyễn An" }),
   uid: (prefix) => `${prefix}-new`,
@@ -60,7 +61,11 @@ assert.equal(sandbox.state.activityLog[0].action, "Dừng định kỳ", "Thao t
 assert.match(client, /if \(recurrence === TASK_RECURRENCE_NONE \|\| sourceTask\.recurrenceStoppedAt \|\| !sourceTask\.due\) return;/, "Bộ sinh định kỳ phải bỏ qua chuỗi đã dừng.");
 assert.match(client, /task-stop-recurrence-button/, "Chi tiết công việc phải có nút Dừng định kỳ.");
 assert.match(edge, /action === "stop-recurring-task" && request\.method === "POST"/, "Edge Function phải có endpoint dừng chuỗi.");
+assert.match(edge, /const deploymentVersion = "2026\.10\.30\.3"/, "Edge Function phải công bố phiên bản có tự dừng khi đổi phòng và duyệt gia hạn.");
 assert.match(edge, /function canStopRecurringSeries\(/, "Máy chủ phải kiểm tra quyền dừng định kỳ.");
+assert.match(edge, /function stopRecurringTasksForDepartmentChanges\(/, "Edge Function phải tự dừng định kỳ khi thay đổi phòng.");
+assert.match(edge, /stopRecurringTasksForDepartmentChanges\(current\.state, result\.state, actor\)/, "Quy tắc tự dừng phải nằm trong cùng giao dịch cập nhật nhân sự.");
+assert.match(edge, /recurrenceOwnerForDate\(nextState, source, today\)/, "Chỉ dừng chuỗi đang do nhân sự đó phụ trách.");
 const edgePermission = edge.match(/function canStopRecurringSeries\(state: JsonRecord, actor: JsonRecord, source: JsonRecord\): boolean \{[\s\S]*?\n\}/)?.[0];
 assert.ok(edgePermission, "Thiếu hàm phân quyền dừng chuỗi phía máy chủ.");
 const permissionSandbox = {
@@ -81,6 +86,41 @@ assert.equal(permissionSandbox.canStopRecurringSeries({}, { role: "employee", pe
 assert.equal(permissionSandbox.canStopRecurringSeries({}, { role: "director" }, {}), true, "Ban giám đốc được dừng chuỗi khi cần.");
 assert.match(edge, /function migrateTaskCategoriesForCatalogChange\(/, "Máy chủ phải ánh xạ nhiệm vụ sang mục danh mục được chỉnh sửa.");
 assert.match(php, /if \(\$action === 'stop-recurring-task' && \$_SERVER\['REQUEST_METHOD'\] === 'POST'\)/, "PHP shared-sync cũng phải hỗ trợ dừng chuỗi định kỳ.");
+assert.match(php, /const SYNC_DEPLOYMENT_VERSION = '2026\.10\.28\.1'/, "PHP API phải công bố phiên bản có tự dừng khi đổi phòng.");
+assert.match(php, /phpStopRecurringTasksForDepartmentChanges\(\$current\['state'\], \$nextState, \$actor\)/, "PHP phải dừng chuỗi trong cùng lần lưu chuyển phòng.");
+assert.match(php, /function phpStopRecurringTasksForDepartmentChanges\(/, "PHP API phải có bộ xử lý chuỗi của nhân sự chuyển phòng.");
 assert.match(php, /str_starts_with\(\$positionId, 'truong-phong-'\)/, "PHP shared-sync phải nhận Trưởng phòng theo chức vụ, đồng nhất với Edge Function.");
+assert.match(client, /deploymentVersionAtLeast\(sharedSync\.deploymentVersion, "2026\.10\.28\.1"\)/, "Không cho phép đổi phòng khi máy chủ chưa có hành vi tự dừng an toàn.");
+
+const movedPersonId = "person-1";
+const departmentPeople = new Map([
+  ["person-1", { id: "person-1", name: "Nguyễn An" }],
+  ["person-2", { id: "person-2", name: "Trần Bình" }],
+]);
+const automaticStops = [];
+const departmentSandbox = {
+  state: { tasks: [
+    { id: "series-1", ownerId: "person-1", recurrence: "weekly" },
+    { id: "series-2", ownerId: "person-2", recurrence: "monthly" },
+    { id: "series-3", ownerId: "person-1", recurrence: "daily", recurrenceStoppedAt: "2026-10-01" },
+    { id: "assigned-1", ownerId: "person-1", kind: "assigned", recurrence: "weekly" },
+  ] },
+  TASK_KIND_REGULAR: "regular",
+  TASK_RECURRENCE_NONE: "none",
+  normalizeTaskKind: (task) => task.kind || "regular",
+  normalizeTaskRecurrence: (task) => task.recurrence || "none",
+  dailyReportDateValue: () => today,
+  recurrenceOwnerForDue: (task) => departmentPeople.get(task.ownerId),
+  personById: (id) => departmentPeople.get(id),
+  departmentById: (id) => ({ name: id === "old" ? "Phòng cũ" : "Phòng mới" }),
+  applyRecurringTaskStop: (id, options) => { automaticStops.push([id, options.automaticReason]); return { stoppedOccurrences: 2 }; },
+};
+vm.createContext(departmentSandbox);
+vm.runInContext(extractFunction("stopRecurringTasksAfterDepartmentChange"), departmentSandbox);
+const automaticResult = departmentSandbox.stopRecurringTasksAfterDepartmentChange(movedPersonId, "old", "new");
+assert.equal(automaticResult.stoppedSeriesCount, 1, "Chuyển phòng chỉ dừng chuỗi đang phụ trách của nhân sự đó.");
+assert.equal(automaticResult.stoppedOccurrences, 2);
+assert.equal(automaticStops[0][0], "series-1");
+assert.match(automaticStops[0][1], /chuyển từ Phòng cũ sang Phòng mới/);
 
 console.log("recurring_task_stop=passed");

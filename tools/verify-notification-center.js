@@ -10,6 +10,8 @@ const client = fs.readFileSync("script.js", "utf8");
 const calendar = fs.readFileSync("work-calendar.js", "utf8");
 const edge = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
 const migration = fs.readFileSync("supabase/migrations/20261002000000_kpi_notifications.sql", "utf8");
+const appVersion = html.match(/<meta name="application-version" content="([^"]+)"/)?.[1];
+assert.ok(appVersion, "Không tìm thấy phiên bản ứng dụng.");
 
 function extract(text, name) {
   const start = text.indexOf(`function ${name}(`);
@@ -26,10 +28,10 @@ function extract(text, name) {
   'id="notificationQuickToasts"',
   'data-notification-toggle',
   'class="notification-bell-shape"',
-  'src="assets/notification-bell-glass.png?v=3.4.64"',
+  `src="assets/notification-bell-glass.png?v=${appVersion}"`,
 ].forEach((marker) => assert.ok(html.includes(marker), `Thiếu thành phần giao diện: ${marker}`));
-assert.equal((html.match(/src="assets\/notification-bell-glass\.png\?v=3\.4\.64"/g) || []).length, 2, "Chuông desktop và mobile phải dùng cùng bản asset.");
-assert.ok(html.indexOf('virtual-assistant.js?v=3.4.64') < html.indexOf('script.js?v=3.4.64'), "Cầu nối trợ lý phải sẵn sàng trước lần quét thông báo đầu tiên, kể cả offline.");
+assert.equal((html.match(new RegExp(`src="assets/notification-bell-glass\\.png\\?v=${appVersion}"`, "g")) || []).length, 2, "Chuông desktop và mobile phải dùng cùng bản asset.");
+assert.ok(html.indexOf(`virtual-assistant.js?v=${appVersion}`) < html.indexOf(`script.js?v=${appVersion}`), "Cầu nối trợ lý phải sẵn sàng trước lần quét thông báo đầu tiên, kể cả offline.");
 assert.match(client, /window\.virtualAssistantSyncAccount\?\.\(\);\s*renderNotificationCenter\(\);/, "Phải đồng bộ tài khoản trợ lý trước khi phát nhắc việc lúc khởi động.");
 
 assert.match(css, /\.notification-quick-toasts \{[\s\S]*?bottom: 20px;[\s\S]*?left: 20px;/, "Popup nhanh phải hiển thị ở góc dưới bên trái.");
@@ -64,6 +66,8 @@ assert.doesNotMatch(assistantClient, /setTimeout\(hideQuickNotice/, "Thông báo
 assert.match(client, /function ingestDailyTaskReminderNotifications/, "Phải nhắc công việc cần làm hôm nay và sắp đến hạn.");
 assert.match(client, /function ingestBulletinUpdateNotifications/, "Tin Bảng tin mới phải được nhắc qua trợ lý.");
 assert.match(client, /function recoverActiveAssistantReminderIds/, "Khi nâng cấp offline phải khôi phục các nhắc việc còn hiệu lực chưa được trợ lý hiển thị.");
+assert.match(client, /function renderNotificationCenter\([\s\S]*?if \(present\) presentNewNotificationToasts\(items, \{ forceIds \}\);[\s\S]*?if \(!panel\) return;/, "Toast nhắc việc phải chạy cả khi bảng thông báo đóng.");
+assert.match(client, /function scheduleLunaAnnouncementWake\(\)[\s\S]*?window\.setTimeout/, "Thông báo đã hẹn giờ phải có bộ đánh thức tại máy khách.");
 assert.match(client, /phuc-thinh-notification-presented-v2/, "Dùng sổ đã-hiển-thị mới để khôi phục nhắc việc bị bỏ lỡ ở phiên bản trước.");
 assert.match(client, /if \(notificationCenter\.presentedIds\.has\(item\.id\)\) return;/, "Không lặp lại popup chủ động khi người dùng tải lại hoặc đang mở hệ thống.");
 assert.match(client, /phuc-thinh-assistant-birthday-v1/, "Lời chúc sinh nhật cần được chống lặp giữa các phiên.");
@@ -105,7 +109,7 @@ assert.match(calendar, /calendarReminderToast"\)\?\.classList\.add\("is-hidden"\
 assert.doesNotMatch(calendar, /Notification\.requestPermission|new Notification\(/, "Lịch không được yêu cầu thông báo trình duyệt riêng.");
 
 [
-  'const deploymentVersion = "2026.10.23.1"',
+  'const deploymentVersion = "2026.10.30.3"',
   'notifications: true,',
   'function notificationFeedForAccount',
   'function notificationAcknowledgementIsValid',

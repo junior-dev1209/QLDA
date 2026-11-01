@@ -33,7 +33,8 @@ assert.match(edge, /if \(!isAdmin\(account\)\) return json\(request, \{ error: "
 assert.match(edge, /function validLunaAnnouncementRequest[\s\S]*?message\.length <= 1200[\s\S]*?departmentIds\.every[\s\S]*?roleIds\.every[\s\S]*?scheduledAt/, "Máy chủ phải kiểm tra nội dung, phòng, vai trò và thời điểm phát.");
 assert.match(edge, /recipientAccountId: recordId\(recipient\)[\s\S]*?title: "Thông điệp toàn Ban"[\s\S]*?senderName: "Luna"/, "Thông báo phải được lưu riêng cho từng người nhận và gắn tên Luna.");
 assert.match(edge, /records\(current\.state, "accounts"\)[\s\S]*?filter\(\(account\) => !Boolean\(account\.disabled\)\)[\s\S]*?departmentIds\.includes\(accountDepartmentId[\s\S]*?roleIds\.includes\(accountRole/, "Không gửi cho tài khoản bị khóa và phải áp dụng đúng bộ lọc người nhận.");
-assert.match(edge, /scheduledAt \? false : await sendLunaAnnouncementBroadcast/, "Thông báo hẹn giờ không được phát Realtime trước thời hạn.");
+assert.match(edge, /const realtimePublished = await sendLunaAnnouncementBroadcast\(body\.announcementId\)/, "Thông báo phải phát tín hiệu đồng bộ ngay cả khi nội dung được hẹn giờ.");
+assert.match(edge, /httpSend\("announcement", \{ announcementId \}/, "Realtime chỉ chuyển ID, không lộ nội dung thông báo trước giờ hẹn.");
 assert.match(edge, /action === "luna-announcement-receipts"[\s\S]*?if \(!isAdmin\(account\)\)[\s\S]*?lunaAnnouncementReceiptDetails/, "Biên nhận đã xem chỉ được trả cho Admin.");
 assert.match(edge, /channel\.httpSend\("announcement", \{ announcementId \}[\s\S]*?result\?\.success === true/, "Edge Function phải phát tín hiệu Realtime sau khi lưu và xác nhận kết quả đúng API.");
 assert.match(edge, /lunaBroadcast: true/, "Máy chủ phải công bố hỗ trợ Realtime.");
@@ -43,7 +44,7 @@ assert.match(client, /await refreshSharedState\(\{ force: true \}\)/, "Thông b�
 assert.match(client, /if \(force\) renderNotificationCenter\(\)/, "Sau đồng bộ, Luna phải hiện popup thông báo mới.");
 assert.match(migration, /for select\s+to anon\s+using \([\s\S]*extension = 'broadcast'[\s\S]*realtime\.topic\(\) = 'luna-system-announcements'/, "RLS chỉ cho phép nhận Broadcast ở đúng topic.");
 assert.doesNotMatch(migration, /for insert/i, "Không cấp quyền phát Broadcast cho trình duyệt.");
-assert.match(apache, /script-src 'self' https:\/\/esm\.sh https:\/\/cdn\.esm\.sh/, "CSP phải cho phép tải thư viện Realtime đã pin phiên bản.");
+assert.match(apache, /script-src 'self' (?:'wasm-unsafe-eval' )?https:\/\/esm\.sh https:\/\/cdn\.esm\.sh/, "CSP phải cho phép tải thư viện Realtime và WebAssembly cục bộ đã pin phiên bản.");
 assert.match(apache, /wss:\/\/hqquobfaccxnydeyvioe\.supabase\.co/, "CSP phải cho phép WebSocket Supabase Realtime.");
 
 console.log("luna_announcements=passed");

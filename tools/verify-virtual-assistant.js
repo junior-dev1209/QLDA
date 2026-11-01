@@ -5,6 +5,7 @@ const vm = require("node:vm");
 const html = fs.readFileSync("index.html", "utf8");
 const client = fs.readFileSync("virtual-assistant.js", "utf8");
 const styles = fs.readFileSync("virtual-assistant.css", "utf8");
+const shellStyles = fs.readFileSync("styles.css", "utf8");
 const worker = fs.readFileSync("service-worker.js", "utf8");
 const apache = fs.readFileSync(".htaccess", "utf8");
 
@@ -13,7 +14,8 @@ assert.match(html, /id="assistantQuickNotice"/, "Trợ lý cần có popup nhanh
 assert.match(html, /aria-label="Lời thoại từ Luna"/, "Popup phải được nhận diện là lời thoại của Luna.");
 assert.match(html, /<button id="assistantQuickNoticeText" class="assistant-quick-notice-message"/, "Phần chữ của bong bóng phải là vùng xác nhận đã xem.");
 assert.doesNotMatch(html, /assistantQuickNotice(?:Target|Chat|Close)|<header><strong>Luna<\/strong>/, "Popup không còn tiêu đề Luna hoặc các nút thao tác riêng.");
-assert.match(html, /class="assistant-launcher-pose assistant-launcher-pose--idle" src="assets\/luna-outfit-field\.png\?v=3\.4\.64"/, "Nhân vật 2D theo chủ đề công tác phải hiển thị trực tiếp làm tư thế nghỉ.");
+assert.match(html, /class="assistant-launcher-pose assistant-launcher-pose--idle" src="assets\/luna-outfit-field\.png\?v=[\d.]+"/, "Nhân vật 2D theo chủ đề công tác phải hiển thị trực tiếp làm tư thế nghỉ.");
+assert.match(client, /application-version[\s\S]*?function assistantAssetUrl\(path\)[\s\S]*?url\.searchParams\.set\("v", assistantAssetVersion\)/, "Ảnh Luna phải nhận phiên bản cache hiện tại của ứng dụng.");
 assert.equal((html.match(/data-assistant-enabled-toggle/g) || []).length, 0, "Không đặt công tắc bật/tắt trợ lý trong hồ sơ tài khoản.");
 assert.match(html, /id="assistantMinimize"/, "Widget phải có nút thu nhỏ ngay cạnh nhân vật.");
 assert.match(html, /id="assistantRestore"/, "Icon góc phải phải khôi phục nhân vật.");
@@ -24,10 +26,18 @@ assert.match(client, /canViewTaskRecord\(task\)/, "Danh sách trợ lý phải l
 assert.match(client, /canCreateRegularTasks\(\)/, "Mở biểu mẫu tạo việc phải kiểm tra quyền.");
 assert.match(client, /trigger\.click\(\)/, "Trợ lý phải mở luồng tạo công việc hiện có thay vì ghi dữ liệu riêng.");
 assert.doesNotMatch(client, /state\.tasks\.(?:push|splice)|state\.tasks\s*=/, "Trợ lý không được tự ghi hoặc xóa công việc ở client.");
-assert.match(client, /recognition\.onresult[\s\S]*input\.value\s*=\s*transcript/, "Giọng nói chỉ điền vào ô để người dùng kiểm tra.");
-assert.match(client, /recognition\.start\(\)/, "Nút giọng nói phải khởi chạy nhận dạng sau thao tác người dùng.");
+assert.match(client, /engine\.onresult[\s\S]*?finishVoiceCapture\(capture\)[\s\S]*?submitVoiceTranscript\(transcript, accountId\)/, "Giọng nói phải gửi kết quả của API trình duyệt vào hội thoại Luna.");
+assert.match(client, /input\.form\?\.requestSubmit\(\)/, "Giọng nói phải đi qua luồng gửi hiện hành của hội thoại.");
+assert.match(client, /voiceRecognitionTimer = window\.setTimeout[\s\S]*?20_000/, "Thời gian nghe phải có giới hạn để không treo nút micro.");
+assert.doesNotMatch(client, /MediaRecorder|virtualAssistantTranscribeAudio/, "Không thu hoặc gửi bản ghi micro lên máy chủ.");
+assert.match(styles, /\.assistant-composer \.assistant-voice-button \{ width: 84px; min-width: 84px;/, "Nút nói phải đủ rộng khi đổi sang trạng thái Đang xử lý.");
+assert.match(client, /engine\.start\(\)/, "Nút giọng nói phải khởi chạy nhận dạng sau thao tác người dùng.");
 assert.match(html, /title="Trên màn hình lớn, kéo hoặc dùng phím mũi tên để di chuyển"/, "Tooltip phải mô tả đúng cách di chuyển trên màn hình lớn.");
 assert.match(client, /setPointerCapture/, "Kéo trợ lý phải tiếp tục ổn định ngoài vùng nút.");
+assert.match(html, /id="sidebarToggle"[\s\S]*?sidebar-toggle-icon[\s\S]*?sidebar-toggle-label/, "Nút thu gọn phải có biểu tượng và nhãn trợ năng riêng.");
+assert.match(html, /<svg class="nav-icon" aria-hidden="true"><use href="#icon-dashboard"><\/use><\/svg>/, "Menu thu gọn phải dùng bộ icon SVG đồng bộ.");
+assert.match(shellStyles, /body\.is-sidebar-collapsed \.sidebar-toggle-label \{\s*display: none !important;/, "Nhãn thao tác không được lộ ra khi menu đang thu gọn.");
+assert.match(shellStyles, /body\.is-sidebar-collapsed \.nav-icon \{[\s\S]*?width: 24px;[\s\S]*?height: 24px;/, "Icon menu thu gọn phải có kích thước đồng đều.");
 assert.match(client, /if \(!event\.isPrimary \|\| event\.button !== 0 \|\| isMobileAssistantViewport\(\)\) return/, "Vị trí trợ lý trên mobile phải cố định như bố cục đã chọn.");
 assert.match(client, /placeLauncher\(pointerDrag\.startLeft \+ deltaX, pointerDrag\.startTop \+ deltaY\)/, "Tọa độ trợ lý phải theo thao tác kéo.");
 assert.match(client, /phuc-thinh-assistant-position-v1:/, "Vị trí trợ lý cần được lưu riêng cho từng tài khoản.");
@@ -44,7 +54,7 @@ assert.match(client, /launcher\.addEventListener\("click",[\s\S]*?acknowledgeQui
 assert.match(client, /function loginGreetingMessage\(account\)[\s\S]*?window\.canViewTasks\(\)[\s\S]*?dailyStatusSummary\(currentSummaryTasks\(\), todayKey\)/, "Lời chào phải kèm tổng hợp theo đúng phạm vi công việc được xem.");
 assert.match(client, /function currentTasks\(\)[\s\S]*?canViewTaskRecord\(task\)/, "Nguồn công việc của Luna phải lọc từng bản ghi theo quyền xem.");
 assert.match(client, /function currentSummaryTasks\(\)[\s\S]*?taskMatchesDisplayScope\(task\)[\s\S]*?isRecurrenceStoppedTask\(task\)/, "Tổng hợp phải khớp kỳ hiển thị và loại mẫu định kỳ đã dừng.");
-assert.match(client, /async function handleCommand\(rawText, sequence = requestSequence\)[\s\S]*?taskSummaryHtml\(currentSummaryTasks\(\)\)/, "Mục Tình hình phải dùng cùng tập công việc với lời chào nhanh.");
+assert.match(client, /async function handleCommand\(rawText, sequence = requestSequence, reportWindow = null\)[\s\S]*?taskSummaryHtml\(currentSummaryTasks\(\)\)/, "Mục Tình hình phải dùng cùng tập công việc với lời chào nhanh.");
 assert.doesNotMatch(client, /Đang yêu cầu trình duyệt bật micro|Âm thanh được xử lý theo dịch vụ nhận dạng/, "Không hiển thị diễn giải dài về micro.");
 assert.doesNotMatch(html, /AI dùng khi online|assistant-ai-privacy/, "Không hiển thị đoạn diễn giải dài về xử lý AI.");
 const dailySummarySource = client.match(/function dailyStatusSummary\(tasks, todayKey\) \{[\s\S]*?\n  \}/)?.[0];
@@ -88,7 +98,7 @@ for (const [role, expectedCount] of Object.entries({ employee: 1, section_head: 
 }
 summaryScopeSandbox.activeRole = "no-task-access";
 assert.equal(summaryScopeSandbox.currentSummaryTasks().length, 0, "Tài khoản không có quyền công việc không nhận số liệu tổng hợp.");
-assert.match(client, /function showWelcome\(\)[\s\S]*?Em chào \$\{addressee\}[\s\S]*?Em cũng sẽ nhắc/, "Luna cần tiếp tục xưng em khi mở hội thoại chủ động.");
+assert.match(client, /function showWelcome\(\{ speak = true \} = \{\}\)[\s\S]*?Em chào \$\{addressee\}[\s\S]*?Em cũng sẽ nhắc/, "Luna cần tiếp tục xưng em khi mở hội thoại chủ động.");
 assert.match(client, /const quickNoticeQueue = \[\]/, "Các thông báo kế tiếp phải được xếp hàng khi đang có lời thoại.");
 assert.match(client, /const nextNotice = showNext \? quickNoticeQueue\.shift\(\) : null;[\s\S]*?presentQuickNotice\(nextNotice\)/, "Xác nhận một lời thoại phải hiện thông báo kế tiếp nếu có.");
 assert.match(client, /const panelWidth = Math\.min\(mobile \? 480 : 500/, "Hội thoại desktop phải có chiều rộng đọc thoải mái.");
@@ -116,7 +126,8 @@ assert.doesNotMatch(styles, /assistant-launcher:hover[^\n]*animation-duration/, 
 assert.doesNotMatch(styles, /\.assistant-launcher-pose\s*\{[^}]*filter:/, "Ảnh nhân vật không được phủ bóng đổ đậm.");
 assert.match(styles, /\.assistant-launcher:focus-visible\s*\{[^}]*outline:\s*2px solid rgba\(13, 101, 121, \.45\)/, "Vòng focus của trợ lý cần nhẹ và đồng điệu với hệ thống.");
 assert.match(styles, /\.assistant-panel\s*\{[^}]*height:\s*auto;[^}]*max-height:/, "Bong bóng cần co theo nội dung và giới hạn theo màn hình.");
-assert.match(styles, /width:\s*min\(600px, calc\(100vw - 32px\)\)/, "Bong bóng desktop đủ rộng để đọc và thao tác thoải mái.");
+assert.match(styles, /width:\s*min\(700px, calc\(100vw - 32px\)\)/, "Bong bóng desktop đủ rộng để đọc và thao tác thoải mái.");
+assert.match(styles, /width:\s*min\(560px, calc\(100vw - 24px\)\)/, "Bong bóng trên thiết bị hẹp phải tận dụng chiều rộng hữu ích của màn hình.");
 assert.match(styles, /min-height:\s*min\(560px, calc\(100dvh - 36px\)\)/, "Bong bóng desktop phải có chiều cao thao tác thoải mái và thích ứng viewport.");
 assert.match(styles, /\.assistant-quick-notice \{[\s\S]*?width: min\(430px, calc\(100vw - 40px\)\)[\s\S]*?--assistant-notice-border:/, "Khung nhắc chủ động phải đủ rộng và có giao diện bong bóng.");
 assert.match(styles, /\.assistant-quick-notice::before[\s\S]*?border-top: 11px solid var\(--assistant-notice-border\)/, "Bong bóng phải có đuôi hướng về Luna.");

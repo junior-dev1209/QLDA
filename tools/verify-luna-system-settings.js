@@ -17,7 +17,7 @@ assert.match(app, /localStorage\.removeItem\(SESSION_KEY\);\s*window\.virtualAss
 assert.match(assistant, /function assistantIsEnabled\(\)[\s\S]*?document\.body\.dataset\.lunaEnabled !== "false"/, "Widget phải đọc cấu hình hiển thị dùng chung.");
 assert.match(assistant, /root\.classList\.toggle\("is-hidden", !loggedIn \|\| !enabled\)/, "Luna phải ẩn khi đăng xuất hoặc bị tắt ở cấu hình.");
 assert.match(assistant, /if \(!assistantIsEnabled\(\) \|\| !account \|\| !item/, "Thông báo chủ động không được hiện khi Luna đang tắt.");
-assert.match(assistant, /function syncAccountAccess\(\)[\s\S]*?if \(!enabled\) \{\s*cancelLunaAiRequest\(\);\s*hideQuickNotice\(\);/, "Tắt Luna phải hủy tác vụ hội thoại và xóa bong bóng đang chờ.");
+assert.match(assistant, /function syncAccountAccess\(\)[\s\S]*?if \(!enabled\) \{\s*cancelLunaAiRequest\(\);\s*stopLunaSpeech\(\{ resetState: false \}\);\s*hideQuickNotice\(\);/, "Tắt Luna phải hủy tác vụ hội thoại, dừng giọng đọc và xóa bong bóng đang chờ.");
 assert.match(assistant, /phuc-thinh-luna-visibility-change/, "Widget phải cập nhật ngay khi cấu hình đổi.");
 
 for (const asset of ["luna-outfit-field.png", "luna-outfit-aodai-red.png", "luna-outfit-aodai-heritage.png"]) {

@@ -9,15 +9,12 @@ function extractFunction(name) {
   const marker = `function ${name}(`;
   const start = client.indexOf(marker);
   if (start < 0) throw new Error(`Thiếu hàm ${name}.`);
-  const end = client.indexOf("\nfunction ", start + marker.length);
+  const nextFunction = client.slice(start + marker.length).search(/\n(?:async )?function /);
+  const end = nextFunction < 0 ? -1 : start + marker.length + nextFunction;
   return client.slice(start, end < 0 ? client.length : end);
 }
 
-[
-  'id="exportMonthlyWorkReportPdf"',
-  'id="dashboardMonthlyReportPeriod"',
-  "Báo cáo công việc hàng tháng",
-].forEach((marker) => assert.ok(html.includes(marker), `Thiếu điều khiển báo cáo tháng: ${marker}`));
+assert.match(html, /dashboard-report-actions[\s\S]*dashboardMonthlyReportPeriod[\s\S]*exportMonthlyWorkReportPdf/, "Tổng quan phải giữ nút báo cáo tháng theo kỳ đánh giá.");
 
 [
   "function canViewMonthlyWorkReport",

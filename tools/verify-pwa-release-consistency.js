@@ -6,7 +6,7 @@ const client = fs.readFileSync("script.js", "utf8");
 const worker = fs.readFileSync("service-worker.js", "utf8");
 const manifest = fs.readFileSync("manifest.webmanifest", "utf8");
 const apacheConfig = fs.readFileSync(".htaccess", "utf8");
-const releaseVersion = "3.4.64";
+const releaseVersion = "3.4.115";
 
 [
   `manifest.webmanifest?v=${releaseVersion}`,
@@ -14,10 +14,12 @@ const releaseVersion = "3.4.64";
   `styles.css?v=${releaseVersion}`,
   `work-calendar.css?v=${releaseVersion}`,
   `virtual-assistant.css?v=${releaseVersion}`,
+  `document-templates.css?v=${releaseVersion}`,
   `people-data.js?v=${releaseVersion}`,
   `work-calendar.js?v=${releaseVersion}`,
   `script.js?v=${releaseVersion}`,
   `virtual-assistant.js?v=${releaseVersion}`,
+  `document-templates.js?v=${releaseVersion}`,
 ].forEach((asset) => assert.ok(index.includes(asset), `Tài nguyên lõi chưa gắn phiên bản phát hành: ${asset}`));
 
 assert.match(index, new RegExp(`data-app-version>Phiên bản ${releaseVersion}<`), "HTML không được hiện phiên bản cũ trước khi JavaScript tải xong.");
@@ -31,12 +33,32 @@ assert.match(worker, /new Request\(asset, \{ cache: "reload" \}\)/, "Cài đặt
 assert.match(worker, /"work-calendar\.css"/, "Service worker phải lưu CSS của Lịch công việc.");
 assert.match(worker, /"work-calendar\.js"/, "Service worker phải lưu mã Lịch công việc.");
 assert.match(worker, /"assets\/notification-bell-glass\.png"/, "Service worker phải lưu biểu tượng chuông thông báo.");
+[
+  "assets/topbar-wide-infrastructure-scene.jpg",
+  "assets/topbar-wide-scene-tet.jpg",
+  "assets/topbar-wide-scene-national-day.jpg",
+  "assets/topbar-wide-scene-anniversary.jpg",
+  "assets/topbar-wide-scene-women-day.jpg",
+  "assets/topbar-wide-scene-new-year.jpg",
+  "assets/topbar-wide-scene-hung-kings.jpg",
+  "assets/topbar-wide-scene-reunification-day.jpg",
+  "assets/topbar-wide-scene-children-day.jpg",
+  "assets/topbar-wide-scene-martyrs-day.jpg",
+  "assets/topbar-wide-scene-august-revolution.jpg",
+  "assets/topbar-wide-scene-vietnamese-women-day.jpg",
+  "assets/topbar-wide-scene-vietnamese-culture-day.jpg",
+  "assets/topbar-wide-scene-christmas.jpg",
+  "assets/topbar-festive-left.png",
+  "assets/topbar-festive-right.png",
+].forEach((asset) => assert.ok(worker.includes(`"${asset}"`), `PWA phải precache ảnh chủ đề ${asset} để dùng ngoại tuyến.`));
 assert.match(worker, /"assets\/virtual-assistant\.png"/, "Service worker phải lưu hình nhân vật trợ lý.");
 assert.doesNotMatch(worker, /virtual-assistant-(?:listening|thinking)\.png/, "Không tải trước ảnh trạng thái cũ không còn dùng.");
 assert.doesNotMatch(worker, /"virtual-assistant-3d\.js"|"assets\/three\.module\.js"/, "Mô-đun 3D không được làm tăng tải khởi động PWA; sẽ được cache khi cần.");
 assert.match(worker, /fetch\(event\.request\)[\s\S]*cache\.put\(event\.request, copy\)/, "Tài nguyên 3D tải theo nhu cầu phải được cache sau lần đầu.");
 assert.match(worker, /"virtual-assistant\.css"/, "Service worker phải lưu giao diện trợ lý.");
 assert.match(worker, /"virtual-assistant\.js"/, "Service worker phải lưu hành vi trợ lý.");
+assert.match(worker, /"document-templates\.css"/, "Service worker phải lưu giao diện mẫu văn bản.");
+assert.match(worker, /"document-templates\.js"/, "Service worker phải lưu logic mẫu văn bản.");
 assert.match(worker, /precacheReleaseShell\(\)\.then\(\(\) => self\.skipWaiting\(\)\)/, "Service worker chỉ được kích hoạt sau khi tải đủ gói phát hành.");
 assert.match(worker, /event\.request\.mode === "navigate"[\s\S]*cache: "no-store"/, "HTML online phải luôn tải mới từ máy chủ.");
 assert.match(worker, /cache\.match\(NAVIGATION_FALLBACK\)/, "Khi mất mạng phải có trang phát hành hiện tại để dự phòng.");

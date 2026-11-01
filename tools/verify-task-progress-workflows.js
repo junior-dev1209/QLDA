@@ -3,6 +3,7 @@ const assert = require("assert");
 
 const clientSource = fs.readFileSync("script.js", "utf8");
 const cssSource = fs.readFileSync("styles.css", "utf8");
+const htmlSource = fs.readFileSync("index.html", "utf8");
 const edgeSource = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
 
 function participant(task, personId) {
@@ -46,6 +47,15 @@ const timelyTask = { ...task, completedAt: "2026-08-05T16:30:00" };
 const lateTask = { ...task, completedAt: "2026-08-05T17:30:00" };
 assert.equal(completedOnTime(timelyTask), true, "Hoàn thành trước hạn không được đánh dấu chậm do duyệt muộn.");
 assert.equal(completedOnTime(lateTask), false, "Hoàn thành sau hạn phải được đánh dấu chậm.");
+
+assert.match(htmlSource, /class="task-schedule-fields"[\s\S]*?id="taskPriority"[\s\S]*?id="taskRecurrence"[\s\S]*?id="taskStartDate"[\s\S]*?class="task-deadline-fields"[\s\S]*?id="taskDue" type="date" required[\s\S]*?id="taskDueTime" type="time"[^>]*aria-label="Thời gian hoàn thành, không bắt buộc"/, "Các trường lịch công việc phải nằm chung một hàng trên desktop.");
+assert.doesNotMatch(htmlSource.match(/id="taskDueTime"[^>]*>/)?.[0] || "", /required/, "Không bắt buộc nhập thời gian hoàn thành.");
+assert.match(cssSource, /#taskForm \.task-schedule-fields\s*\{[\s\S]*?grid-column: 1 \/ -1;[\s\S]*?grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/, "Desktop phải chia đều năm trường thành một hàng.");
+assert.match(cssSource, /#taskForm \.task-deadline-fields\s*\{\s*display: contents;/, "Ngày và giờ phải tham gia trực tiếp cùng hàng lịch công việc.");
+assert.match(cssSource, /grid-template-areas:[\s\S]*?"due time"/, "Trên mobile, ngày và giờ hoàn thành vẫn cạnh nhau.");
+assert.match(clientSource, /byId\("taskDueTime"\)\.value = task\.dueTime \|\| ""/, "Thời gian cũ phải được nạp khi sửa công việc.");
+assert.match(clientSource, /dueTime: byId\("taskDueTime"\)\.value/, "Giờ hoàn thành phải được lưu cùng công việc.");
+assert.match(clientSource, /function taskDeadlineDate\(task\)[\s\S]*?task\.dueTime \|\| "23:59"/, "Để trống giờ phải giữ hạn mặc định đến cuối ngày.");
 
 assert.match(edgeSource, /function overdueTaskStatus\(status: unknown\): boolean/);
 assert.match(edgeSource, /inProgressTaskStatus\(next\.status\) \|\| overdueTaskStatus\(next\.status\)/);
