@@ -385,7 +385,13 @@ function saveCalendarEvent(event) {
   const record = applyRecordAudit({ ...existing, ...values, id: existing?.id || uid("meeting") }, existing);
   const previous = state.calendarEvents || [], previousLog = state.activityLog;
   state.calendarEvents = existing ? previous.map((item) => item.id === record.id ? record : item) : [...previous, record];
-  logActivity({ action: existing ? "Cập nhật cuộc họp" : "Thêm cuộc họp", module: "Lịch công việc", targetType: "calendar-event", targetId: record.id, title: record.title, departmentId: record.departmentIds[0] || "", details: `${formatDate(record.date)} ${record.time} · ${record.location}` });
+  const calendarAuditIsServerOwned = typeof usingSupabaseSync === "function" && usingSupabaseSync()
+    && typeof sharedSync !== "undefined" && sharedSync.session
+    && typeof deploymentVersionAtLeast === "function"
+    && deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.10.27.2");
+  if (!calendarAuditIsServerOwned) {
+    logActivity({ action: existing ? "Cập nhật cuộc họp" : "Thêm cuộc họp", module: "Lịch công việc", targetType: "calendar-event", targetId: record.id, title: record.title, departmentId: record.departmentIds[0] || "", details: `${formatDate(record.date)} ${record.time} · ${record.location}` });
+  }
   try { saveState(); } catch { state.calendarEvents = previous; state.activityLog = previousLog; error.textContent = "Chưa lưu được dữ liệu trên thiết bị. Nội dung đang nhập được giữ lại."; return; }
   calendarUi.week = WorkCalendar.weekStart(record.date);
   closeCalendarDialog(); renderCalendarView(); checkCalendarReminders();
@@ -400,7 +406,13 @@ function deleteCalendarEvent() {
   const previous = state.calendarEvents, previousLog = state.activityLog, previousDeleted = state.deletedIds;
   state.calendarEvents = previous.filter((item) => item.id !== event.id);
   registerDeletedId(event.id);
-  logActivity({ action: "Xóa cuộc họp", module: "Lịch công việc", targetType: "calendar-event", targetId: event.id, title: event.title, departmentId: event.departmentIds[0] || "" });
+  const calendarAuditIsServerOwned = typeof usingSupabaseSync === "function" && usingSupabaseSync()
+    && typeof sharedSync !== "undefined" && sharedSync.session
+    && typeof deploymentVersionAtLeast === "function"
+    && deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.10.27.2");
+  if (!calendarAuditIsServerOwned) {
+    logActivity({ action: "Xóa cuộc họp", module: "Lịch công việc", targetType: "calendar-event", targetId: event.id, title: event.title, departmentId: event.departmentIds[0] || "" });
+  }
   try { saveState(); } catch { state.calendarEvents = previous; state.activityLog = previousLog; state.deletedIds = previousDeleted; byId("calendarFormError").textContent = "Không thể lưu thao tác xóa. Vui lòng thử lại."; return; }
   closeCalendarDialog(); renderCalendarView(); checkCalendarReminders();
 }

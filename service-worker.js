@@ -1,5 +1,5 @@
-const RELEASE_VERSION = "3.4.64";
-const CACHE_NAME = "phuc-thinh-kpi-v3464";
+const RELEASE_VERSION = "3.4.115";
+const CACHE_NAME = `phuc-thinh-kpi-v${RELEASE_VERSION.replace(/\D/g, "")}`;
 const APP_SHELL = [
   "index.html",
   "styles.css",
@@ -7,6 +7,8 @@ const APP_SHELL = [
   "work-calendar.js",
   "virtual-assistant.css",
   "virtual-assistant.js",
+  "document-templates.css",
+  "document-templates.js",
   "auth-bootstrap.js",
   "people-data.js",
   "gpmb-workflow-data.js",
@@ -14,6 +16,22 @@ const APP_SHELL = [
   "script.js",
   "manifest.webmanifest",
   "app-icon-phuc-thinh.png",
+  "assets/topbar-wide-infrastructure-scene.jpg",
+  "assets/topbar-wide-scene-tet.jpg",
+  "assets/topbar-wide-scene-national-day.jpg",
+  "assets/topbar-wide-scene-anniversary.jpg",
+  "assets/topbar-wide-scene-women-day.jpg",
+  "assets/topbar-wide-scene-new-year.jpg",
+  "assets/topbar-wide-scene-hung-kings.jpg",
+  "assets/topbar-wide-scene-reunification-day.jpg",
+  "assets/topbar-wide-scene-children-day.jpg",
+  "assets/topbar-wide-scene-martyrs-day.jpg",
+  "assets/topbar-wide-scene-august-revolution.jpg",
+  "assets/topbar-wide-scene-vietnamese-women-day.jpg",
+  "assets/topbar-wide-scene-vietnamese-culture-day.jpg",
+  "assets/topbar-wide-scene-christmas.jpg",
+  "assets/topbar-festive-left.png",
+  "assets/topbar-festive-right.png",
   "assets/notification-bell-glass.png",
   "assets/virtual-assistant.png",
   "assets/luna-outfit-field.png",

@@ -1,0 +1,126 @@
+.document-template-modal {
+  width: min(1120px, calc(100vw - 28px));
+  max-width: 1120px;
+  max-height: min(92dvh, 980px);
+  overflow: auto;
+  padding: 16px;
+}
+
+.document-template-head {
+  align-items: center;
+  flex-direction: row;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.document-template-head h2 { margin: 0; }
+.document-template-tabs { display: flex; gap: 6px; border-bottom: 1px solid #d4e0e6; margin-bottom: 14px; }
+.document-template-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #456174;
+  padding: 9px 13px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.document-template-tabs button.is-active { border-bottom-color: #0b7185; color: #0b5d70; }
+.document-template-storage-note { margin: 0 0 12px; color: #536e7d; font-size: .9rem; }
+.document-template-list { display: grid; gap: 8px; max-height: 48dvh; overflow: auto; }
+.document-template-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid #d1dfe5;
+  border-radius: 6px;
+  padding: 11px 12px;
+  background: #fff;
+}
+.document-template-card h3 { margin: 0; font-size: 1rem; }
+.document-template-card p { margin: 4px 0 0; color: #607b89; font-size: .86rem; overflow-wrap: anywhere; }
+.document-template-card-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+.document-template-fill { margin-top: 14px; border-top: 1px solid #d6e1e6; padding-top: 12px; }
+.document-template-fill-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.document-template-fill-head h3 { margin: 0; font-size: 1rem; }
+.document-template-fill-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.document-template-fill-fields label,
+.document-template-upload-row label,
+.document-template-add-field label { display: grid; gap: 5px; font-weight: 650; color: #314e5e; }
+.document-template-fill-fields input,
+.document-template-fill-fields textarea,
+.document-template-upload-row input,
+.document-template-add-field input { width: 100%; min-width: 0; }
+.document-template-upload-row { display: grid; grid-template-columns: minmax(220px, .75fr) minmax(260px, 1.25fr); gap: 12px; margin-bottom: 14px; }
+.document-template-file input { padding: 6px; }
+.document-template-workspace { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(270px, .85fr); gap: 12px; align-items: start; }
+.document-template-preview,
+.document-template-field-editor { min-width: 0; border: 1px solid #d4e0e6; border-radius: 6px; background: #f7fafb; padding: 11px; }
+.document-template-preview-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.document-template-preview-toolbar span { flex: 1; min-width: 90px; text-align: center; color: #456174; font-size: .88rem; font-weight: 650; }
+.document-template-preview-toolbar button { min-height: 34px; padding: 5px 9px; }
+.document-template-status { min-height: 22px; margin: 8px 0; color: #456174; font-size: .88rem; }
+.document-template-status.is-error { color: #a32f2f; }
+.document-template-canvas-stage { width: 100%; max-height: 62dvh; overflow: auto; background: #e7edf0; cursor: default; }
+.document-template-canvas-stage.is-placing-field { cursor: crosshair; }
+.document-template-canvas-surface { position: relative; width: 100%; margin: 0 auto; }
+.document-template-canvas-stage canvas { display: block; width: 100%; height: auto; background: #fff; box-shadow: 0 1px 5px #243a4a2a; }
+.document-template-field-markers { position: absolute; inset: 0; pointer-events: none; }
+.document-template-field-marker {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #d38900;
+  background: #fff8d9d9;
+  color: #283d4a;
+  padding: 1px 3px;
+  text-align: left;
+  font-size: clamp(7px, 1vw, 12px);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+.document-template-text-preview,
+.document-template-ocr-result pre {
+  max-height: 40dvh;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid #d4e0e6;
+  border-radius: 4px;
+  background: #fff;
+  padding: 10px;
+  color: #283d4a;
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.document-template-field-editor h3 { margin: 0 0 7px; font-size: 1rem; }
+.document-template-field-editor .muted { margin: 0 0 10px; font-size: .85rem; }
+.document-template-add-field { display: grid; gap: 8px; border-bottom: 1px solid #d7e2e7; padding-bottom: 10px; }
+.document-template-add-field button { justify-self: start; }
+.document-template-field-list { display: grid; gap: 6px; max-height: 28dvh; overflow: auto; padding: 9px 0; }
+.document-template-field-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #e0e8eb; padding: 5px 0; }
+.document-template-field-item div { display: grid; gap: 2px; min-width: 0; }
+.document-template-field-item strong { color: #294757; font-size: .87rem; overflow-wrap: anywhere; }
+.document-template-field-item span { color: #69818d; font-size: .78rem; overflow-wrap: anywhere; }
+.document-template-field-item button { padding: 4px 8px; }
+.document-template-ocr-result { margin: 8px 0; }
+.document-template-ocr-result summary { cursor: pointer; color: #456174; font-size: .86rem; font-weight: 650; }
+.document-template-ocr-result pre { margin-top: 7px; }
+.document-template-save-row { display: flex; justify-content: flex-end; border-top: 1px solid #d7e2e7; padding-top: 10px; }
+
+@media (max-width: 760px) {
+  .document-template-modal { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); padding: 12px; }
+  .document-template-workspace { grid-template-columns: minmax(0, 1fr); }
+  .document-template-canvas-stage { max-height: 42dvh; }
+  .document-template-upload-row { grid-template-columns: minmax(0, 1fr); }
+  .document-template-fill-fields { grid-template-columns: minmax(0, 1fr); }
+  .document-template-card { align-items: flex-start; flex-direction: column; }
+  .document-template-card-actions { width: 100%; }
+  .document-template-card-actions button { flex: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-template-modal *, .document-template-modal *::before, .document-template-modal *::after { scroll-behavior: auto !important; }
+}

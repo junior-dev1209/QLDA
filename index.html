@@ -6,18 +6,19 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.4.64">
+  <meta name="application-version" content="3.4.115">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
-  <link rel="manifest" href="manifest.webmanifest?v=3.4.64">
-  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.4.64" type="image/png">
-  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.4.64">
-  <script src="supabase-config.js?v=3.4.64"></script>
-  <script src="auth-bootstrap.js?v=3.4.64"></script>
-  <link rel="stylesheet" href="styles.css?v=3.4.64">
-  <link rel="stylesheet" href="work-calendar.css?v=3.4.64">
-  <link rel="stylesheet" href="virtual-assistant.css?v=3.4.64">
+  <link rel="manifest" href="manifest.webmanifest?v=3.4.115">
+  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.4.115" type="image/png">
+  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.4.115">
+  <script src="supabase-config.js?v=3.4.115"></script>
+  <script src="auth-bootstrap.js?v=3.4.115"></script>
+  <link rel="stylesheet" href="styles.css?v=3.4.115">
+  <link rel="stylesheet" href="work-calendar.css?v=3.4.115">
+  <link rel="stylesheet" href="virtual-assistant.css?v=3.4.115">
+  <link rel="stylesheet" href="document-templates.css?v=3.4.115">
 </head>
 <body>
   <section id="loginScreen" class="login-screen">
@@ -39,7 +40,7 @@
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.4.64</strong>
+          <strong data-app-version>Phiên bản 3.4.115</strong>
         </p>
       </form>
     </div>
@@ -47,14 +48,21 @@
 
   <header class="topbar">
     <div class="topbar-brand">
-      <p class="unit">
-        <span>BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG</span>
-        <span>XÃ PHÚC THỊNH</span>
-      </p>
-      <h1>Quản Trị Nhân Sự</h1>
+      <img class="topbar-logo" src="app-icon-phuc-thinh.png?v=3.4.115" alt="Biểu trưng Ban Quản lý Dự án đầu tư - hạ tầng xã Phúc Thịnh" width="42" height="42" decoding="async">
+      <div class="topbar-brand-copy">
+        <p class="unit">
+          <span>BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG</span>
+          <span>XÃ PHÚC THỊNH</span>
+        </p>
+        <h1>Quản Trị Nhân Sự</h1>
+      </div>
     </div>
     <div class="topbar-visual" aria-hidden="true">
-      <img id="topbarVisualScene" class="topbar-visual-scene" src="assets/topbar-infrastructure-scene.png" alt="" decoding="async">
+      <img id="topbarVisualScene" class="topbar-visual-scene" src="assets/topbar-wide-infrastructure-scene.jpg?v=3.4.115" alt="" decoding="async">
+    </div>
+    <div class="topbar-decoration" aria-hidden="true">
+      <img src="assets/topbar-festive-left.png?v=3.4.115" alt="" draggable="false" decoding="async">
+      <img src="assets/topbar-festive-right.png?v=3.4.115" alt="" draggable="false" decoding="async">
     </div>
     <div class="top-actions">
       <div class="user-chip notification-account-chip" id="notificationAccountChip">
@@ -63,7 +71,7 @@
           <span id="currentUserMeta"></span>
         </div>
         <button id="notificationBell" class="notification-bell" type="button" aria-label="Mở thông báo của Luna" aria-haspopup="dialog" aria-expanded="false" title="Thông báo từ Luna">
-        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.64" alt="" aria-hidden="true" decoding="async">
+        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.115" alt="" aria-hidden="true" decoding="async">
           <span id="notificationUnreadCount" class="notification-bell-count is-hidden" aria-label="0 thông báo chưa đọc">0</span>
         </button>
       </div>
@@ -158,23 +166,44 @@
     </dl>
   </section>
 
+  <svg class="sidebar-icon-library" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-dashboard" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></g></symbol>
+    <symbol id="icon-bulletin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14a2 2 0 0 1 2 2v14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M7 8h5M7 12h10M7 16h10M15 8h2"/></g></symbol>
+    <symbol id="icon-archive" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16v13H4zM3 4h18v4H3zM9 12h6"/></g></symbol>
+    <symbol id="icon-people" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20v-1.2A5.8 5.8 0 0 1 8.3 13h1.4a5.8 5.8 0 0 1 5.8 5.8V20zM16 4.8a3.5 3.5 0 0 1 0 6.5M17 14h.8a4.7 4.7 0 0 1 4.7 4.7v.8h-5"/></g></symbol>
+    <symbol id="icon-tasks" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m7 9 1.5 1.5L11 8M13.5 9H17M7 16l1.5 1.5L11 15M13.5 16H17"/></g></symbol>
+    <symbol id="icon-calendar" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M7 3v4M17 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01"/></g></symbol>
+    <symbol id="icon-department-kpi" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V11h4v9M10 20V5h4v15M16 20v-8h4v8M2 20h20"/></g></symbol>
+    <symbol id="icon-personal-kpi" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h17M7 15l4-4 3 2 5-6"/><path d="M16 7h3v3"/></g></symbol>
+    <symbol id="icon-history" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></g></symbol>
+    <symbol id="icon-account" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M4 21v-1a8 8 0 0 1 16 0v1z"/></g></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2m14.5-6-1.4 1.4M7.4 16.6 6 18m12 0-1.4-1.4M7.4 7.4 6 6"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></g></symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m10.3 4.1-7 12.1A2 2 0 0 0 5 19.2h14a2 2 0 0 0 1.7-3L13.7 4.1a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 16.3h.01"/></g></symbol>
+    <symbol id="icon-bell" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/></g></symbol>
+    <symbol id="icon-megaphone" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a2 2 0 0 0 2 2h2l9 5V4l-9 5H5a2 2 0 0 0-2 2ZM7 15l2 6h4l-2.3-4.7M19 9a5 5 0 0 1 0 6"/></g></symbol>
+    <symbol id="icon-file-down" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M13 3v6h7M13 3l7 7"/><path d="M12 13v6m-3-3 3 3 3-3"/></g></symbol>
+    <symbol id="icon-rules" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5h6a3 3 0 0 1 3 3V20a3 3 0 0 0-3-3H4zM20 4.5h-4a3 3 0 0 0-3 3V20a3 3 0 0 1 3-3h4z"/><path d="M6.5 8h3M6.5 11h3M16 8h1.5M16 11h1.5"/></g></symbol>
+    <symbol id="icon-help" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9a2.5 2.5 0 1 1 4.2 1.8c-1.2 1.1-1.8 1.4-1.8 3M12 17.5h.01"/></g></symbol>
+    <symbol id="icon-sidebar-toggle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16M15 9l-3 3 3 3"/></g></symbol>
+  </svg>
+
   <main class="layout">
     <aside class="sidebar">
-      <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="true">Thu gọn menu</button>
+      <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Thu gọn menu" title="Thu gọn menu" aria-expanded="true"><svg class="sidebar-toggle-icon" aria-hidden="true"><use href="#icon-sidebar-toggle"></use></svg><span class="sidebar-toggle-label">Thu gọn menu</span></button>
       <nav aria-label="Chức năng">
-        <button class="nav-item is-active" data-view="dashboard" type="button" title="Tổng quan"><span class="nav-icon" aria-hidden="true">▦</span><span class="nav-label">Tổng quan</span></button>
-        <button class="nav-item" data-view="bulletin" type="button" title="Bảng tin"><span class="nav-icon" aria-hidden="true">▤</span><span class="nav-label">Bảng tin</span></button>
-        <button class="nav-item" data-view="archive" type="button" title="Lưu Trữ"><span class="nav-icon" aria-hidden="true">▧</span><span class="nav-label">Lưu Trữ</span></button>
-        <button class="nav-item" data-view="people" type="button" title="Nhân sự"><span class="nav-icon" aria-hidden="true">◉</span><span class="nav-label">Nhân sự</span></button>
-        <button class="nav-item" data-view="tasks" type="button" title="Công việc"><span class="nav-icon" aria-hidden="true">☑</span><span class="nav-label">Công việc</span></button>
-        <button class="nav-item" data-view="calendar" type="button" title="Lịch công việc"><span class="nav-icon" aria-hidden="true">▦</span><span class="nav-label">Lịch công việc</span></button>
-        <button class="nav-item" data-view="department-evaluations" type="button" title="KPI phòng"><span class="nav-icon" aria-hidden="true">▥</span><span class="nav-label">KPI phòng</span></button>
-        <button class="nav-item" data-view="evaluations" type="button" title="KPI cá nhân"><span class="nav-icon" aria-hidden="true">◇</span><span class="nav-label">KPI cá nhân</span></button>
-        <button class="nav-item" data-view="history" type="button" title="Lịch sử"><span class="nav-icon" aria-hidden="true">◷</span><span class="nav-label">Lịch sử</span></button>
-        <button class="nav-item" data-view="accounts" type="button" title="Tài khoản"><span class="nav-icon" aria-hidden="true">◫</span><span class="nav-label">Tài khoản</span></button>
-        <button class="nav-item" data-view="system-settings" type="button" title="Cấu hình hệ thống"><span class="nav-icon" aria-hidden="true">⚙</span><span class="nav-label">Cấu hình hệ thống</span></button>
-        <button class="nav-item" data-view="rules" type="button" title="Quy chế"><span class="nav-icon" aria-hidden="true">§</span><span class="nav-label">Quy chế</span></button>
-        <button class="nav-item" data-view="help" type="button" title="Trợ giúp"><span class="nav-icon" aria-hidden="true">?</span><span class="nav-label">Trợ giúp</span><span id="helpSupportBadge" class="nav-count is-hidden" aria-label="Yêu cầu hỗ trợ mới"></span></button>
+        <button class="nav-item is-active" data-view="dashboard" type="button" title="Tổng quan"><svg class="nav-icon" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span class="nav-label">Tổng quan</span></button>
+        <button class="nav-item" data-view="bulletin" type="button" title="Bảng tin"><svg class="nav-icon" aria-hidden="true"><use href="#icon-bulletin"></use></svg><span class="nav-label">Bảng tin</span></button>
+        <button class="nav-item" data-view="archive" type="button" title="Lưu Trữ"><svg class="nav-icon" aria-hidden="true"><use href="#icon-archive"></use></svg><span class="nav-label">Lưu Trữ</span></button>
+        <button class="nav-item" data-view="people" type="button" title="Nhân sự"><svg class="nav-icon" aria-hidden="true"><use href="#icon-people"></use></svg><span class="nav-label">Nhân sự</span></button>
+        <button class="nav-item" data-view="tasks" type="button" title="Công việc"><svg class="nav-icon" aria-hidden="true"><use href="#icon-tasks"></use></svg><span class="nav-label">Công việc</span></button>
+        <button class="nav-item" data-view="calendar" type="button" title="Lịch công việc"><svg class="nav-icon" aria-hidden="true"><use href="#icon-calendar"></use></svg><span class="nav-label">Lịch công việc</span></button>
+        <button class="nav-item" data-view="department-evaluations" type="button" title="KPI phòng"><svg class="nav-icon" aria-hidden="true"><use href="#icon-department-kpi"></use></svg><span class="nav-label">KPI phòng</span></button>
+        <button class="nav-item" data-view="evaluations" type="button" title="KPI cá nhân"><svg class="nav-icon" aria-hidden="true"><use href="#icon-personal-kpi"></use></svg><span class="nav-label">KPI cá nhân</span></button>
+        <button class="nav-item" data-view="history" type="button" title="Lịch sử"><svg class="nav-icon" aria-hidden="true"><use href="#icon-history"></use></svg><span class="nav-label">Lịch sử</span></button>
+        <button class="nav-item" data-view="accounts" type="button" title="Tài khoản"><svg class="nav-icon" aria-hidden="true"><use href="#icon-account"></use></svg><span class="nav-label">Tài khoản</span></button>
+        <button class="nav-item" data-view="system-settings" type="button" title="Cấu hình hệ thống"><svg class="nav-icon" aria-hidden="true"><use href="#icon-settings"></use></svg><span class="nav-label">Cấu hình hệ thống</span></button>
+        <button class="nav-item" data-view="rules" type="button" title="Quy chế"><svg class="nav-icon" aria-hidden="true"><use href="#icon-rules"></use></svg><span class="nav-label">Quy chế</span></button>
+        <button class="nav-item" data-view="help" type="button" title="Trợ giúp"><svg class="nav-icon" aria-hidden="true"><use href="#icon-help"></use></svg><span class="nav-label">Trợ giúp</span><span id="helpSupportBadge" class="nav-count is-hidden" aria-label="Yêu cầu hỗ trợ mới"></span></button>
       </nav>
       <section class="period-box">
         <label for="activePeriod">Kỳ đánh giá</label>
@@ -201,10 +230,10 @@
 
         <div class="dashboard-report-actions">
           <div class="dashboard-daily-report-action">
-          <label for="dashboardDailyReportDate">Ngày báo cáo
-            <input id="dashboardDailyReportDate" type="date" aria-label="Chọn ngày cho báo cáo công việc hàng ngày">
-          </label>
-          <button id="exportDailyWorkReportPdf" class="dashboard-daily-report-button" type="button" title="Xuất báo cáo công việc hàng ngày ra PDF"><span aria-hidden="true">▣</span>Báo cáo công việc hàng ngày</button>
+            <label for="dashboardDailyReportDate">Ngày báo cáo
+              <input id="dashboardDailyReportDate" type="date" aria-label="Chọn ngày cho báo cáo công việc hàng ngày">
+            </label>
+            <button id="exportDailyWorkReportPdf" class="dashboard-daily-report-button" type="button" title="Xuất báo cáo công việc hàng ngày ra PDF"><span aria-hidden="true">▣</span>Báo cáo công việc hàng ngày</button>
           </div>
           <div class="dashboard-weekly-report-action">
             <label for="dashboardWeeklyReportDate">Ngày bất kỳ trong tuần
@@ -820,7 +849,6 @@
             </div>
         <form id="taskForm" class="form-grid">
           <input type="hidden" id="taskId">
-          <input id="taskDueTime" type="hidden" value="">
           <label class="task-title-field">Tên công việc
             <input id="taskTitle" required placeholder="Hoàn thiện hồ sơ dự án...">
           </label>
@@ -867,28 +895,35 @@
               <option value="arising">Công việc phát sinh</option>
             </select>
           </label>
-          <label class="regular-only task-priority-field">Mức độ ưu tiên
-            <select id="taskPriority">
-              <option value="normal">Bình thường</option>
-              <option value="high">Cao</option>
-              <option value="urgent">Khẩn</option>
-            </select>
-          </label>
-          <label class="regular-only task-recurrence-field">Định kỳ
-            <select id="taskRecurrence">
-              <option value="none">Không định kỳ</option>
-              <option value="daily">Hàng ngày</option>
-              <option value="weekly">Hàng tuần</option>
-              <option value="monthly">Hàng tháng</option>
-              <option value="quarterly">Hàng quý</option>
-            </select>
-          </label>
-              <label class="task-start-field">Ngày bắt đầu
-                <input id="taskStartDate" type="date" required>
+          <div class="task-schedule-fields">
+            <label class="regular-only task-priority-field">Mức độ ưu tiên
+              <select id="taskPriority">
+                <option value="normal">Bình thường</option>
+                <option value="high">Cao</option>
+                <option value="urgent">Khẩn</option>
+              </select>
+            </label>
+            <label class="regular-only task-recurrence-field">Định kỳ
+              <select id="taskRecurrence">
+                <option value="none">Không định kỳ</option>
+                <option value="daily">Hàng ngày</option>
+                <option value="weekly">Hàng tuần</option>
+                <option value="monthly">Hàng tháng</option>
+                <option value="quarterly">Hàng quý</option>
+              </select>
+            </label>
+            <label class="task-start-field">Ngày bắt đầu
+              <input id="taskStartDate" type="date" required>
+            </label>
+            <div class="task-deadline-fields">
+              <label class="task-due-field">Ngày hoàn thành
+                <input id="taskDue" type="date" required>
               </label>
-          <label class="task-due-field">Ngày hoàn thành
-            <input id="taskDue" type="date" required>
-          </label>
+              <label class="task-due-time-field">Thời gian hoàn thành (tùy chọn)
+                <input id="taskDueTime" type="time" step="60" aria-label="Thời gian hoàn thành, không bắt buộc">
+              </label>
+            </div>
+          </div>
           <fieldset class="task-status-field task-status-control">
             <legend>Trạng thái</legend>
             <select id="taskStatus" class="is-hidden" aria-hidden="true" tabindex="-1">
@@ -916,25 +951,26 @@
               </label>
               <span class="field-note">Chọn nhiều tệp, mỗi tệp tối đa 2MB, tổng hồ sơ tối đa 5MB.</span>
             </div>
+            <div id="taskAttachmentSelection" class="task-attachment-selection is-hidden" aria-live="polite"></div>
             <div id="taskAttachmentList" class="attachment-list">
               <span class="muted">Chưa có hồ sơ đính kèm.</span>
             </div>
           </div>
           <label class="wide task-note-field"><span id="taskNoteLabelText">Nội dung công việc / Báo cáo tiến độ</span>
-            <textarea id="taskNote" rows="3" placeholder="Nội dung công việc, tiến độ thực hiện, rủi ro, phối hợp, hồ sơ liên quan..."></textarea>
+            <textarea id="taskNote" rows="3" placeholder="Nội dung công việc, báo cáo tiến độ, rủi ro, phối hợp, hồ sơ liên quan..."></textarea>
             <span id="taskProgressMeta" class="field-note"></span>
             <div id="taskProgressReportList" class="progress-report-list"></div>
           </label>
           <section class="wide task-tracking-panel" aria-labelledby="taskTrackingTitle">
             <div class="task-tracking-head">
               <h3 id="taskTrackingTitle">Theo dõi điều hành</h3>
-              <p>Ghi nhận mốc cập nhật, trở ngại và công việc phụ thuộc để hệ thống cảnh báo đúng việc cần xử lý.</p>
+              <p>Mốc bằng hoặc trước Ngày hoàn thành không đổi hạn; mốc vượt hạn chỉ được áp dụng sau khi Trưởng/Phó phòng duyệt và ghi ý kiến.</p>
             </div>
             <div class="task-tracking-grid">
               <label>Mốc cập nhật tiếp theo
                 <input id="taskFollowUpDate" type="date">
               </label>
-              <label>Trạng thái trở ngại
+              <label class="task-blocker-status-field">Trạng thái trở ngại
                 <select id="taskBlockerStatus">
                   <option value="none">Không có trở ngại</option>
                   <option value="needs-support">Cần hỗ trợ</option>
@@ -942,13 +978,14 @@
                   <option value="resolved">Đã gỡ trở ngại</option>
                 </select>
               </label>
+              <div id="taskDeadlineExtensionNotice" class="wide task-deadline-extension-notice is-hidden" aria-live="polite"></div>
               <fieldset class="task-dependency-field">
                 <legend>Công việc phụ thuộc</legend>
                 <div id="taskDependencies" class="task-dependency-list" role="group" aria-describedby="taskDependenciesNote"></div>
                 <span id="taskDependenciesNote" class="field-note">Tích chọn từng công việc cần phụ thuộc.</span>
               </fieldset>
               <label class="task-blocker-note-field">Nội dung trở ngại / đề nghị hỗ trợ
-                <textarea id="taskBlockerNote" rows="3" placeholder="Nêu rõ vướng mắc, đơn vị cần phối hợp và đề nghị xử lý..."></textarea>
+                <textarea id="taskBlockerNote" rows="3" maxlength="1200" placeholder="Nêu rõ vướng mắc, đơn vị cần phối hợp và đề nghị xử lý..."></textarea>
               </label>
             </div>
           </section>
@@ -1667,6 +1704,11 @@
               <label class="checkbox-option"><input id="gpmbWorkflowResettlementRequired" type="checkbox"><span>Có trường hợp bố trí tái định cư</span></label>
               <label class="checkbox-option"><input id="gpmbWorkflowNoHandover" type="checkbox"><span>Có trường hợp chưa bàn giao đất</span></label>
             </fieldset>
+            <fieldset class="wide gpmb-create-step-deadline-field">
+              <legend>Thời hạn từng bước</legend>
+              <p id="gpmbWorkflowCreateDeadlineNote" class="field-note"></p>
+              <div id="gpmbWorkflowCreateStepDeadlines" class="gpmb-create-step-deadlines"></div>
+            </fieldset>
             <div class="form-actions wide">
               <button type="submit">Khởi tạo quy trình</button>
               <button id="resetGpmbWorkflowCreate" class="ghost" type="button">Làm mới</button>
@@ -1840,7 +1882,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.4.64</strong>
+    <strong data-app-version>Phiên bản 3.4.115</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -2007,6 +2049,45 @@
         <div class="form-actions wide task-completion-review-actions">
           <button type="submit">Lưu đánh giá</button>
           <button id="cancelTaskCompletionReview" class="ghost" type="button">Hủy</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section id="taskDeadlineExtensionReviewDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <div class="modal-card task-deadline-extension-review-modal" role="dialog" aria-modal="true" aria-labelledby="taskDeadlineExtensionReviewTitle">
+      <div class="section-head task-deadline-extension-review-head">
+        <div>
+          <p class="eyebrow">Theo dõi điều hành</p>
+          <h2 id="taskDeadlineExtensionReviewTitle">Duyệt đề nghị gia hạn</h2>
+          <p id="taskDeadlineExtensionReviewSummary" class="muted"></p>
+        </div>
+        <button id="closeTaskDeadlineExtensionReview" class="ghost" type="button">Đóng</button>
+      </div>
+      <form id="taskDeadlineExtensionReviewForm" class="form-grid task-deadline-extension-review-form">
+        <input id="taskDeadlineExtensionReviewTaskId" type="hidden">
+        <div class="wide task-deadline-extension-request-summary">
+          <span><strong>Hạn hiện tại</strong><b id="taskDeadlineExtensionCurrentDue">Chưa có</b></span>
+          <span><strong>Ngày đề nghị</strong><b id="taskDeadlineExtensionRequestedDue">Chưa có</b></span>
+          <span><strong>Người đề nghị</strong><b id="taskDeadlineExtensionRequester">Chưa rõ</b></span>
+        </div>
+        <div class="wide task-deadline-extension-request-reason">
+          <strong>Nội dung trở ngại / đề nghị hỗ trợ</strong>
+          <p id="taskDeadlineExtensionRequestReason"></p>
+        </div>
+        <label class="wide">Kết quả
+          <select id="taskDeadlineExtensionReviewDecision" required>
+            <option value="">Chọn kết quả</option>
+            <option value="approved">Chấp nhận mốc mới</option>
+            <option value="rejected">Không chấp nhận</option>
+          </select>
+        </label>
+        <label class="wide">Ý kiến duyệt (bắt buộc)
+          <textarea id="taskDeadlineExtensionReviewNote" rows="3" minlength="3" maxlength="1200" required placeholder="Nêu ý kiến, căn cứ chấp nhận hoặc lý do chưa chấp nhận..."></textarea>
+        </label>
+        <div class="form-actions wide">
+          <button type="submit">Lưu kết quả duyệt</button>
+          <button id="cancelTaskDeadlineExtensionReview" class="ghost" type="button">Hủy</button>
         </div>
       </form>
     </div>
@@ -2231,7 +2312,7 @@
         <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
       </div>
       <button type="button" class="mobile-notification-bell" data-notification-toggle aria-label="Mở thông báo của Luna" title="Thông báo từ Luna">
-        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.64" alt="" aria-hidden="true" decoding="async">
+        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.115" alt="" aria-hidden="true" decoding="async">
         <span id="mobileNotificationUnreadCount" class="notification-bell-count is-hidden">0</span>
       </button>
       <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
@@ -2423,40 +2504,90 @@
     <aside id="assistantQuickNotice" class="assistant-quick-notice is-hidden" role="status" aria-live="polite" aria-atomic="true" aria-label="Lời thoại từ Luna">
       <button id="assistantQuickNoticeText" class="assistant-quick-notice-message" type="button" title="Bấm vào lời thoại để xem xong hoặc chuyển thông báo tiếp theo"></button>
     </aside>
+    <aside id="taskVoiceWizard" class="task-wizard-bubble is-hidden" aria-label="Luna đồng hành tạo công việc">
+      <header class="task-wizard-bubble-head">
+        <div><span class="task-wizard-bubble-name">Luna</span><span id="taskWizardModeLabel" class="task-wizard-bubble-mode">Cùng tạo công việc</span></div>
+        <button id="taskVoiceWizardCancel" class="task-wizard-bubble-close" type="button" aria-label="Dừng hướng dẫn Luna" title="Dừng hướng dẫn">×</button>
+      </header>
+      <p id="taskVoiceWizardCompactPrompt" class="task-wizard-compact-prompt"></p>
+      <div id="taskWizardConversation" class="task-wizard-conversation" role="log" aria-live="polite" aria-relevant="additions text"></div>
+      <p id="taskVoiceWizardPrompt" class="task-wizard-sr-only" role="status" aria-live="polite"></p>
+      <p id="taskVoiceWizardStatus" class="task-wizard-status" aria-live="polite">Em sẽ hỏi từng mục và chờ anh/chị trả lời ạ.</p>
+      <form id="taskWizardReplyForm" class="task-wizard-reply-form">
+        <input id="taskWizardReply" type="text" maxlength="500" autocomplete="off" placeholder="Trả lời Luna..." aria-label="Trả lời Luna về mục hiện tại">
+        <button id="taskVoiceWizardSpeak" class="task-wizard-voice" type="button" aria-label="Trả lời bằng giọng nói" title="Nói câu trả lời">Nói</button>
+        <button id="taskWizardReplySend" type="submit" aria-label="Gửi câu trả lời">Gửi</button>
+      </form>
+      <div class="task-voice-wizard-controls">
+        <button id="taskVoiceWizardContinue" class="ghost" type="button">Tiếp tục</button>
+        <button id="taskVoiceWizardSkip" class="ghost is-hidden" type="button">Bỏ qua mục này</button>
+      </div>
+    </aside>
     <button id="assistantLauncher" class="assistant-launcher" type="button" aria-label="Mở trợ lý Luna" aria-expanded="false" aria-controls="assistantPanel" title="Trên màn hình lớn, kéo hoặc dùng phím mũi tên để di chuyển">
       <span class="assistant-launcher-signal" aria-hidden="true"></span>
-      <img class="assistant-launcher-pose assistant-launcher-pose--idle" src="assets/luna-outfit-field.png?v=3.4.64" alt="" aria-hidden="true" draggable="false" decoding="async">
-      <img class="assistant-launcher-pose assistant-launcher-pose--listening" data-src="assets/virtual-assistant-listening.png?v=3.4.64" alt="" aria-hidden="true" draggable="false" decoding="async">
-      <img class="assistant-launcher-pose assistant-launcher-pose--thinking" data-src="assets/luna-research.webp?v=3.4.64" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img class="assistant-launcher-pose assistant-launcher-pose--idle" src="assets/luna-outfit-field.png?v=3.4.115" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img class="assistant-launcher-pose assistant-launcher-pose--listening" data-src="assets/virtual-assistant-listening.png?v=3.4.115" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img class="assistant-launcher-pose assistant-launcher-pose--thinking" data-src="assets/luna-research.webp?v=3.4.115" alt="" aria-hidden="true" draggable="false" decoding="async">
       <span class="assistant-launcher-name">Luna</span>
     </button>
     <button id="assistantMinimize" class="assistant-minimize" type="button" aria-label="Thu nhỏ trợ lý" title="Thu nhỏ trợ lý">×</button>
     <button id="assistantRestore" class="assistant-restore is-hidden" type="button" aria-label="Mở lại Luna" title="Mở lại Luna">
-      <img data-assistant-mini-src="assets/luna-outfit-field.png?v=3.4.64" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img data-assistant-mini-src="assets/luna-outfit-field.png?v=3.4.115" alt="" aria-hidden="true" draggable="false" decoding="async">
     </button>
     <section id="assistantPanel" class="assistant-panel is-hidden" data-placement="above" role="dialog" aria-modal="false" aria-labelledby="assistantTitle" aria-hidden="true">
       <header class="assistant-panel-head">
-        <div>
-          <p class="assistant-eyebrow">TRỢ LÝ ẢO</p>
-          <h2 id="assistantTitle">Luna</h2>
-          <p id="assistantAccountContext" class="assistant-account-context"></p>
+        <div class="assistant-panel-heading">
+          <details id="assistantSettings" class="assistant-settings">
+            <summary aria-label="Thiết lập Luna" title="Thiết lập Luna">
+              <svg class="assistant-settings-icon" aria-hidden="true"><use href="#icon-settings"></use></svg>
+              <span class="assistant-visually-hidden">Thiết lập Luna</span>
+            </summary>
+            <div class="assistant-settings-popover">
+              <section class="assistant-settings-group" aria-labelledby="lunaVoiceSettingsTitle">
+                <h3 id="lunaVoiceSettingsTitle">Điều khiển giọng nói</h3>
+                <div class="assistant-voice-controls">
+                  <label><input id="lunaWakeWordEnabled" type="checkbox" disabled> <span>Nghe nền “Luna ơi”</span></label>
+                  <label><input id="lunaAnnouncementSpeechEnabled" type="checkbox" checked> <span>Đọc thông báo</span></label>
+                </div>
+                <p id="lunaWakeWordStatus" class="assistant-wake-status" role="status" aria-live="polite">Luna không nghe nền liên tục. Bấm Nói rồi gọi “Luna ơi” để bắt đầu trao đổi.</p>
+              </section>
+              <section class="assistant-settings-group" aria-labelledby="lunaReminderSettingsTitle">
+                <h3 id="lunaReminderSettingsTitle">Thiết lập nhắc việc</h3>
+                <div class="assistant-notification-preferences-body">
+                  <label class="assistant-preference-toggle"><input id="lunaProactiveEnabled" type="checkbox" checked> Hiện popup nhắc việc</label>
+                  <label class="assistant-preference-toggle"><input id="lunaSpeechEnabled" type="checkbox" checked> Luna đọc câu trả lời và hướng dẫn</label>
+                  <label class="assistant-preference-quiet"><input id="lunaQuietHoursEnabled" type="checkbox"> Bật giờ yên lặng</label>
+                  <div class="assistant-quiet-time-row">
+                    <label for="lunaQuietHoursStart">Từ <input id="lunaQuietHoursStart" type="time" value="22:00"></label>
+                    <label for="lunaQuietHoursEnd">Đến <input id="lunaQuietHoursEnd" type="time" value="07:00"></label>
+                  </div>
+                  <p>Luna dùng nhận dạng và giọng đọc có sẵn trên trình duyệt/thiết bị. Micro chỉ hoạt động khi anh/chị bấm Nói; Safari cần bật Siri hoặc Đọc chính tả.</p>
+                </div>
+              </section>
+            </div>
+          </details>
+          <div class="assistant-panel-titles">
+            <div class="assistant-panel-titleline">
+              <p class="assistant-eyebrow">TRỢ LÝ ẢO</p>
+              <div class="assistant-character-status" data-state="idle">
+                <span class="assistant-state-indicator" aria-hidden="true"></span>
+                <strong id="assistantStateLabel">Sẵn sàng hỗ trợ</strong>
+                <span class="assistant-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+                <button id="lunaSpeechStop" class="assistant-speech-stop is-hidden" type="button" aria-label="Dừng Luna đọc">Dừng đọc</button>
+              </div>
+            </div>
+            <h2 id="assistantTitle">Luna</h2>
+          </div>
         </div>
         <button id="assistantClose" class="assistant-close" type="button" aria-label="Đóng trợ lý" title="Đóng">×</button>
       </header>
-      <div class="assistant-character-stage" data-state="idle">
-        <div class="assistant-character-status">
-          <span class="assistant-state-indicator" aria-hidden="true"></span>
-          <strong id="assistantStateLabel">Sẵn sàng hỗ trợ</strong>
-          <span class="assistant-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-        </div>
-      </div>
       <nav class="assistant-quick-actions" aria-label="Tác vụ trợ lý">
-        <button type="button" data-assistant-command="tình hình công việc của tôi">Tình hình</button>
-        <button type="button" data-assistant-command="công việc quá hạn">Quá hạn</button>
-        <button type="button" data-assistant-command="công việc hôm nay">Hôm nay</button>
-        <button type="button" data-assistant-command="mở thông báo">Thông báo</button>
-        <button id="assistantCreateTask" class="is-hidden" type="button" data-assistant-command="tạo công việc">Tạo việc</button>
-        <button id="assistantAnnouncementToggle" class="admin-only-action" type="button" aria-expanded="false" aria-controls="assistantAnnouncementComposer">Thông báo toàn ban</button>
+        <button type="button" data-assistant-command="tình hình công việc của tôi" aria-label="Tình hình công việc" title="Tình hình công việc"><svg class="assistant-quick-icon" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span class="assistant-visually-hidden">Tình hình</span></button>
+        <button type="button" data-assistant-command="công việc quá hạn" aria-label="Công việc quá hạn" title="Công việc quá hạn"><svg class="assistant-quick-icon" aria-hidden="true"><use href="#icon-alert"></use></svg><span class="assistant-visually-hidden">Quá hạn</span></button>
+        <button type="button" data-assistant-command="công việc hôm nay" aria-label="Công việc đến hạn hôm nay" title="Công việc hôm nay"><svg class="assistant-quick-icon" aria-hidden="true"><use href="#icon-calendar"></use></svg><span class="assistant-visually-hidden">Hôm nay</span></button>
+        <button type="button" data-assistant-command="mở thông báo" aria-label="Thông báo của Luna" title="Thông báo"><svg class="assistant-quick-icon" aria-hidden="true"><use href="#icon-bell"></use></svg><span class="assistant-visually-hidden">Thông báo</span></button>
+        <button id="assistantDocumentTemplates" type="button" aria-label="Mẫu văn bản" title="Mẫu văn bản"><svg class="assistant-quick-icon" aria-hidden="true"><use href="#icon-file-down"></use></svg><span class="assistant-visually-hidden">Mẫu văn bản</span></button>
+        <button id="assistantAnnouncementToggle" class="admin-only-action" type="button" aria-label="Thông báo toàn Ban" title="Thông báo toàn Ban" aria-expanded="false" aria-controls="assistantAnnouncementComposer"><svg class="assistant-quick-icon" aria-hidden="true"><use href="#icon-megaphone"></use></svg><span class="assistant-visually-hidden">Thông báo toàn Ban</span></button>
       </nav>
       <section id="assistantAnnouncementComposer" class="assistant-announcement-composer is-hidden" aria-label="Gửi thông báo toàn Ban">
         <p class="assistant-announcement-intro">Chọn người nhận và thời điểm phát. Chỉ tài khoản Admin được dùng chức năng này.</p>
@@ -2491,18 +2622,6 @@
         </form>
         <div id="lunaAnnouncementReceiptResults" class="luna-announcement-receipts is-hidden" aria-live="polite"></div>
       </section>
-      <details class="assistant-notification-preferences">
-        <summary>Thiết lập nhắc việc</summary>
-        <div class="assistant-notification-preferences-body">
-          <label class="assistant-preference-toggle"><input id="lunaProactiveEnabled" type="checkbox" checked> Hiện popup nhắc việc</label>
-          <label class="assistant-preference-quiet"><input id="lunaQuietHoursEnabled" type="checkbox"> Bật giờ yên lặng</label>
-          <div class="assistant-quiet-time-row">
-            <label for="lunaQuietHoursStart">Từ <input id="lunaQuietHoursStart" type="time" value="22:00"></label>
-            <label for="lunaQuietHoursEnd">Đến <input id="lunaQuietHoursEnd" type="time" value="07:00"></label>
-          </div>
-          <p>Thiết lập áp dụng trên trình duyệt này. Thông báo vẫn nằm trong trung tâm để xem lại.</p>
-        </div>
-      </details>
       <div id="assistantMessages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
       <form id="assistantComposer" class="assistant-composer">
         <label class="assistant-composer-input-label" for="assistantInput">Tin nhắn cho trợ lý</label>
@@ -2511,17 +2630,87 @@
           <button id="assistantVoiceButton" class="assistant-voice-button" type="button" aria-label="Nhập bằng giọng nói" title="Nhập bằng giọng nói">Nói</button>
           <button class="assistant-send-button" type="submit">Gửi</button>
         </div>
-        <p id="assistantVoiceNotice" class="assistant-voice-notice">Chỉ ghi âm sau khi bấm Nói; hãy kiểm tra nội dung nhận dạng trước khi gửi.</p>
+        <p id="assistantVoiceNotice" class="assistant-voice-notice">Nói để trò chuyện với Luna. Khi tạo việc, em sẽ hỏi từng mục và chờ xác nhận trước khi lưu.</p>
       </form>
     </section>
     <span class="assistant-speech-tail" aria-hidden="true">▼</span>
   </aside>
 
+  <section id="documentTemplateDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+    <section class="modal-card document-template-modal" role="dialog" aria-modal="true" aria-labelledby="documentTemplateTitle">
+      <header class="section-head document-template-head">
+        <div><p class="eyebrow">SOẠN THẢO CÙNG LUNA</p><h2 id="documentTemplateTitle">Mẫu văn bản</h2></div>
+        <button id="documentTemplateClose" class="ghost" type="button" aria-label="Đóng mẫu văn bản">Đóng</button>
+      </header>
+      <div class="document-template-tabs" role="tablist" aria-label="Mẫu văn bản">
+        <button id="documentTemplateLibraryTab" class="is-active" type="button" role="tab" aria-selected="true" aria-controls="documentTemplateLibrary">Mẫu đã lưu</button>
+        <button id="documentTemplateCreateTab" type="button" role="tab" aria-selected="false" aria-controls="documentTemplateEditor">Tạo mẫu từ tệp</button>
+      </div>
+      <section id="documentTemplateLibrary" class="document-template-panel" role="tabpanel" aria-labelledby="documentTemplateLibraryTab">
+        <p class="document-template-storage-note">Mẫu và tệp gốc được lưu riêng theo tài khoản trên trình duyệt này. OCR chạy cục bộ; nội dung tệp không được gửi ra ngoài.</p>
+        <div id="documentTemplateList" class="document-template-list"><p class="muted">Chưa có mẫu văn bản.</p></div>
+        <form id="documentTemplateFill" class="document-template-fill is-hidden">
+          <div class="document-template-fill-head"><h3 id="documentTemplateFillTitle"></h3><button id="documentTemplateBack" class="ghost" type="button">Quay lại mẫu</button></div>
+          <div id="documentTemplateFillFields" class="document-template-fill-fields"></div>
+          <div class="form-actions"><button type="submit">Tạo bản mới</button></div>
+        </form>
+      </section>
+      <section id="documentTemplateEditor" class="document-template-panel is-hidden" role="tabpanel" aria-labelledby="documentTemplateCreateTab" aria-hidden="true" inert>
+        <div class="document-template-upload-row">
+          <label>Tên mẫu
+            <input id="documentTemplateName" maxlength="100" placeholder="Ví dụ: Giấy mời họp, báo cáo tuần">
+          </label>
+          <label class="document-template-file">Tệp gốc (PDF, Word hoặc ảnh)
+            <input id="documentTemplateFile" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg,image/png,image/jpeg,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+          </label>
+        </div>
+        <div class="document-template-workspace">
+          <section class="document-template-preview" aria-label="Xem trước tệp mẫu">
+            <div class="document-template-preview-toolbar">
+              <button id="documentTemplatePreviousPage" class="ghost" type="button" aria-label="Trang trước">‹</button>
+              <span id="documentTemplatePageLabel">Chưa chọn tệp</span>
+              <button id="documentTemplateNextPage" class="ghost" type="button" aria-label="Trang sau">›</button>
+              <button id="documentTemplateOcr" class="ghost" type="button" disabled>Nhận diện scan</button>
+            </div>
+            <p id="documentTemplateStatus" class="document-template-status" role="status" aria-live="polite">Chọn PDF, DOCX hoặc ảnh để bắt đầu.</p>
+            <div id="documentTemplateCanvasStage" class="document-template-canvas-stage is-hidden">
+              <div id="documentTemplateCanvasSurface" class="document-template-canvas-surface">
+                <canvas id="documentTemplateCanvas"></canvas>
+                <div id="documentTemplateFieldMarkers" class="document-template-field-markers"></div>
+              </div>
+            </div>
+            <pre id="documentTemplateTextPreview" class="document-template-text-preview is-hidden"></pre>
+          </section>
+          <aside class="document-template-field-editor">
+            <h3>Trường cần điền</h3>
+            <p id="documentTemplateFieldHelp" class="muted">PDF/ảnh: thêm trường rồi chọn vị trí trên trang. Word: thêm các dấu {ten_truong} vào tài liệu trước khi tải lên.</p>
+            <form id="documentTemplateAddField" class="document-template-add-field">
+              <label>Tên trường
+                <input id="documentTemplateFieldKey" required maxlength="40" placeholder="ho_ten">
+              </label>
+              <label>Nhãn hiển thị
+                <input id="documentTemplateFieldLabel" required maxlength="80" placeholder="Họ và tên">
+              </label>
+              <button id="documentTemplateAddFieldButton" type="submit">Thêm trường</button>
+            </form>
+            <div id="documentTemplateFieldList" class="document-template-field-list"><p class="muted">Chưa có trường điền.</p></div>
+            <details class="document-template-ocr-result is-hidden" id="documentTemplateOcrResult">
+              <summary>Nội dung OCR để kiểm tra</summary>
+              <pre id="documentTemplateOcrText"></pre>
+            </details>
+            <div class="document-template-save-row"><button id="documentTemplateSave" type="button" disabled>Lưu mẫu</button></div>
+          </aside>
+        </div>
+      </section>
+    </section>
+  </section>
+
   <!-- System data must load before the application runtime. -->
-  <script src="people-data.js?v=3.4.64"></script>
-  <script src="gpmb-workflow-data.js?v=3.4.64"></script>
-  <script src="work-calendar.js?v=3.4.64"></script>
-  <script src="virtual-assistant.js?v=3.4.64"></script>
-  <script src="script.js?v=3.4.64"></script>
+  <script src="people-data.js?v=3.4.115"></script>
+  <script src="gpmb-workflow-data.js?v=3.4.115"></script>
+  <script src="work-calendar.js?v=3.4.115"></script>
+  <script src="virtual-assistant.js?v=3.4.115"></script>
+  <script src="script.js?v=3.4.115"></script>
+  <script src="document-templates.js?v=3.4.115"></script>
 </body>
 </html>

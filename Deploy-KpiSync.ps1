@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRef = "hqquobfaccxnydeyvioe"
-$expectedDeploymentVersion = "2026.10.21.1"
+$expectedDeploymentVersion = "2026.10.30.3"
 $cli = Join-Path $PSScriptRoot "tools\supabase-cli\supabase.exe"
 
 if (-not (Test-Path -LiteralPath $cli)) {
@@ -72,7 +72,7 @@ if ([string]$status.deploymentVersion -ne $expectedDeploymentVersion) {
   throw "Deploy da ket thuc nhung may chu van bao phien ban $($status.deploymentVersion). Khong tiep tuc su dung cho den khi kiem tra lai thanh cong."
 }
 if (-not $status.originRestricted -or -not $status.singleDeviceSession -or -not $status.credentialHashing -or -not $status.notifications -or -not $status.gpmbWorkflows) {
-  throw "Deploy chua kich hoat day du bao ve origin, phien mot thiet bi, bam mat khau hoac trung tam thong bao."
+  throw "Deploy chua kich hoat day du bao ve origin, phien mot thiet bi, bam mat khau, trung tam thong bao hoac quy trinh GPMB."
 }
 if (-not $status.recordProjection.available -or -not $status.recordProjection.synchronized) {
   throw "Deploy da xong nhung bang ban ghi chua dong bo dung voi du lieu trung tam."
