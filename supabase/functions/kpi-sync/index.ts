@@ -1679,8 +1679,19 @@ const taskDeadlineExtensionReviewFields = [
 ] as const;
 
 function taskDeadlineExtensionRequestChanged(previous: JsonRecord, next: JsonRecord): boolean {
+  const normalizeEmpty = (value: unknown): unknown =>
+    value === null || value === undefined || value === ""
+      ? ""
+      : value;
+
   return (previous.followUpDate || "") !== (next.followUpDate || "")
-    || taskDeadlineExtensionRequestFields.some((field) => !sameJson(previous[field], next[field]));
+    || taskDeadlineExtensionRequestFields.some(
+      (field) =>
+        !sameJson(
+          normalizeEmpty(previous[field]),
+          normalizeEmpty(next[field]),
+        ),
+    );
 }
 
 function validTaskIsoDate(value: unknown): boolean {
