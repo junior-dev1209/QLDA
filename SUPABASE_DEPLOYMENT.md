@@ -60,14 +60,14 @@ Moi tai khoan online chi co mot phien hop le. Khi dang nhap tren thiet bi moi, m
 
 ## Trien khai
 
-1. Mo PowerShell tai thu muc goc du an, dang nhap va lien ket dung du an Supabase. CLI co the hoi mat khau database cua du an khi lien ket:
+1. Tren may co tai khoan Supabase duoc cap quyen Developer/Owner, dang nhap va lien ket dung du an. CLI co the hoi mat khau database cua du an khi lien ket:
 
 ```powershell
-.\Deploy-KpiSync.cmd -Login
+.\Supabase-Login.cmd
 .\tools\supabase-cli\supabase.exe link --project-ref hqquobfaccxnydeyvioe
 ```
 
-Tep `.cmd` tu chay PowerShell voi pham vi `ExecutionPolicy Bypass` cho rieng mot lenh, khong thay doi chinh sach bao mat cua Windows. Script dung Supabase CLI da duoc dat trong `tools\supabase-cli`, khong phu thuoc lenh `supabase` toan cuc hay bien moi truong `PATH`. Lan dau, `-Login` yeu cau dang nhap Supabase. `-CheckOnly` kiem tra CLI va xac nhan may chu da thuc su chay phien ban `2026.10.28.1`. Khi deploy binh thuong, script tu lien ket du an neu can, chay `db push` truoc khi deploy Function; dung `-SkipDatabaseMigrations` chi khi migration da duoc ap dung thu cong.
+Tep `Supabase-Login.cmd` mo rieng luong dang nhap va giu cua so lai de nhap ma xac nhan; no khong chay migration hay deploy. Script dung Supabase CLI da duoc dat trong `tools\supabase-cli`, khong phu thuoc lenh `supabase` toan cuc hay bien moi truong `PATH`. `-CheckOnly` kiem tra CLI va xac nhan may chu da thuc su chay phien ban `2026.11.02.1`. Khi deploy binh thuong, script chay `db push` truoc khi deploy Function; dung `-SkipDatabaseMigrations` chi khi migration da duoc ap dung thu cong.
 
 Neu can dung Supabase CLI cua may tinh thay vi script, cai CLI va dang nhap:
 
@@ -82,10 +82,10 @@ supabase link --project-ref <project-ref>
 .\tools\supabase-cli\supabase.exe db push
 ```
 
-3. Deploy Edge Function va xac nhan phien ban may chu:
+3. Deploy Edge Function va xac nhan phien ban may chu. Dung file interactive neu mo bang double-click de cua so khong tu dong dong:
 
 ```powershell
-.\Deploy-KpiSync.cmd
+.\Deploy-KpiSync-Interactive.cmd
 .\Deploy-KpiSync.cmd -CheckOnly
 ```
 

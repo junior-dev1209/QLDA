@@ -13229,8 +13229,10 @@ body {
 
   /* Icon kích thước xinh xắn */
   .mobile-bottom-nav .bottom-nav-item .nav-icon {
-    font-size: 18px !important;
-    line-height: 1 !important;
+    width: 22px !important;
+    min-width: 22px !important;
+    height: 22px !important;
+    padding: 3px !important;
     margin: 0 !important;
   }
 
@@ -13652,12 +13654,15 @@ body {
   .mobile-menu-list { display: flex !important; flex-direction: column !important; gap: 8px !important; margin-bottom: 16px !important; }
   .mobile-menu-item { display: flex !important; align-items: center !important; gap: 12px !important; background: transparent !important; border: none !important; padding: 6px 2px !important; width: 100% !important; text-align: left !important; cursor: pointer !important; }
 
-  .mobile-icon-box {
-    width: 36px !important; height: 36px !important; background: #f0f7ff !important;
-    border: 1px solid #d0e6ff !important; border-radius: 10px !important;
-    display: flex !important; align-items: center !important; justify-content: center !important;
-    font-size: 16px !important; color: #176b87 !important; font-weight: bold !important;
+  .mobile-menu-icon {
+    width: 28px !important; min-width: 28px !important; height: 28px !important;
+    padding: 4px !important; border-radius: 8px !important;
+    background: #f2f8fa !important; border-color: #d5e1ea !important;
+    color: var(--primary-dark) !important;
   }
+  .mobile-menu-item { min-height: 48px !important; }
+  .mobile-profile-avatar svg { width: 22px; height: 22px; color: var(--primary-dark); }
+  .mobile-logout-icon { width: 17px; height: 17px; flex: 0 0 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .mobile-menu-text { font-size: 14.5px !important; font-weight: 700 !important; color: #0f2d3a !important; }
 
   /* NÚT ĐĂNG XUẤT ĐÁY POPUP */
@@ -14778,21 +14783,31 @@ html.is-authenticated #loginScreen,
 
 /* Full-bleed theme artwork with a soft wash under the brand text. */
 .topbar {
-  min-height: 76px !important;
+  height: 86px !important;
+  min-height: 86px !important;
+  max-height: 86px !important;
   isolation: isolate;
   overflow: visible !important;
+}
+
+@media (max-width: 1320px) and (min-width: 769px) {
+  .topbar {
+    height: auto !important;
+    min-height: 86px !important;
+    max-height: none !important;
+  }
 }
 
 .topbar::before {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 1;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.78) 25%, rgba(255, 255, 255, 0.3) 43%, rgba(255, 255, 255, 0.02) 56%, transparent 100%);
   pointer-events: none;
 }
 
-.topbar > *:not(.topbar-visual):not(.topbar-decoration) {
+.topbar > *:not(.topbar-visual) {
   position: relative;
   z-index: 3;
 }
@@ -14814,26 +14829,6 @@ html.is-authenticated #loginScreen,
   object-fit: fill;
   object-position: center;
   filter: saturate(1.12) contrast(1.04);
-}
-
-.topbar-decoration {
-  position: absolute !important;
-  inset: -3px 0;
-  z-index: 1 !important;
-  display: flex;
-  justify-content: space-between;
-  align-items: stretch;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.topbar-decoration img {
-  display: block;
-  width: auto;
-  height: 100%;
-  max-width: min(18vw, 180px);
-  object-fit: contain;
-  opacity: 0.48;
 }
 
 .topbar-visual-scene.is-theme-changing {
@@ -14914,7 +14909,9 @@ html.is-authenticated #loginScreen,
   .topbar {
     justify-content: flex-start !important;
     text-align: left !important;
+    height: 64px !important;
     min-height: 64px !important;
+    max-height: 64px !important;
   }
 
   .topbar > div.topbar-brand {
@@ -14949,9 +14946,13 @@ html.is-authenticated #loginScreen,
     object-fit: cover;
   }
 
-  .topbar-decoration img {
-    max-width: 35vw;
-    opacity: 0.32;
+  .mobile-bottom-nav .bottom-nav-item .nav-icon {
+    display: inline-grid !important;
+    place-items: center !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 6px !important;
+    background: var(--surface-2) !important;
+    color: currentColor !important;
   }
 }
 

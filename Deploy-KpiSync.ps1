@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRef = "hqquobfaccxnydeyvioe"
-$expectedDeploymentVersion = "2026.10.30.3"
+$expectedDeploymentVersion = "2026.11.02.1"
 $cli = Join-Path $PSScriptRoot "tools\supabase-cli\supabase.exe"
 
 if (-not (Test-Path -LiteralPath $cli)) {
@@ -38,10 +38,12 @@ if ($CheckOnly) {
 }
 
 if ($Login) {
-  & $cli login
+  & $cli --output-format text login
   if ($LASTEXITCODE -ne 0) {
     throw "Dang nhap Supabase khong thanh cong."
   }
+  Write-Host "Dang nhap Supabase thanh cong. Khong tu dong chay migration hoac deploy."
+  return
 }
 
 if (-not $SkipDatabaseMigrations) {

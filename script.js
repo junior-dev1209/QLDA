@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.115";
+const APP_VERSION = "3.4.118";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -1049,21 +1049,21 @@ const systemThemeOptions = [
 ];
 
 const topbarThemeVisuals = {
-  default: `assets/topbar-wide-infrastructure-scene.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  tet: `assets/topbar-wide-scene-tet.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "national-day": `assets/topbar-wide-scene-national-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  anniversary: `assets/topbar-wide-scene-anniversary.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "women-day": `assets/topbar-wide-scene-women-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "new-year": `assets/topbar-wide-scene-new-year.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "hung-kings": `assets/topbar-wide-scene-hung-kings.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "reunification-day": `assets/topbar-wide-scene-reunification-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "children-day": `assets/topbar-wide-scene-children-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "martyrs-day": `assets/topbar-wide-scene-martyrs-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "august-revolution": `assets/topbar-wide-scene-august-revolution.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "vietnamese-women-day": `assets/topbar-wide-scene-vietnamese-women-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "vietnamese-culture-day": `assets/topbar-wide-scene-vietnamese-culture-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  christmas: `assets/topbar-wide-scene-christmas.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  custom: `assets/topbar-wide-scene-anniversary.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  default: `assets/topbar-v2-infrastructure-scene.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  tet: `assets/topbar-v2-scene-tet.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "national-day": `assets/topbar-v2-scene-national-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  anniversary: `assets/topbar-v2-scene-anniversary.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "women-day": `assets/topbar-v2-scene-women-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "new-year": `assets/topbar-v2-scene-new-year.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "hung-kings": `assets/topbar-v2-scene-hung-kings.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "reunification-day": `assets/topbar-v2-scene-reunification-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "children-day": `assets/topbar-v2-scene-children-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "martyrs-day": `assets/topbar-v2-scene-martyrs-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "august-revolution": `assets/topbar-v2-scene-august-revolution.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "vietnamese-women-day": `assets/topbar-v2-scene-vietnamese-women-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "vietnamese-culture-day": `assets/topbar-v2-scene-vietnamese-culture-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  christmas: `assets/topbar-v2-scene-christmas.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  custom: `assets/topbar-v2-scene-anniversary.jpg?v=${encodeURIComponent(APP_VERSION)}`,
 };
 
 const printableSections = [
@@ -4956,6 +4956,9 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
     return `${targetText} đã được cập nhật từ thiết bị khác trước khi lưu. Hệ thống đã tải lại kết quả mới nhất từ máy chủ.`;
   }
   const currentState = snapshot || state;
+  if (changes.some((change) => change.scope === "tasks" && change.reason === "Recurring series has been stopped.")) {
+    return "Chuỗi công việc định kỳ đã được dừng trên máy chủ. Kỳ mới và nhật ký tạo kỳ tương ứng đã bị loại bỏ; dữ liệu đã đồng bộ lại.";
+  }
   const rejectedIds = changes
     .filter((change) => change.scope === "tasks")
     .map((change) => (currentState.tasks || []).find((task) => task.id === change.id)?.title || "")
