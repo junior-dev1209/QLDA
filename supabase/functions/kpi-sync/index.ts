@@ -17,7 +17,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.10.30.3";
+const deploymentVersion = "2026.11.02.1";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -3266,6 +3266,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
   const denied: DeniedMutation[] = [];
   const serverNotificationIds: string[] = [];
   const calendarAuditEvents: Array<{ action: string; event: JsonRecord }> = [];
+  const blockedStoppedRecurrenceTaskIds = new Set<string>();
   let changed = purgeRetiredAssignmentTasks(next);
 
   collections.forEach((collection) => {
@@ -3282,10 +3283,22 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       }
       const serverValue = collection === "accounts" && previous ? sanitizedAccount(previous) : previous;
       let candidate = value;
+      if (
+        collection === "activityLog"
+        && String(candidate.action || "") === "Tự tạo định kỳ"
+        && blockedStoppedRecurrenceTaskIds.has(String(candidate.targetId || ""))
+      ) return;
       let taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
       if (collection === "tasks") {
         candidate = normalizeTaskCompletionLifecycle(candidate);
+        const recurrenceSafeCandidate = preserveStoppedRecurringTask(next, candidate, previous);
+        if (!recurrenceSafeCandidate) {
+          blockedStoppedRecurrenceTaskIds.add(id);
+          denied.push({ scope: collection, id, reason: "Recurring series has been stopped." });
+          return;
+        }
+        candidate = recurrenceSafeCandidate;
         if (previous) {
           // Older imports may not have origin metadata. It is immutable and
           // never participates in a progress permission decision.
@@ -4293,6 +4306,22 @@ function recurringTaskSourceForHandover(state: JsonRecord, task: JsonRecord, per
 
 function taskRecurrenceSeriesKey(task: JsonRecord): string {
   return String(task.recurrenceSeriesId || task.recurrenceSourceId || recordId(task) || "").trim();
+}
+
+function preserveStoppedRecurringTask(state: JsonRecord, candidate: JsonRecord, previous: JsonRecord | undefined): JsonRecord | null {
+  const seriesKey = taskRecurrenceSeriesKey(candidate);
+  if (!seriesKey) return candidate;
+  const stoppedRecord = records(state, "tasks").find((task) =>
+    taskRecurrenceSeriesKey(task) === seriesKey && String(task.recurrenceStoppedAt || ""),
+  );
+  if (!stoppedRecord) return candidate;
+  if (!previous && String(candidate.recurrenceSourceId || "").trim()) return null;
+
+  const preserved = { ...candidate };
+  ["recurrenceStoppedAt", "recurrenceStoppedById", "recurrenceStoppedByName", "recurrenceStopDate"].forEach((field) => {
+    if (stoppedRecord[field] !== undefined) preserved[field] = stoppedRecord[field];
+  });
+  return preserved;
 }
 
 function recurringSeriesSource(state: JsonRecord, task: JsonRecord): JsonRecord | undefined {
