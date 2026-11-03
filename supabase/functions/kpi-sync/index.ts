@@ -48,7 +48,14 @@ const moduleSettingsVersion = 3;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows";
+type RecordProjectionTable =
+  | "kpi_record_people"
+  | "kpi_record_tasks"
+  | "kpi_record_task_progress_reports"
+  | "kpi_record_evaluations"
+  | "kpi_record_catalog"
+  | "kpi_record_activity_log"
+  | "gpmb_workflows";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -128,12 +135,11 @@ type StopRecurringTaskRequest = {
 };
 
 const projectionTableByCollection: Partial<Record<CollectionName, RecordProjectionTable>> = {
-  people: "people",
-  tasks: "tasks",
+  people: "kpi_record_people",
+  tasks: "kpi_record_tasks",
   gpmbWorkflows: "gpmb_workflows",
-  evaluations: "evaluations",
-  notifications: "notifications",
-  activityLog: "activity_log",
+  evaluations: "kpi_record_evaluations",
+  activityLog: "kpi_record_activity_log",
 };
 const kpiCatalogScalarFields: ScalarField[] = [
   "departments",
@@ -3897,11 +3903,11 @@ async function replaceTaskProgressProjection(task: JsonRecord, revision: number)
   const taskId = recordId(task);
   if (!taskId) return;
   const { error: deleteError } = await admin
-    .from("task_progress_reports")
+    .from("kpi_record_task_progress_reports")
     .delete()
     .eq("task_id", taskId);
   if (deleteError) throw deleteError;
-  await upsertProjectionRows("task_progress_reports", taskProgressProjectionRows(task, revision));
+  await upsertProjectionRows("kpi_record_task_progress_reports", taskProgressProjectionRows(task, revision));
 }
 
 async function updateRecordProjectionMarker(revision: number): Promise<void> {
@@ -3913,7 +3919,7 @@ async function updateRecordProjectionMarker(revision: number): Promise<void> {
 
 async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch, revision: number): Promise<void> {
   const changedCollections = patch.collections || {};
-  for (const collection of ["people", "tasks", "gpmbWorkflows", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
+  for (const collection of ["people", "tasks", "gpmbWorkflows", "evaluations", "activityLog"] as CollectionName[]) {
     const changes = changedCollections[collection];
     if (!changes) continue;
     const table = projectionTableByCollection[collection];
@@ -3931,7 +3937,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         if (task) await replaceTaskProgressProjection(task, revision);
       }
       for (const id of (changes.deletes || []).map((entry) => String(entry.id || "")).filter(Boolean)) {
-        const { error } = await admin.from("task_progress_reports").delete().eq("task_id", id);
+        const { error } = await admin.from("kpi_record_task_progress_reports").delete().eq("task_id", id);
         if (error) throw error;
       }
     }
@@ -3949,8 +3955,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return row;
       })
       .filter((record): record is JsonRecord => Boolean(record));
-    await upsertProjectionRows("evaluations", rows);
-    await deleteProjectionRows("evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
+    await upsertProjectionRows("kpi_record_evaluations", rows);
+    await deleteProjectionRows("kpi_record_evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
   }
 
   const projectChanges = changedCollections.projectCatalog;
@@ -3964,8 +3970,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return id ? { id: `project:${id}`, version: Math.max(1, revision), data: clone(record), updated_at: new Date().toISOString() } : null;
       })
       .filter((record): record is JsonRecord => record !== null);
-    await upsertProjectionRows("kpi_catalog", rows);
-    await deleteProjectionRows("kpi_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
+    await upsertProjectionRows("kpi_record_catalog", rows);
+    await deleteProjectionRows("kpi_record_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
   }
 
   const changedCatalogFields = new Set((patch.fields || []).map((field) => field.key));
@@ -3975,7 +3981,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         const fieldName = String(row.id || "").replace(/^catalog:/, "").replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
         return changedCatalogFields.has(fieldName as ScalarField);
       });
-    await upsertProjectionRows("kpi_catalog", rows);
+    await upsertProjectionRows("kpi_record_catalog", rows);
   }
 
   // Keep server-owned sync and calendar audit entries queryable without
@@ -3985,20 +3991,19 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
   const latestServerActivity = serverActivities.filter((item) => !recordId(item).startsWith("server-sync-calendar-")).slice(-1);
   const recentCalendarActivities = serverActivities.filter((item) => recordId(item).startsWith("server-sync-calendar-")).slice(-20);
   const activityRows = [...latestServerActivity, ...recentCalendarActivities];
-  if (activityRows.length) await upsertProjectionRows("activity_log", projectionRecordRows(activityRows, revision));
+  if (activityRows.length) await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(activityRows, revision));
   await updateRecordProjectionMarker(revision);
 }
 
 async function syncAllRecordProjections(state: JsonRecord, revision: number): Promise<void> {
-  await upsertProjectionRows("people", projectionRecordRows(records(state, "people"), revision));
-  await upsertProjectionRows("tasks", projectionRecordRows(records(state, "tasks"), revision));
+  await upsertProjectionRows("kpi_record_people", projectionRecordRows(records(state, "people"), revision));
+  await upsertProjectionRows("kpi_record_tasks", projectionRecordRows(records(state, "tasks"), revision));
   await upsertProjectionRows("gpmb_workflows", projectionRecordRows(records(state, "gpmbWorkflows"), revision));
-  await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
-  await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
-  await upsertProjectionRows("notifications", projectionRecordRows(records(state, "notifications"), revision));
-  await upsertProjectionRows("activity_log", projectionRecordRows(records(state, "activityLog"), revision));
+  await upsertProjectionRows("kpi_record_evaluations", evaluationProjectionRows(state, revision));
+  await upsertProjectionRows("kpi_record_catalog", kpiCatalogProjectionRows(state, revision));
+  await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(records(state, "activityLog"), revision));
   const reports = records(state, "tasks").flatMap((task) => taskProgressProjectionRows(task, revision));
-  await upsertProjectionRows("task_progress_reports", reports);
+  await upsertProjectionRows("kpi_record_task_progress_reports", reports);
   await updateRecordProjectionMarker(revision);
 }
 
