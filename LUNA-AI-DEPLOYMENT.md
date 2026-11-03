@@ -18,14 +18,15 @@ Recognition availability depends on the browser, operating system, language pack
 
 ## Deploy
 
-Run these commands from the repository root with an authenticated Supabase CLI linked to the production project:
+Run these commands only from a machine with Developer/Owner access to the production Supabase project. The sign-in command below is interactive and separate from deployment:
 
 ```powershell
-tools\supabase-cli\supabase.exe db push
-tools\supabase-cli\supabase.exe secrets set OPENAI_API_KEY="PASTE_API_KEY_HERE" OPENAI_MODEL="gpt-6-luna"
-tools\supabase-cli\supabase.exe functions deploy kpi-sync
+.\Supabase-Login.cmd
+.\tools\supabase-cli\supabase.exe link --project-ref hqquobfaccxnydeyvioe
+.\Deploy-KpiSync-Interactive.cmd
+.\Deploy-KpiSync.cmd -CheckOnly
 ```
 
 `OPENAI_API_KEY` is for Luna's separate text AI feature only. Browser voice input/output does not require Azure Speech or an audio transcription secret. Do not put secrets in `index.html`, `script.js`, `supabase-config.js`, local storage, or a committed environment file.
 
-Publish frontend release `3.4.106` with the existing Edge Function version `2026.10.28.1`. Run `Deploy-KpiSync.cmd -CheckOnly` to verify the server version and data services. It does not test a browser's voice service. After publishing, test on current Chrome, Edge, and Safari over HTTPS, including the keyboard fallback and task confirmation.
+The current source frontend release is `3.4.119` and the expected Edge Function version is `2026.11.03.1`. Store `OPENAI_API_KEY` only in Supabase Secrets through an approved secure channel; do not place it in shell history or source files. The post-deploy check also requires `recordProjection.synchronized=true`. It does not test a browser's voice service. After publishing the frontend, test current Chrome, Edge, and Safari over HTTPS, including keyboard fallback and task confirmation.

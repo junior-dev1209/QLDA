@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.118";
+const APP_VERSION = "3.4.119";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -4959,6 +4959,21 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
   if (changes.some((change) => change.scope === "tasks" && change.reason === "Recurring series has been stopped.")) {
     return "Chuỗi công việc định kỳ đã được dừng trên máy chủ. Kỳ mới và nhật ký tạo kỳ tương ứng đã bị loại bỏ; dữ liệu đã đồng bộ lại.";
   }
+  if (changes.some((change) => change.scope === "tasks" && change.reason === "Invalid deadline extension review.")) {
+    return "Máy chủ không chấp nhận kết quả duyệt vì đề nghị hoặc hạn công việc đã thay đổi, không còn khớp dữ liệu hiện tại. Hãy đóng cửa sổ, tải lại công việc rồi duyệt lại.";
+  }
+  if (changes.some((change) => change.scope === "tasks" && change.reason === "Invalid deadline extension request.")) {
+    return "Máy chủ không chấp nhận đề nghị gia hạn. Kiểm tra mốc đề nghị phải sau hạn hiện tại, nội dung trở ngại đủ căn cứ và công việc không thuộc quy trình GPMB.";
+  }
+  if (changes.some((change) => change.scope === "tasks" && change.reason === "Task module is not available to this account.")) {
+    return "Tài khoản chưa được bật quyền truy cập mục Công việc. Quản trị viên cần kiểm tra Cấu hình hệ thống > Phân quyền chức năng.";
+  }
+  if (changes.some((change) => change.scope === "tasks" && change.reason === "Task update is outside account scope.")) {
+    return "Máy chủ không nhận diện tài khoản thuộc phạm vi công việc này. Hãy kiểm tra liên kết tài khoản với nhân sự, người thực hiện/phối hợp và phòng ban của công việc.";
+  }
+  if (changes.some((change) => change.scope === "tasks" && change.reason === "Permission denied.")) {
+    return "Máy chủ từ chối thao tác theo quyền hoặc phạm vi công việc của tài khoản. Hãy kiểm tra người thực hiện, người phối hợp, phòng ban và quyền truy cập mục Công việc.";
+  }
   const rejectedIds = changes
     .filter((change) => change.scope === "tasks")
     .map((change) => (currentState.tasks || []).find((task) => task.id === change.id)?.title || "")
@@ -6407,6 +6422,27 @@ function canReviewTaskDeadlineExtension(task) {
 function sharedSyncSupportsTaskDeadlineExtensionReview() {
   if (isOfflineFileRuntime() || !sharedSync.session) return true;
   return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.10.30.3");
+}
+
+async function refreshSharedDeploymentVersion() {
+  if (!usingSupabaseSync() || !sharedSync.session || isOfflineFileRuntime()) return true;
+  try {
+    const { response, payload } = await sharedJsonRequest("version", { timeoutMs: 6000 });
+    const version = String(payload?.deploymentVersion || "").trim();
+    if (!response.ok || !version) return false;
+    sharedSync.deploymentVersion = version;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureTaskDeadlineExtensionReviewSupported() {
+  if (isOfflineFileRuntime() || !sharedSync.session) return true;
+  const versionRefreshed = await refreshSharedDeploymentVersion();
+  if (!versionRefreshed || sharedSyncSupportsTaskDeadlineExtensionReview()) return true;
+  alert(`Máy chủ online đang chạy phiên bản ${sharedSync.deploymentVersion || "chưa xác định"}, chưa hỗ trợ duyệt gia hạn. Chưa có thay đổi nào được lưu; vui lòng tải lại hệ thống hoặc liên hệ quản trị viên.`);
+  return false;
 }
 
 function canAssessTaskQualityForPerson(personId, status, task = null) {
@@ -9758,16 +9794,13 @@ function openTaskDeadlineExtensionReviewDialog(taskId) {
   byId("taskDeadlineExtensionReviewDecision").focus();
 }
 
-function reviewTaskDeadlineExtension(taskId, decision, note = "") {
+async function reviewTaskDeadlineExtension(taskId, decision, note = "") {
   const taskIndex = state.tasks.findIndex((item) => item.id === taskId);
   const task = taskIndex >= 0 ? state.tasks[taskIndex] : null;
   const reviewNote = String(note || "").trim();
   const requestedDue = String(task?.deadlineExtensionRequestedDue || "");
   if (!task || !canReviewTaskDeadlineExtension(task) || !["approved", "rejected"].includes(decision)) return false;
-  if (sharedSync.session && !isOfflineFileRuntime() && !sharedSyncSupportsTaskDeadlineExtensionReview()) {
-    alert("Máy chủ online chưa hỗ trợ duyệt gia hạn. Chưa có thay đổi nào được lưu; hãy triển khai phiên bản máy chủ mới rồi thử lại.");
-    return false;
-  }
+  if (!await ensureTaskDeadlineExtensionReviewSupported()) return false;
   if (reviewNote.length < 3) {
     alert("Vui lòng ghi ý kiến duyệt (ít nhất 3 ký tự).");
     return false;
@@ -22149,10 +22182,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
           byId("taskBlockerNote").focus();
           return false;
         }
-        if (sharedSync.session && !isOfflineFileRuntime() && !sharedSyncSupportsTaskDeadlineExtensionReview()) {
-          alert("Máy chủ online chưa hỗ trợ quy trình duyệt gia hạn. Chưa có thay đổi nào được lưu; hãy triển khai phiên bản máy chủ mới rồi thử lại.");
-          return false;
-        }
+        if (!await ensureTaskDeadlineExtensionReviewSupported()) return false;
         const actor = currentActorInfo();
         preparedRecord.deadlineExtensionStatus = "pending";
         preparedRecord.deadlineExtensionRequestedDue = requestedDue;
@@ -22716,7 +22746,7 @@ byId("cancelTaskDeadlineExtensionReview").addEventListener("click", closeTaskDea
 byId("taskDeadlineExtensionReviewDialog").addEventListener("click", (event) => {
   if (event.target === byId("taskDeadlineExtensionReviewDialog")) closeTaskDeadlineExtensionReviewDialog();
 });
-byId("taskDeadlineExtensionReviewForm").addEventListener("submit", (event) => {
+byId("taskDeadlineExtensionReviewForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const taskId = byId("taskDeadlineExtensionReviewTaskId").value;
   const decision = byId("taskDeadlineExtensionReviewDecision").value;
@@ -22724,7 +22754,7 @@ byId("taskDeadlineExtensionReviewForm").addEventListener("submit", (event) => {
     alert("Chọn chấp nhận hoặc không chấp nhận mốc mới trước khi lưu.");
     return;
   }
-  if (reviewTaskDeadlineExtension(taskId, decision, byId("taskDeadlineExtensionReviewNote").value)) {
+  if (await reviewTaskDeadlineExtension(taskId, decision, byId("taskDeadlineExtensionReviewNote").value)) {
     closeTaskDeadlineExtensionReviewDialog();
   }
 });

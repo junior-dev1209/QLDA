@@ -1,4 +1,4 @@
-const RELEASE_VERSION = "3.4.118";
+const RELEASE_VERSION = "3.4.119";
 const CACHE_NAME = `phuc-thinh-kpi-v${RELEASE_VERSION.replace(/\D/g, "")}`;
 const APP_SHELL = [
   "index.html",

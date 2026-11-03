@@ -67,7 +67,9 @@ Moi tai khoan online chi co mot phien hop le. Khi dang nhap tren thiet bi moi, m
 .\tools\supabase-cli\supabase.exe link --project-ref hqquobfaccxnydeyvioe
 ```
 
-Tep `Supabase-Login.cmd` mo rieng luong dang nhap va giu cua so lai de nhap ma xac nhan; no khong chay migration hay deploy. Script dung Supabase CLI da duoc dat trong `tools\supabase-cli`, khong phu thuoc lenh `supabase` toan cuc hay bien moi truong `PATH`. `-CheckOnly` kiem tra CLI va xac nhan may chu da thuc su chay phien ban `2026.11.02.1`. Khi deploy binh thuong, script chay `db push` truoc khi deploy Function; dung `-SkipDatabaseMigrations` chi khi migration da duoc ap dung thu cong.
+Tep `Supabase-Login.cmd` mo rieng luong dang nhap va giu cua so lai de nhap ma xac nhan; no khong chay migration hay deploy. Script dung Supabase CLI da duoc dat trong `tools\supabase-cli`, khong phu thuoc lenh `supabase` toan cuc hay bien moi truong `PATH`. `-CheckOnly` kiem tra CLI va xac nhan may chu da thuc su chay phien ban `2026.11.03.1`. Khi deploy binh thuong, script chay `db push` truoc khi deploy Function; dung `-SkipDatabaseMigrations` chi khi migration da duoc ap dung thu cong.
+
+Luu y: `action=status` trong Edge Function co co che tu phuc hoi bang cach dong bo lai cac bang projection neu marker revision dang lech. Vi vay `-CheckOnly` co the ghi lai cac bang dan xuat nay; no khong sua trang thai cong viec chuan trong `kpi_shared_state`.
 
 Neu can dung Supabase CLI cua may tinh thay vi script, cai CLI va dang nhap:
 
@@ -218,7 +220,7 @@ Quy trinh khoi tao hoac phuc hoi du lieu trung tam:
 
 1. Mo phien ban moi, dang nhap Admin tren may dang co ban JSON day du va moi nhat.
 2. Neu may chu rong, he thong hien canh bao va khong tu dong tai bat ky du lieu cuc bo nao. Tai khoan Admin chon Nhap JSON, chon tep JSON day du (it nhat Nhan su - Tai khoan va Van hanh), sau do xac nhan khoi phuc trung tam.
-3. Kiem tra `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`. Sau khi hoan tat, `initialized` phai la `true`, `revision` lon hon `0`, `deploymentVersion` la `2026.10.28.1`, `storageModel` la `record-projection-transition`, `singleDeviceSession`, `credentialHashing`, `calendarEvents`, `notifications` va `gpmbWorkflows` la `true`, `recordProjection.available` va `recordProjection.synchronized` la `true`, `releaseUpdates` la `false` va `originRestricted` la `true`.
+3. Kiem tra `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`. Sau khi hoan tat, `initialized` phai la `true`, `revision` lon hon `0`, `deploymentVersion` la `2026.11.03.1`, `storageModel` la `record-projection-transition`, `singleDeviceSession`, `credentialHashing`, `calendarEvents`, `notifications` va `gpmbWorkflows` la `true`, `recordProjection.available` va `recordProjection.synchronized` la `true`, `releaseUpdates` la `false` va `originRestricted` la `true`.
 4. Dang nhap tren may thu hai, tai lai trang va kiem tra du lieu van con day du.
 
 Neu ket qua `status` co `initialized: false` hoac `revision: 0`, Postgres trung tam chua co du lieu va tat ca may khac se chi nhan trang thai rong. Ban giao dien khong bao gio tu khoi tao hoac dong bo ban sao cuc bo len may chu trong truong hop do. Chi Admin dang nhap tren may co ban sao JSON da kiem tra moi duoc phep chon Nhap JSON va xac nhan khoi phuc. Khong tao du lieu moi, khong thao tac tu may khac va khong dung tep JSON thieu nhom Nhan su - Tai khoan hoac Van hanh truoc khi hoan tat khoi phuc.
