@@ -58,7 +58,7 @@ assert.ok(
   "Máy chủ phải đồng bộ mốc migration của Nhân viên tổng hợp GPMB.",
 );
 assert.ok(
-  edgeSource.includes("const deploymentVersion = \"2026.10.30.3\""),
+  edgeSource.includes("const deploymentVersion = \"2026.11.03.1\""),
   "Máy chủ phải dùng phiên bản triển khai hỗ trợ migration danh mục KPI mới.",
 );
 

@@ -6,7 +6,7 @@ const client = fs.readFileSync("script.js", "utf8");
 const worker = fs.readFileSync("service-worker.js", "utf8");
 const manifest = fs.readFileSync("manifest.webmanifest", "utf8");
 const apacheConfig = fs.readFileSync(".htaccess", "utf8");
-const releaseVersion = "3.4.115";
+const releaseVersion = "3.4.119";
 
 [
   `manifest.webmanifest?v=${releaseVersion}`,
@@ -34,22 +34,20 @@ assert.match(worker, /"work-calendar\.css"/, "Service worker phải lưu CSS c�
 assert.match(worker, /"work-calendar\.js"/, "Service worker phải lưu mã Lịch công việc.");
 assert.match(worker, /"assets\/notification-bell-glass\.png"/, "Service worker phải lưu biểu tượng chuông thông báo.");
 [
-  "assets/topbar-wide-infrastructure-scene.jpg",
-  "assets/topbar-wide-scene-tet.jpg",
-  "assets/topbar-wide-scene-national-day.jpg",
-  "assets/topbar-wide-scene-anniversary.jpg",
-  "assets/topbar-wide-scene-women-day.jpg",
-  "assets/topbar-wide-scene-new-year.jpg",
-  "assets/topbar-wide-scene-hung-kings.jpg",
-  "assets/topbar-wide-scene-reunification-day.jpg",
-  "assets/topbar-wide-scene-children-day.jpg",
-  "assets/topbar-wide-scene-martyrs-day.jpg",
-  "assets/topbar-wide-scene-august-revolution.jpg",
-  "assets/topbar-wide-scene-vietnamese-women-day.jpg",
-  "assets/topbar-wide-scene-vietnamese-culture-day.jpg",
-  "assets/topbar-wide-scene-christmas.jpg",
-  "assets/topbar-festive-left.png",
-  "assets/topbar-festive-right.png",
+  "assets/topbar-v2-infrastructure-scene.jpg",
+  "assets/topbar-v2-scene-tet.jpg",
+  "assets/topbar-v2-scene-national-day.jpg",
+  "assets/topbar-v2-scene-anniversary.jpg",
+  "assets/topbar-v2-scene-women-day.jpg",
+  "assets/topbar-v2-scene-new-year.jpg",
+  "assets/topbar-v2-scene-hung-kings.jpg",
+  "assets/topbar-v2-scene-reunification-day.jpg",
+  "assets/topbar-v2-scene-children-day.jpg",
+  "assets/topbar-v2-scene-martyrs-day.jpg",
+  "assets/topbar-v2-scene-august-revolution.jpg",
+  "assets/topbar-v2-scene-vietnamese-women-day.jpg",
+  "assets/topbar-v2-scene-vietnamese-culture-day.jpg",
+  "assets/topbar-v2-scene-christmas.jpg",
 ].forEach((asset) => assert.ok(worker.includes(`"${asset}"`), `PWA phải precache ảnh chủ đề ${asset} để dùng ngoại tuyến.`));
 assert.match(worker, /"assets\/virtual-assistant\.png"/, "Service worker phải lưu hình nhân vật trợ lý.");
 assert.doesNotMatch(worker, /virtual-assistant-(?:listening|thinking)\.png/, "Không tải trước ảnh trạng thái cũ không còn dùng.");

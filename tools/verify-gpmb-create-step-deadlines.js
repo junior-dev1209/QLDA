@@ -112,6 +112,6 @@ assert.match(edge, /const canAdjustStepDurations = previous[\s\S]*?canSetGpmbIni
 assert.match(edge, /function canSetGpmbInitialStepDurations\(actor: JsonRecord\): boolean/);
 assert.match(edge, /gpmbStepDuration\(template, conditions, canAdjustStepDurations \? requested\.days : prior\?\.days\)/);
 assert.match(edge, /if \(!enabled\) return \{ \.\.\.template,[^\n]*days,/);
-assert.equal(fs.readFileSync("manifest.webmanifest", "utf8").includes('"version": "3.4.113"'), true);
+assert.equal(fs.readFileSync("manifest.webmanifest", "utf8").includes('"version": "3.4.119"'), true);
 
 console.log("GPMB create-step deadline checks passed.");

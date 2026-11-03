@@ -12,9 +12,11 @@ function extractFunction(source, name) {
   assert.notEqual(start, -1, `Thiếu hàm ${name}.`);
   const next = source.indexOf("\nfunction ", start + 1);
   return source.slice(start, next < 0 ? source.length : next)
+    .replace(/([A-Za-z_$][\w$]*)\??: JsonRecord \| undefined/g, "$1")
     .replace(/([A-Za-z_$][\w$]*)\??: JsonRecord/g, "$1")
     .replace(/([A-Za-z_$][\w$]*)\??: unknown/g, "$1")
     .replace(/\): JsonRecord \| null \{/g, ") {")
+    .replace(/\): JsonRecord \{/g, ") {")
     .replace(/\): boolean \{/g, ") {");
 }
 
@@ -54,6 +56,9 @@ const sandbox = {
   recordId: (record) => String(record?.id || ""),
   gpmbWorkflowManagedTask: (task) => Boolean(task?.gpmbWorkflowId && task?.gpmbStepId),
   taskProgressOnlyChange: () => true,
+  isBlankTaskField: (value) => String(value ?? "").trim() === "",
+  completedTaskStatus: (status) => ["Hoàn thành", "Hoan thanh"].includes(String(status || "")),
+  recoverTaskCompletionReviewFromHistory: (task) => task,
   validTaskIsoDate: (value) => {
     const date = String(value || "");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
@@ -65,6 +70,8 @@ vm.createContext(sandbox);
 vm.runInContext(extractFunction(edge, "taskDeadlineExtensionRequestChanged"), sandbox);
 vm.runInContext(extractFunction(edge, "normalizeTaskDeadlineExtensionRequest"), sandbox);
 vm.runInContext(extractFunction(edge, "taskDeadlineExtensionReviewIntent"), sandbox);
+vm.runInContext(extractFunction(edge, "normalizeTaskCompletionLifecycle"), sandbox);
+vm.runInContext(extractFunction(edge, "normalizeTaskMutationCandidate"), sandbox);
 vm.runInContext(extractFunction(edge, "normalizeTaskDeadlineExtensionReview"), sandbox);
 
 const request = {
@@ -154,6 +161,28 @@ assert.equal(sandbox.normalizeTaskDeadlineExtensionReview(reviewBase, {
   deadlineExtensionReviewNote: "",
 }, { id: "manager-account", displayName: "Trưởng phòng" }), null, "Không chấp nhận quyết định thiếu ý kiến.");
 
+const overdueReviewBase = { ...reviewBase, status: "Quá hạn", progress: 25 };
+const overdueReviewCandidate = {
+  ...overdueReviewBase,
+  due: overdueReviewBase.deadlineExtensionRequestedDue,
+  deadlineExtensionStatus: "approved",
+  deadlineExtensionReviewedAt: "client-time",
+  deadlineExtensionReviewedById: "manager-account",
+  deadlineExtensionReviewedByName: "Trưởng phòng",
+  deadlineExtensionReviewNote: "Chấp nhận do đủ căn cứ.",
+  progressReports: [...overdueReviewBase.progressReports, { id: "review-overdue", type: "deadline-extension-review" }],
+  updatedAt: "client-time",
+  updatedBy: "Trưởng phòng",
+  updatedById: "manager-account",
+};
+const reviewCandidate = sandbox.normalizeTaskMutationCandidate(overdueReviewBase, overdueReviewCandidate);
+assert.equal(reviewCandidate.status, "Quá hạn", "Duyệt gia hạn không được chuẩn hóa trạng thái công việc ngoài quyết định.");
+assert.equal(sandbox.normalizeTaskDeadlineExtensionReview(overdueReviewBase, reviewCandidate, {
+  id: "manager-account", displayName: "Trưởng phòng",
+}).due, overdueReviewBase.deadlineExtensionRequestedDue, "Hồ sơ cũ ở trạng thái Quá hạn vẫn phải duyệt gia hạn được.");
+assert.equal(sandbox.normalizeTaskCompletionLifecycle(overdueReviewCandidate).status, "Đang thực hiện",
+  "Phải kiểm tra đúng trường hợp chuẩn hóa trạng thái cũ gây từ chối duyệt.");
+
 const reviewer = extractFunction(edge, "canReviewTaskDeadlineExtension");
 vm.runInContext(reviewer, Object.assign(sandbox, {
   isAdmin: (account) => account.role === "admin",
@@ -182,11 +211,17 @@ const operationRows = extractFunction(client, "dashboardOperationRows");
 assert.doesNotMatch(operationRows, /deadline-extension-review|Chờ duyệt gia hạn/, "Không thêm thẻ tổng hợp Chờ duyệt gia hạn vào Tổng quan.");
 assert.match(client, /deadlineExtensionRequest = true/);
 assert.match(client, /sharedSyncSupportsTaskDeadlineExtensionReview\(\)/);
+assert.match(client, /async function refreshSharedDeploymentVersion\(\)[\s\S]*?sharedJsonRequest\("version"/);
+assert.match(client, /async function ensureTaskDeadlineExtensionReviewSupported\(\)[\s\S]*?refreshSharedDeploymentVersion\(\)/);
 assert.match(edge, /function normalizeTaskDeadlineExtensionRequest\(/);
 assert.match(edge, /function normalizeTaskDeadlineExtensionReview\(/);
+assert.match(edge, /function normalizeTaskMutationCandidate\([\s\S]*?taskDeadlineExtensionReviewIntent\(previous, candidate\)[\s\S]*?return clone\(candidate\)/);
+assert.match(edge, /candidate = normalizeTaskMutationCandidate\(previous, candidate\)/);
+assert.match(edge, /if \(action === "version" && request\.method === "GET"\) \{\s*return json\(request, \{ deploymentVersion \}\);\s*\}/,
+  "Endpoint phiên bản phải chỉ trả version mà không đọc hay sửa dữ liệu nghiệp vụ.");
 assert.match(edge, /function canReviewTaskDeadlineExtension\(/);
 assert.match(edge, /title: "Đề nghị gia hạn công việc cần duyệt"/);
-assert.match(edge, /const deploymentVersion = "2026\.10\.30\.3"/);
+assert.match(edge, /const deploymentVersion = "2026\.11\.03\.1"/);
 assert.match(styles, /\.task-deadline-extension-detail\.is-approved/);
 assert.match(styles, /grid-template-columns: minmax\(0, 1fr\);[\s\S]*?\.task-deadline-extension-review-form/);
 assert.match(styles, /\.task-deadline-extension-review-modal \{[\s\S]*?width: min\(620px, 100%\)/);

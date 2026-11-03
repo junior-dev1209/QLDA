@@ -5,6 +5,7 @@ const vm = require("node:vm");
 const client = fs.readFileSync("script.js", "utf8");
 const edge = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
 const php = fs.readFileSync("api/sync.php", "utf8");
+const deploy = fs.readFileSync("Deploy-KpiSync.ps1", "utf8");
 
 function extractFunction(name) {
   const marker = `function ${name}(`;
@@ -12,6 +13,14 @@ function extractFunction(name) {
   assert.notEqual(start, -1, `Thiếu hàm ${name}.`);
   const next = client.indexOf("\nfunction ", start + marker.length);
   return client.slice(start, next < 0 ? client.length : next);
+}
+
+function extractEdgeFunction(name) {
+  const marker = `function ${name}(`;
+  const start = edge.indexOf(marker);
+  assert.notEqual(start, -1, `Thiếu hàm máy chủ ${name}.`);
+  const next = edge.indexOf("\nfunction ", start + marker.length);
+  return edge.slice(start, next < 0 ? edge.length : next);
 }
 
 const today = "2026-10-20";
@@ -61,8 +70,10 @@ assert.equal(sandbox.state.activityLog[0].action, "Dừng định kỳ", "Thao t
 assert.match(client, /if \(recurrence === TASK_RECURRENCE_NONE \|\| sourceTask\.recurrenceStoppedAt \|\| !sourceTask\.due\) return;/, "Bộ sinh định kỳ phải bỏ qua chuỗi đã dừng.");
 assert.match(client, /task-stop-recurrence-button/, "Chi tiết công việc phải có nút Dừng định kỳ.");
 assert.match(edge, /action === "stop-recurring-task" && request\.method === "POST"/, "Edge Function phải có endpoint dừng chuỗi.");
-assert.match(edge, /const deploymentVersion = "2026\.10\.30\.3"/, "Edge Function phải công bố phiên bản có tự dừng khi đổi phòng và duyệt gia hạn.");
+assert.match(edge, /const deploymentVersion = "2026\.11\.03\.1"/, "Edge Function phải công bố phiên bản có bảo vệ chuỗi định kỳ đã dừng.");
 assert.match(edge, /function canStopRecurringSeries\(/, "Máy chủ phải kiểm tra quyền dừng định kỳ.");
+assert.match(edge, /function preserveStoppedRecurringTask\(/, "Máy chủ phải chặn kỳ mới và bảo toàn dấu dừng của chuỗi.");
+assert.match(edge, /preserveStoppedRecurringTask\(next, candidate, previous\)/, "Bất biến dừng phải được áp dụng trước khi ghi công việc.");
 assert.match(edge, /function stopRecurringTasksForDepartmentChanges\(/, "Edge Function phải tự dừng định kỳ khi thay đổi phòng.");
 assert.match(edge, /stopRecurringTasksForDepartmentChanges\(current\.state, result\.state, actor\)/, "Quy tắc tự dừng phải nằm trong cùng giao dịch cập nhật nhân sự.");
 assert.match(edge, /recurrenceOwnerForDate\(nextState, source, today\)/, "Chỉ dừng chuỗi đang do nhân sự đó phụ trách.");
@@ -86,11 +97,49 @@ assert.equal(permissionSandbox.canStopRecurringSeries({}, { role: "employee", pe
 assert.equal(permissionSandbox.canStopRecurringSeries({}, { role: "director" }, {}), true, "Ban giám đốc được dừng chuỗi khi cần.");
 assert.match(edge, /function migrateTaskCategoriesForCatalogChange\(/, "Máy chủ phải ánh xạ nhiệm vụ sang mục danh mục được chỉnh sửa.");
 assert.match(php, /if \(\$action === 'stop-recurring-task' && \$_SERVER\['REQUEST_METHOD'\] === 'POST'\)/, "PHP shared-sync cũng phải hỗ trợ dừng chuỗi định kỳ.");
-assert.match(php, /const SYNC_DEPLOYMENT_VERSION = '2026\.10\.28\.1'/, "PHP API phải công bố phiên bản có tự dừng khi đổi phòng.");
+assert.match(php, /const SYNC_DEPLOYMENT_VERSION = '2026\.11\.03\.1'/, "PHP API phải công bố phiên bản có chặn sinh kỳ sau khi dừng.");
+assert.match(deploy, /\$expectedDeploymentVersion = "2026\.11\.03\.1"/, "Kịch bản triển khai phải xác minh đúng phiên bản Edge mới.");
 assert.match(php, /phpStopRecurringTasksForDepartmentChanges\(\$current\['state'\], \$nextState, \$actor\)/, "PHP phải dừng chuỗi trong cùng lần lưu chuyển phòng.");
 assert.match(php, /function phpStopRecurringTasksForDepartmentChanges\(/, "PHP API phải có bộ xử lý chuỗi của nhân sự chuyển phòng.");
+assert.match(php, /function preserveStoppedRecurringTasks\(/, "PHP API phải chặn kỳ mới thuộc chuỗi đã dừng.");
+assert.match(php, /preserveStoppedRecurringTasks\(\$current\['state'\], \$nextState\)/, "Bất biến dừng phải được áp dụng khi thay toàn bộ trạng thái.");
 assert.match(php, /str_starts_with\(\$positionId, 'truong-phong-'\)/, "PHP shared-sync phải nhận Trưởng phòng theo chức vụ, đồng nhất với Edge Function.");
 assert.match(client, /deploymentVersionAtLeast\(sharedSync\.deploymentVersion, "2026\.10\.28\.1"\)/, "Không cho phép đổi phòng khi máy chủ chưa có hành vi tự dừng an toàn.");
+
+const recurrenceSafetySandbox = {
+  taskRecurrenceSeriesKey: (task) => String(task.recurrenceSeriesId || task.recurrenceSourceId || task.id || ""),
+  records: (state, collection) => Array.isArray(state[collection]) ? state[collection] : [],
+};
+vm.createContext(recurrenceSafetySandbox);
+const edgeSafetyFunction = extractEdgeFunction("preserveStoppedRecurringTask")
+  .replace("function preserveStoppedRecurringTask(state: JsonRecord, candidate: JsonRecord, previous: JsonRecord | undefined): JsonRecord | null", "function preserveStoppedRecurringTask(state, candidate, previous)");
+vm.runInContext(edgeSafetyFunction, recurrenceSafetySandbox);
+const stoppedSource = {
+  id: "source-stopped",
+  recurrence: "weekly",
+  recurrenceStoppedAt: "2026-10-20T02:00:00.000Z",
+  recurrenceStoppedById: "admin-1",
+  recurrenceStoppedByName: "Quản trị viên",
+  recurrenceStopDate: "2026-10-20",
+};
+const stoppedState = { tasks: [stoppedSource] };
+assert.equal(recurrenceSafetySandbox.preserveStoppedRecurringTask(
+  stoppedState,
+  { id: "late-child", recurrenceSourceId: stoppedSource.id, recurrenceSeriesId: stoppedSource.id },
+  undefined,
+), null, "Máy chủ phải từ chối kỳ mới dù client cũ gửi lên sau khi chuỗi đã dừng.");
+const staleSourceUpdate = recurrenceSafetySandbox.preserveStoppedRecurringTask(
+  stoppedState,
+  { id: stoppedSource.id, recurrence: "weekly", title: "Sửa tiêu đề" },
+  stoppedSource,
+);
+assert.equal(staleSourceUpdate.recurrenceStoppedAt, stoppedSource.recurrenceStoppedAt, "Cập nhật cũ không được xóa dấu dừng trên công việc gốc.");
+assert.equal(staleSourceUpdate.recurrenceStoppedById, "admin-1");
+assert.notEqual(recurrenceSafetySandbox.preserveStoppedRecurringTask(
+  { tasks: [{ id: "active-source", recurrence: "weekly" }] },
+  { id: "active-child", recurrenceSourceId: "active-source", recurrenceSeriesId: "active-source" },
+  undefined,
+), null, "Chuỗi đang hoạt động vẫn được phép tạo kỳ định kỳ.");
 
 const movedPersonId = "person-1";
 const departmentPeople = new Map([

@@ -64,7 +64,8 @@ assert.match(edgeSource, /function normalizeTaskCompletionLifecycle\(next: JsonR
 assert.match(edgeSource, /function canUpdateTaskProgress\(state: JsonRecord, account: JsonRecord, task: JsonRecord\): boolean \{[\s\S]*?taskParticipantForAccount\(state, task, account\)\) return true;/, "Người thực hiện và phối hợp phải được máy chủ cho phép cập nhật tiến độ.");
 assert.match(edgeSource, /if \(!taskProgressIsLocked\(previous\) && taskParticipantForAccount\(state, previous, account\) && taskProgressOnlyChange\(previous, next\)\) return true;/, "Người tham gia phải đổi được công việc quá hạn sang Hoàn thành trước khi được duyệt.");
 assert.match(edgeSource, /function rebaseTaskProgressChange\(live: JsonRecord, base: JsonRecord, next: JsonRecord\): JsonRecord \| null/, "Máy chủ phải tự hòa giải thay đổi tiến độ bị chậm phiên bản.");
-assert.match(edgeSource, /if \(collection === "tasks"\) \{[\s\S]*?candidate = normalizeTaskCompletionLifecycle\(candidate\);/, "Máy chủ phải kiểm tra vòng đời hoàn thành cho mọi thay đổi công việc.");
+assert.match(edgeSource, /function normalizeTaskMutationCandidate\(previous: JsonRecord \| undefined, candidate: JsonRecord\): JsonRecord \{[\s\S]*?return normalizeTaskCompletionLifecycle\(candidate\);/, "Máy chủ phải kiểm tra vòng đời hoàn thành, đồng thời giữ nguyên dữ liệu khi duyệt gia hạn.");
+assert.match(edgeSource, /candidate = normalizeTaskMutationCandidate\(previous, candidate\);/, "Mọi thay đổi công việc phải qua bộ chuẩn hóa theo loại thao tác.");
 assert.match(edgeSource, /return completedTaskStatus\(task\.status\) && \(String\(task\.completionReviewStatus \|\| ""\) === "passed"/, "Chỉ công việc Hoàn thành, đã Đạt mới bị khóa cập nhật tiến độ.");
 assert.match(edgeSource, /function shouldNormalizeTaskProgressUpdate\(/);
 assert.match(edgeSource, /normalized\.lateCompletion = false;/);

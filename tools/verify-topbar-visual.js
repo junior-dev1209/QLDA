@@ -39,42 +39,34 @@ assert.ok(html.includes('class="topbar-visual"'), "Ảnh chủ đề phải có 
 assert.ok(html.includes('id="topbarVisualScene" class="topbar-visual-scene"'), "Vùng ảnh phải hỗ trợ thay đổi ảnh theo chủ đề.");
 assert.ok(localServer.includes('".jpg": "image/jpeg"'), "Máy chủ xem thử phải trả đúng MIME type cho ảnh JPEG.");
 [
-  "assets/topbar-wide-infrastructure-scene.jpg",
-  "assets/topbar-wide-scene-tet.jpg",
-  "assets/topbar-wide-scene-national-day.jpg",
-  "assets/topbar-wide-scene-anniversary.jpg",
-  "assets/topbar-wide-scene-women-day.jpg",
-  "assets/topbar-wide-scene-new-year.jpg",
-  "assets/topbar-wide-scene-hung-kings.jpg",
-  "assets/topbar-wide-scene-reunification-day.jpg",
-  "assets/topbar-wide-scene-children-day.jpg",
-  "assets/topbar-wide-scene-martyrs-day.jpg",
-  "assets/topbar-wide-scene-august-revolution.jpg",
-  "assets/topbar-wide-scene-vietnamese-women-day.jpg",
-  "assets/topbar-wide-scene-vietnamese-culture-day.jpg",
-  "assets/topbar-wide-scene-christmas.jpg",
+  "assets/topbar-v2-infrastructure-scene.jpg",
+  "assets/topbar-v2-scene-tet.jpg",
+  "assets/topbar-v2-scene-national-day.jpg",
+  "assets/topbar-v2-scene-anniversary.jpg",
+  "assets/topbar-v2-scene-women-day.jpg",
+  "assets/topbar-v2-scene-new-year.jpg",
+  "assets/topbar-v2-scene-hung-kings.jpg",
+  "assets/topbar-v2-scene-reunification-day.jpg",
+  "assets/topbar-v2-scene-children-day.jpg",
+  "assets/topbar-v2-scene-martyrs-day.jpg",
+  "assets/topbar-v2-scene-august-revolution.jpg",
+  "assets/topbar-v2-scene-vietnamese-women-day.jpg",
+  "assets/topbar-v2-scene-vietnamese-culture-day.jpg",
+  "assets/topbar-v2-scene-christmas.jpg",
 ].forEach((asset) => {
   assert.ok(fs.existsSync(asset), `Tệp minh họa ${asset} phải được đóng gói cùng ứng dụng.`);
   assert.ok(fs.statSync(asset).size < 200_000, `Ảnh banner ${asset} phải được nén gọn để không làm nặng thanh đầu trang.`);
   assert.deepEqual(readJpegDimensions(asset), { width: 1920, height: 86 }, `Ảnh ${asset} phải khớp canvas thanh đầu trang 1920x86.`);
   assert.ok(source.includes(asset), `Chủ đề phải trỏ đến ảnh mới ${asset}.`);
 });
-[
-  "assets/topbar-festive-left.png",
-  "assets/topbar-festive-right.png",
-].forEach((asset) => {
-  assert.ok(fs.existsSync(asset), `Trang trí trong suốt ${asset} phải có trong ứng dụng.`);
-  assert.ok(fs.statSync(asset).size < 500_000, `Trang trí ${asset} phải được tối ưu dung lượng.`);
-  assert.ok(fs.readFileSync(asset).subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), `${asset} phải là PNG có hỗ trợ alpha.`);
-  assert.ok(html.includes(asset), `Header phải dùng lớp trang trí ${asset}.`);
-  assert.ok(worker.includes(`"${asset}"`), `PWA phải cache lớp trang trí ${asset}.`);
-});
+assert.ok(!html.includes('class="topbar-decoration"'), "Không chồng lớp hoa cũ lên bộ ảnh chủ đề mới.");
+assert.ok(!worker.includes("assets/topbar-festive-left.png"), "Không precache lớp hoa cũ không còn sử dụng.");
+assert.ok(!worker.includes("assets/topbar-festive-right.png"), "Không precache lớp hoa cũ không còn sử dụng.");
 assert.ok(styles.includes("position: absolute !important;\n  inset: 0;"), "Ảnh chủ đề phải phủ toàn chiều rộng và chiều cao thanh đầu trang.");
-assert.ok(styles.includes("min-height: 76px !important;"), "Thanh đầu trang desktop phải trở lại chiều cao gọn.");
+assert.ok(styles.includes("height: 86px !important;\n  min-height: 86px !important;\n  max-height: 86px !important;"), "Thanh đầu trang desktop phải khớp canvas ảnh 1920x86.");
 assert.ok(styles.includes("width: 100%;\n  height: 100%;\n  object-fit: fill;"), "Ảnh chủ đề desktop phải lấp canvas đúng tỷ lệ mà không xén nội dung.");
-assert.ok(styles.includes("overflow: visible !important;"), "Viền trang trí phải được phép tràn nhẹ khỏi header.");
-assert.ok(styles.includes("inset: -3px 0;"), "Lớp hoa/lụa chỉ được tràn nhẹ khỏi khung header.");
-assert.ok(styles.includes("opacity: 0.48;"), "Viền hoa/lụa phải nhẹ, không lấn át ảnh chủ đề.");
+const overlayLayer = styles.match(/\.topbar::before\s*\{[^}]*z-index:\s*(\d+)/)?.[1];
+assert.ok(overlayLayer, "Lớp phủ tương phản phải hiện diện phía trên ảnh chủ đề.");
 assert.ok(styles.includes("rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.78) 25%"), "Nửa có nhận diện chữ phải được phủ sáng nhẹ để giữ tương phản.");
 assert.ok(styles.includes("rgba(255, 255, 255, 0.02) 56%, transparent 100%"), "Nửa còn lại của ảnh chủ đề phải hiển thị rõ.");
 assert.ok(styles.includes("@media (prefers-reduced-motion: reduce)"), "Chuyển ảnh chủ đề phải tôn trọng thiết lập giảm chuyển động.");

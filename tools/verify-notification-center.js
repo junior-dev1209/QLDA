@@ -109,7 +109,7 @@ assert.match(calendar, /calendarReminderToast"\)\?\.classList\.add\("is-hidden"\
 assert.doesNotMatch(calendar, /Notification\.requestPermission|new Notification\(/, "Lịch không được yêu cầu thông báo trình duyệt riêng.");
 
 [
-  'const deploymentVersion = "2026.10.30.3"',
+  'const deploymentVersion = "2026.11.03.1"',
   'notifications: true,',
   'function notificationFeedForAccount',
   'function notificationAcknowledgementIsValid',
