@@ -5,7 +5,7 @@ const PASSWORD_HASH_ALGORITHM = 'pbkdf2-sha256-v1';
 const PASSWORD_HASH_ITERATIONS = 310000;
 const PASSWORD_SALT_BYTES = 16;
 const PASSWORD_HASH_BYTES = 32;
-const SYNC_DEPLOYMENT_VERSION = '2026.10.20.1';
+const SYNC_DEPLOYMENT_VERSION = '2026.11.03.1';
 
 /*
  * Shared state API for the Phuc Thinh workforce application.
@@ -189,6 +189,7 @@ if ($action === 'state' && in_array($_SERVER['REQUEST_METHOD'], ['PUT', 'POST'],
         $current = readSnapshot($stateFile);
         $actor = requireSessionAccountFromState($current['state']);
         $nextState = mergeAccountCredentials($current['state'], $nextState);
+        $nextState = preserveStoppedRecurringTasks($current['state'], $nextState);
         if ($current['revision'] === 0 && !isAdminAccount($actor)) {
             $responsePayload = ['error' => 'Permission denied.'];
             $responseStatus = 403;
@@ -206,6 +207,8 @@ if ($action === 'state' && in_array($_SERVER['REQUEST_METHOD'], ['PUT', 'POST'],
             ];
             $responseStatus = 409;
         } else {
+            $departmentStopEffects = phpStopRecurringTasksForDepartmentChanges($current['state'], $nextState, $actor);
+            $nextState = $departmentStopEffects['state'];
             $nextSnapshot = [
                 'revision' => $current['revision'] + 1,
                 'updatedAt' => gmdate('c'),
@@ -215,6 +218,7 @@ if ($action === 'state' && in_array($_SERVER['REQUEST_METHOD'], ['PUT', 'POST'],
             $responsePayload = [
                 'revision' => $nextSnapshot['revision'],
                 'updatedAt' => $nextSnapshot['updatedAt'],
+                'state' => sanitizedState($nextSnapshot['state']),
             ];
         }
     } finally {
@@ -316,7 +320,7 @@ if ($action === 'file' && $_SERVER['REQUEST_METHOD'] === 'DELETE') {
 
 respond(['error' => 'Unknown endpoint.'], 404);
 
-function stopRecurringTaskInState(array $state, array $actor, string $taskId): array
+function stopRecurringTaskInState(array $state, array $actor, string $taskId, string $automaticReason = ''): array
 {
     $tasks = is_array($state['tasks'] ?? null) ? $state['tasks'] : [];
     $clicked = null;
@@ -342,7 +346,7 @@ function stopRecurringTaskInState(array $state, array $actor, string $taskId): a
     if (!$source || !phpTaskHasRecurrence($source) || !empty($source['recurrenceStoppedAt'])) {
         return ['error' => 'This recurring series is already stopped or no longer active.', 'status' => 409];
     }
-    if (!phpCanStopRecurringSeries($state, $actor, $source)) {
+    if ($automaticReason === '' && !phpCanStopRecurringSeries($state, $actor, $source)) {
         return ['error' => 'Permission denied.', 'status' => 403];
     }
 
@@ -379,7 +383,9 @@ function stopRecurringTaskInState(array $state, array $actor, string $taskId): a
                 'status' => 'Đã ngừng',
                 'previousStatus' => $status,
                 'action' => 'Dừng kỳ định kỳ',
-                'note' => 'Kỳ công việc được ngừng khi dừng chuỗi định kỳ từ ' . $today . '.',
+                'note' => $automaticReason !== ''
+                    ? 'Kỳ công việc tự động ngừng do ' . $automaticReason . ' từ ' . $today . '.'
+                    : 'Kỳ công việc được ngừng khi dừng chuỗi định kỳ từ ' . $today . '.',
                 'createdAt' => $timestamp,
                 'createdById' => $actorId,
                 'createdBy' => $actorName,
@@ -391,11 +397,11 @@ function stopRecurringTaskInState(array $state, array $actor, string $taskId): a
     unset($task);
     $state['tasks'] = $tasks;
 
-    $owner = phpTaskPersonForReference($state, (string) ($source['ownerId'] ?? ''));
+    $owner = phpTaskResponsiblePerson($state, $source, $today) ?? phpTaskPersonForReference($state, (string) ($source['ownerId'] ?? ''));
     $activityLog = is_array($state['activityLog'] ?? null) ? $state['activityLog'] : [];
     $activityLog[] = [
         'id' => 'server-sync-' . bin2hex(random_bytes(12)),
-        'action' => 'Dừng định kỳ',
+        'action' => $automaticReason !== '' ? 'Tự dừng định kỳ' : 'Dừng định kỳ',
         'module' => 'Công việc',
         'targetType' => 'task-recurrence',
         'targetId' => $seriesKey,
@@ -403,7 +409,7 @@ function stopRecurringTaskInState(array $state, array $actor, string $taskId): a
         'departmentId' => (string) ($owner['departmentId'] ?? ''),
         'period' => substr((string) ($source['due'] ?? ''), 0, 7),
         'title' => (string) ($source['title'] ?? 'Chuỗi công việc định kỳ'),
-        'details' => 'Đã dừng sinh kỳ mới; ' . $stoppedOccurrences . ' kỳ tương lai chưa bắt đầu được đánh dấu Đã ngừng. ' . $updatedCount . ' bản ghi trong chuỗi đã lưu dấu vết dừng.',
+        'details' => 'Đã dừng sinh kỳ mới; ' . $stoppedOccurrences . ' kỳ tương lai chưa bắt đầu được đánh dấu Đã ngừng. ' . $updatedCount . ' bản ghi trong chuỗi đã lưu dấu vết dừng.' . ($automaticReason !== '' ? ' Lý do: ' . $automaticReason . '.' : ''),
         'createdAt' => $timestamp,
         'createdBy' => $actorName,
         'createdById' => $actorId,
@@ -417,6 +423,60 @@ function phpTaskRecurrenceSeriesKey(array $task): string
     return trim((string) ($task['recurrenceSeriesId'] ?? ''))
         ?: trim((string) ($task['recurrenceSourceId'] ?? ''))
         ?: trim((string) ($task['id'] ?? ''));
+}
+
+function preserveStoppedRecurringTasks(array $currentState, array $nextState): array
+{
+    $currentById = [];
+    $stoppedBySeries = [];
+    foreach (($currentState['tasks'] ?? []) as $task) {
+        if (!is_array($task)) continue;
+        $id = (string) ($task['id'] ?? '');
+        if ($id !== '') $currentById[$id] = $task;
+        if (!empty($task['recurrenceStoppedAt'])) {
+            $stoppedBySeries[phpTaskRecurrenceSeriesKey($task)] = $task;
+        }
+    }
+    foreach (($nextState['tasks'] ?? []) as $task) {
+        if (!is_array($task) || empty($task['recurrenceStoppedAt'])) continue;
+        $key = phpTaskRecurrenceSeriesKey($task);
+        if ($key !== '' && !isset($stoppedBySeries[$key])) $stoppedBySeries[$key] = $task;
+    }
+
+    $blockedIds = [];
+    $tasks = [];
+    foreach (($nextState['tasks'] ?? []) as $task) {
+        if (!is_array($task)) {
+            $tasks[] = $task;
+            continue;
+        }
+        $id = (string) ($task['id'] ?? '');
+        $previous = $currentById[$id] ?? null;
+        $seriesKey = phpTaskRecurrenceSeriesKey($task);
+        $stopped = $stoppedBySeries[$seriesKey] ?? null;
+        $isOccurrence = !empty($task['recurrenceSourceId'])
+            || ($id !== '' && $seriesKey !== $id && phpTaskHasRecurrence($task));
+        if (!$previous && $stopped && $isOccurrence) {
+            if ($id !== '') $blockedIds[$id] = true;
+            continue;
+        }
+        if ($previous && $stopped) {
+            foreach (['recurrenceStoppedAt', 'recurrenceStoppedById', 'recurrenceStoppedByName', 'recurrenceStopDate'] as $field) {
+                if (array_key_exists($field, $stopped)) $task[$field] = $stopped[$field];
+            }
+        }
+        $tasks[] = $task;
+    }
+    $nextState['tasks'] = $tasks;
+    if ($blockedIds) {
+        $nextState['activityLog'] = array_values(array_filter(
+            $nextState['activityLog'] ?? [],
+            static fn ($entry): bool => !is_array($entry)
+                || (string) ($entry['action'] ?? '') !== 'Tự tạo định kỳ'
+                || !isset($blockedIds[(string) ($entry['targetId'] ?? '')]),
+        ));
+    }
+    return $nextState;
 }
 
 function phpTaskHasRecurrence(array $task): bool
@@ -471,6 +531,82 @@ function phpCanStopRecurringSeries(array $state, array $actor, array $source): b
     if (!$managesDepartment) return false;
     $actorDepartment = (string) ($actor['departmentId'] ?? phpTaskPersonForReference($state, (string) ($actor['id'] ?? ''))['departmentId'] ?? '');
     return $actorDepartment !== '' && $actorDepartment === (string) ($owner['departmentId'] ?? '');
+}
+
+function phpCanManagePeopleForDepartmentChange(array $actor): bool
+{
+    $role = strtolower(trim((string) ($actor['role'] ?? '')));
+    $grants = is_array($actor['accessGrants'] ?? null) ? $actor['accessGrants'] : [];
+    return in_array($role, ['admin', 'director'], true)
+        || (($grants['peopleWrite'] ?? false) === true);
+}
+
+function phpStopRecurringTasksForDepartmentChanges(array $previousState, array $nextState, array $actor): array
+{
+    if (!phpCanManagePeopleForDepartmentChange($actor)) {
+        return ['state' => $nextState, 'taskIds' => [], 'activityIds' => [], 'stoppedSeriesCount' => 0, 'stoppedOccurrences' => 0];
+    }
+    $previousPeople = [];
+    foreach (($previousState['people'] ?? []) as $person) {
+        if (is_array($person) && !empty($person['id'])) $previousPeople[(string) $person['id']] = $person;
+    }
+    $departments = [];
+    foreach (($nextState['departments'] ?? []) as $department) {
+        if (is_array($department) && !empty($department['id'])) $departments[(string) $department['id']] = (string) ($department['name'] ?? '');
+    }
+    $today = (new DateTimeImmutable('now', new DateTimeZone('Asia/Ho_Chi_Minh')))->format('Y-m-d');
+    $movedPeople = [];
+    foreach (($nextState['people'] ?? []) as $person) {
+        if (!is_array($person) || empty($person['id'])) continue;
+        $id = (string) $person['id'];
+        $previous = $previousPeople[$id] ?? null;
+        if ($previous && (string) ($previous['departmentId'] ?? '') !== (string) ($person['departmentId'] ?? '')) {
+            $movedPeople[] = [$previous, $person];
+        }
+    }
+    if (!$movedPeople) {
+        return ['state' => $nextState, 'taskIds' => [], 'activityIds' => [], 'stoppedSeriesCount' => 0, 'stoppedOccurrences' => 0];
+    }
+
+    $taskIds = [];
+    $activityIds = [];
+    $stoppedSeriesCount = 0;
+    $stoppedOccurrences = 0;
+    foreach ($movedPeople as [$previous, $person]) {
+        $personId = (string) $person['id'];
+        $previousDepartment = $departments[(string) ($previous['departmentId'] ?? '')] ?? 'phòng cũ';
+        $nextDepartment = $departments[(string) ($person['departmentId'] ?? '')] ?? 'phòng mới';
+        $reason = 'nhân sự ' . (string) ($person['name'] ?? 'được giao') . ' chuyển từ ' . $previousDepartment . ' sang ' . $nextDepartment;
+        $sources = [];
+        foreach (($nextState['tasks'] ?? []) as $task) {
+            if (!is_array($task) || !empty($task['recurrenceSourceId']) || !phpTaskHasRecurrence($task) || !empty($task['recurrenceStoppedAt'])) continue;
+            $kind = strtolower(trim((string) ($task['kind'] ?? $task['taskKind'] ?? '')));
+            if ($kind === 'assigned' || ($kind === '' && (!empty($task['assignedById']) || !empty($task['assignedAt']) || !empty($task['responseStatus']) || !empty($task['responseAt'])))) continue;
+            $responsible = phpTaskResponsiblePerson($nextState, $task, $today) ?? phpTaskPersonForReference($nextState, (string) ($task['ownerId'] ?? ''));
+            if ((string) ($responsible['id'] ?? '') === $personId) $sources[] = $task;
+        }
+        foreach ($sources as $source) {
+            $result = stopRecurringTaskInState($nextState, $actor, (string) ($source['id'] ?? ''), $reason);
+            if (isset($result['error'])) continue;
+            $nextState = $result['state'];
+            $seriesKey = phpTaskRecurrenceSeriesKey($source);
+            foreach (($nextState['tasks'] ?? []) as $task) {
+                if (is_array($task) && phpTaskRecurrenceSeriesKey($task) === $seriesKey) $taskIds[] = (string) ($task['id'] ?? '');
+            }
+            $activityLog = $nextState['activityLog'] ?? [];
+            $activity = is_array($activityLog) && $activityLog ? $activityLog[array_key_last($activityLog)] : null;
+            if (is_array($activity) && !empty($activity['id'])) $activityIds[] = (string) $activity['id'];
+            $stoppedSeriesCount++;
+            $stoppedOccurrences += (int) ($result['stoppedOccurrences'] ?? 0);
+        }
+    }
+    return [
+        'state' => $nextState,
+        'taskIds' => array_values(array_unique(array_filter($taskIds))),
+        'activityIds' => $activityIds,
+        'stoppedSeriesCount' => $stoppedSeriesCount,
+        'stoppedOccurrences' => $stoppedOccurrences,
+    ];
 }
 
 function respond(array $payload, int $status = 200): void

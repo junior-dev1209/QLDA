@@ -17,7 +17,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.11.02.1";
+const deploymentVersion = "2026.11.03.1";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -48,14 +48,7 @@ const moduleSettingsVersion = 3;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable =
-  | "kpi_record_people"
-  | "kpi_record_tasks"
-  | "kpi_record_task_progress_reports"
-  | "kpi_record_evaluations"
-  | "kpi_record_catalog"
-  | "kpi_record_activity_log"
-  | "gpmb_workflows";
+type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -135,11 +128,12 @@ type StopRecurringTaskRequest = {
 };
 
 const projectionTableByCollection: Partial<Record<CollectionName, RecordProjectionTable>> = {
-  people: "kpi_record_people",
-  tasks: "kpi_record_tasks",
+  people: "people",
+  tasks: "tasks",
   gpmbWorkflows: "gpmb_workflows",
-  evaluations: "kpi_record_evaluations",
-  activityLog: "kpi_record_activity_log",
+  evaluations: "evaluations",
+  notifications: "notifications",
+  activityLog: "activity_log",
 };
 const kpiCatalogScalarFields: ScalarField[] = [
   "departments",
@@ -1679,19 +1673,8 @@ const taskDeadlineExtensionReviewFields = [
 ] as const;
 
 function taskDeadlineExtensionRequestChanged(previous: JsonRecord, next: JsonRecord): boolean {
-  const normalizeEmpty = (value: unknown): unknown =>
-    value === null || value === undefined || value === ""
-      ? ""
-      : value;
-
   return (previous.followUpDate || "") !== (next.followUpDate || "")
-    || taskDeadlineExtensionRequestFields.some(
-      (field) =>
-        !sameJson(
-          normalizeEmpty(previous[field]),
-          normalizeEmpty(next[field]),
-        ),
-    );
+    || taskDeadlineExtensionRequestFields.some((field) => !sameJson(previous[field], next[field]));
 }
 
 function validTaskIsoDate(value: unknown): boolean {
@@ -1745,6 +1728,13 @@ function normalizeTaskDeadlineExtensionRequest(
 function taskDeadlineExtensionReviewIntent(previous: JsonRecord, next: JsonRecord): boolean {
   return String(previous.deadlineExtensionStatus || "") === "pending"
     && ["approved", "rejected"].includes(String(next.deadlineExtensionStatus || ""));
+}
+
+function normalizeTaskMutationCandidate(previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord {
+  // A deadline review may only change its decision fields. Do not normalize
+  // unrelated legacy task state before validating this strict transition.
+  if (previous && taskDeadlineExtensionReviewIntent(previous, candidate)) return clone(candidate);
+  return normalizeTaskCompletionLifecycle(candidate);
 }
 
 function normalizeTaskDeadlineExtensionReview(
@@ -1803,37 +1793,10 @@ function canReviewTaskDeadlineExtension(state: JsonRecord, account: JsonRecord, 
     && personIsInManagedDepartment(state, account, task.ownerId);
 }
 
-function taskProgressFieldsOnlyChange(
-  previous: JsonRecord,
-  next: JsonRecord,
-  allowCollaboratorChanges = false,
-): boolean {
-  const normalizeEmptyDeadlineFields = (task: JsonRecord): JsonRecord => {
-    const normalized = { ...task };
-
-    const fields = [
-      ...taskDeadlineExtensionRequestFields,
-      ...taskDeadlineExtensionReviewFields,
-    ];
-
-    for (const field of fields) {
-      if (
-        normalized[field] === null ||
-        normalized[field] === undefined ||
-        normalized[field] === ""
-      ) {
-        normalized[field] = "";
-      }
-    }
-
-    return normalized;
-  };
-
-  const permittedFields = taskProgressFields(allowCollaboratorChanges);
-
+function taskProgressFieldsOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
   return sameJson(
-    withoutKeys(normalizeEmptyDeadlineFields(previous), permittedFields),
-    withoutKeys(normalizeEmptyDeadlineFields(next), permittedFields),
+    withoutKeys(previous, taskProgressFields(allowCollaboratorChanges)),
+    withoutKeys(next, taskProgressFields(allowCollaboratorChanges)),
   );
 }
 
@@ -3335,7 +3298,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       let taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
       if (collection === "tasks") {
-        candidate = normalizeTaskCompletionLifecycle(candidate);
+        candidate = normalizeTaskMutationCandidate(previous, candidate);
         const recurrenceSafeCandidate = preserveStoppedRecurringTask(next, candidate, previous);
         if (!recurrenceSafeCandidate) {
           blockedStoppedRecurrenceTaskIds.add(id);
@@ -3406,7 +3369,12 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         }
       }
       if (!canUpsert(next, actor, collection, previous, candidate)) {
-        denied.push({ scope: collection, id, reason: "Permission denied." });
+        const reason = collection === "tasks"
+          ? !moduleIsAvailableToAccount(next, actor, "tasks")
+            ? "Task module is not available to this account."
+            : "Task update is outside account scope."
+          : "Permission denied.";
+        denied.push({ scope: collection, id, reason });
         return;
       }
       const saved = collection === "accounts"
@@ -3941,11 +3909,11 @@ async function replaceTaskProgressProjection(task: JsonRecord, revision: number)
   const taskId = recordId(task);
   if (!taskId) return;
   const { error: deleteError } = await admin
-    .from("kpi_record_task_progress_reports")
+    .from("task_progress_reports")
     .delete()
     .eq("task_id", taskId);
   if (deleteError) throw deleteError;
-  await upsertProjectionRows("kpi_record_task_progress_reports", taskProgressProjectionRows(task, revision));
+  await upsertProjectionRows("task_progress_reports", taskProgressProjectionRows(task, revision));
 }
 
 async function updateRecordProjectionMarker(revision: number): Promise<void> {
@@ -3957,7 +3925,7 @@ async function updateRecordProjectionMarker(revision: number): Promise<void> {
 
 async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch, revision: number): Promise<void> {
   const changedCollections = patch.collections || {};
-  for (const collection of ["people", "tasks", "gpmbWorkflows", "evaluations", "activityLog"] as CollectionName[]) {
+  for (const collection of ["people", "tasks", "gpmbWorkflows", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
     const changes = changedCollections[collection];
     if (!changes) continue;
     const table = projectionTableByCollection[collection];
@@ -3975,7 +3943,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         if (task) await replaceTaskProgressProjection(task, revision);
       }
       for (const id of (changes.deletes || []).map((entry) => String(entry.id || "")).filter(Boolean)) {
-        const { error } = await admin.from("kpi_record_task_progress_reports").delete().eq("task_id", id);
+        const { error } = await admin.from("task_progress_reports").delete().eq("task_id", id);
         if (error) throw error;
       }
     }
@@ -3993,8 +3961,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return row;
       })
       .filter((record): record is JsonRecord => Boolean(record));
-    await upsertProjectionRows("kpi_record_evaluations", rows);
-    await deleteProjectionRows("kpi_record_evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
+    await upsertProjectionRows("evaluations", rows);
+    await deleteProjectionRows("evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
   }
 
   const projectChanges = changedCollections.projectCatalog;
@@ -4008,8 +3976,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return id ? { id: `project:${id}`, version: Math.max(1, revision), data: clone(record), updated_at: new Date().toISOString() } : null;
       })
       .filter((record): record is JsonRecord => record !== null);
-    await upsertProjectionRows("kpi_record_catalog", rows);
-    await deleteProjectionRows("kpi_record_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
+    await upsertProjectionRows("kpi_catalog", rows);
+    await deleteProjectionRows("kpi_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
   }
 
   const changedCatalogFields = new Set((patch.fields || []).map((field) => field.key));
@@ -4019,7 +3987,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         const fieldName = String(row.id || "").replace(/^catalog:/, "").replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
         return changedCatalogFields.has(fieldName as ScalarField);
       });
-    await upsertProjectionRows("kpi_record_catalog", rows);
+    await upsertProjectionRows("kpi_catalog", rows);
   }
 
   // Keep server-owned sync and calendar audit entries queryable without
@@ -4029,19 +3997,20 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
   const latestServerActivity = serverActivities.filter((item) => !recordId(item).startsWith("server-sync-calendar-")).slice(-1);
   const recentCalendarActivities = serverActivities.filter((item) => recordId(item).startsWith("server-sync-calendar-")).slice(-20);
   const activityRows = [...latestServerActivity, ...recentCalendarActivities];
-  if (activityRows.length) await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(activityRows, revision));
+  if (activityRows.length) await upsertProjectionRows("activity_log", projectionRecordRows(activityRows, revision));
   await updateRecordProjectionMarker(revision);
 }
 
 async function syncAllRecordProjections(state: JsonRecord, revision: number): Promise<void> {
-  await upsertProjectionRows("kpi_record_people", projectionRecordRows(records(state, "people"), revision));
-  await upsertProjectionRows("kpi_record_tasks", projectionRecordRows(records(state, "tasks"), revision));
+  await upsertProjectionRows("people", projectionRecordRows(records(state, "people"), revision));
+  await upsertProjectionRows("tasks", projectionRecordRows(records(state, "tasks"), revision));
   await upsertProjectionRows("gpmb_workflows", projectionRecordRows(records(state, "gpmbWorkflows"), revision));
-  await upsertProjectionRows("kpi_record_evaluations", evaluationProjectionRows(state, revision));
-  await upsertProjectionRows("kpi_record_catalog", kpiCatalogProjectionRows(state, revision));
-  await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(records(state, "activityLog"), revision));
+  await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
+  await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
+  await upsertProjectionRows("notifications", projectionRecordRows(records(state, "notifications"), revision));
+  await upsertProjectionRows("activity_log", projectionRecordRows(records(state, "activityLog"), revision));
   const reports = records(state, "tasks").flatMap((task) => taskProgressProjectionRows(task, revision));
-  await upsertProjectionRows("kpi_record_task_progress_reports", reports);
+  await upsertProjectionRows("task_progress_reports", reports);
   await updateRecordProjectionMarker(revision);
 }
 
@@ -4807,6 +4776,9 @@ Deno.serve(async (request) => {
   try {
     const url = new URL(request.url);
     action = url.searchParams.get("action") || "";
+    if (action === "version" && request.method === "GET") {
+      return json(request, { deploymentVersion });
+    }
     if (action === "status") {
       const current = await snapshot();
       let recordProjection = await recordProjectionHealth(current.revision);
