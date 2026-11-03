@@ -1803,10 +1803,37 @@ function canReviewTaskDeadlineExtension(state: JsonRecord, account: JsonRecord, 
     && personIsInManagedDepartment(state, account, task.ownerId);
 }
 
-function taskProgressFieldsOnlyChange(previous: JsonRecord, next: JsonRecord, allowCollaboratorChanges = false): boolean {
+function taskProgressFieldsOnlyChange(
+  previous: JsonRecord,
+  next: JsonRecord,
+  allowCollaboratorChanges = false,
+): boolean {
+  const normalizeEmptyDeadlineFields = (task: JsonRecord): JsonRecord => {
+    const normalized = { ...task };
+
+    const fields = [
+      ...taskDeadlineExtensionRequestFields,
+      ...taskDeadlineExtensionReviewFields,
+    ];
+
+    for (const field of fields) {
+      if (
+        normalized[field] === null ||
+        normalized[field] === undefined ||
+        normalized[field] === ""
+      ) {
+        normalized[field] = "";
+      }
+    }
+
+    return normalized;
+  };
+
+  const permittedFields = taskProgressFields(allowCollaboratorChanges);
+
   return sameJson(
-    withoutKeys(previous, taskProgressFields(allowCollaboratorChanges)),
-    withoutKeys(next, taskProgressFields(allowCollaboratorChanges)),
+    withoutKeys(normalizeEmptyDeadlineFields(previous), permittedFields),
+    withoutKeys(normalizeEmptyDeadlineFields(next), permittedFields),
   );
 }
 
