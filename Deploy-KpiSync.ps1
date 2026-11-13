@@ -6,7 +6,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRef = "hqquobfaccxnydeyvioe"
-$expectedDeploymentVersion = "2026.11.03.1"
+$releaseManifestPath = Join-Path $PSScriptRoot "release.json"
+if (-not (Test-Path -LiteralPath $releaseManifestPath)) {
+  throw "Khong tim thay release.json tai $releaseManifestPath."
+}
+$releaseManifest = Get-Content -LiteralPath $releaseManifestPath -Raw | ConvertFrom-Json
+$expectedDeploymentVersion = [string]$releaseManifest.edgeFunctionVersion
+if ($expectedDeploymentVersion -notmatch '^\d{4}\.\d{2}\.\d{2}\.\d+$') {
+  throw "Phien ban Edge Function trong release.json khong hop le."
+}
 $cli = Join-Path $PSScriptRoot "tools\supabase-cli\supabase.exe"
 
 if (-not (Test-Path -LiteralPath $cli)) {
@@ -27,8 +35,8 @@ if ($CheckOnly) {
   if ([string]$status.deploymentVersion -ne $expectedDeploymentVersion) {
     throw "Edge Function chua duoc cap nhat dung phien ban. Hay chay .\Deploy-KpiSync.ps1 sau khi dang nhap."
   }
-  if (-not $status.originRestricted -or -not $status.singleDeviceSession -or -not $status.credentialHashing -or -not $status.notifications) {
-    throw "May chu chua kich hoat day du bao ve origin, phien mot thiet bi, bam mat khau hoac trung tam thong bao."
+  if (-not $status.originRestricted -or -not $status.singleDeviceSession -or -not $status.credentialHashing -or -not $status.notifications -or -not $status.recurringTaskCleanup) {
+    throw "May chu chua kich hoat day du bao ve origin, phien mot thiet bi, bam mat khau, thong bao hoac don ky dinh ky da dung."
   }
   if (-not $status.recordProjection.available -or -not $status.recordProjection.synchronized) {
     throw "Bang ban ghi chua dong bo dung voi du lieu trung tam. Hay kiem tra migration va Edge Function Logs."
@@ -73,8 +81,8 @@ $status = Get-KpiSyncStatus
 if ([string]$status.deploymentVersion -ne $expectedDeploymentVersion) {
   throw "Deploy da ket thuc nhung may chu van bao phien ban $($status.deploymentVersion). Khong tiep tuc su dung cho den khi kiem tra lai thanh cong."
 }
-if (-not $status.originRestricted -or -not $status.singleDeviceSession -or -not $status.credentialHashing -or -not $status.notifications -or -not $status.gpmbWorkflows) {
-  throw "Deploy chua kich hoat day du bao ve origin, phien mot thiet bi, bam mat khau, trung tam thong bao hoac quy trinh GPMB."
+if (-not $status.originRestricted -or -not $status.singleDeviceSession -or -not $status.credentialHashing -or -not $status.notifications -or -not $status.gpmbWorkflows -or -not $status.recurringTaskCleanup) {
+  throw "Deploy chua kich hoat day du bao ve origin, phien mot thiet bi, bam mat khau, trung tam thong bao, quy trinh GPMB hoac don ky dinh ky da dung."
 }
 if (-not $status.recordProjection.available -or -not $status.recordProjection.synchronized) {
   throw "Deploy da xong nhung bang ban ghi chua dong bo dung voi du lieu trung tam."

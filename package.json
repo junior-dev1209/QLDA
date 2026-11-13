@@ -1,0 +1,9 @@
+{
+  "name": "phuc-thinh-workforce-system",
+  "private": true,
+  "scripts": {
+    "test": "node tools/run-verifications.js",
+    "release:check": "node tools/sync-release-versions.js --check",
+    "release:sync": "node tools/sync-release-versions.js"
+  }
+}

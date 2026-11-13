@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.119";
+const APP_VERSION = "3.4.140";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -26,6 +26,9 @@ const SHARED_SYNC_REFRESH_JITTER_MS = 2000;
 const SHARED_SYNC_RETRY_INITIAL_MS = 2500;
 const SHARED_SYNC_RETRY_MAX_MS = 60000;
 const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
+const SETTINGS_CONFLICT_FREE_DEPLOYMENT_VERSION = "2026.11.05.1";
+const GPMB_CASES_DEPLOYMENT_VERSION = "2026.11.11.1";
+const PUBLIC_INVESTMENT_APPRAISAL_DEPLOYMENT_VERSION = "2026.11.11.2";
 const ACCOUNT_USAGE_REQUEST_TIMEOUT_MS = 45000;
 const ACCOUNT_USAGE_AUTO_REFRESH_MS = 60000;
 const MAX_DELETED_ID_HISTORY = 2000;
@@ -33,8 +36,8 @@ const ACCOUNT_PRESENCE_HEARTBEAT_MS = 60000;
 const PERSON_EMPLOYMENT_ACTIVE = "active";
 const PERSON_EMPLOYMENT_SUSPENDED = "suspended";
 const PERSON_EMPLOYMENT_LEFT = "left";
-const SHARED_SYNC_COLLECTIONS = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog"];
-const SHARED_PROTECTED_COLLECTIONS = ["people", "tasks", "gpmbWorkflows", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
+const SHARED_SYNC_COLLECTIONS = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"];
+const SHARED_PROTECTED_COLLECTIONS = ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
 const SHARED_SYNC_SCALAR_FIELDS = [
   "moduleSettings",
   "systemCustomization",
@@ -1049,21 +1052,21 @@ const systemThemeOptions = [
 ];
 
 const topbarThemeVisuals = {
-  default: `assets/topbar-v2-infrastructure-scene.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  tet: `assets/topbar-v2-scene-tet.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "national-day": `assets/topbar-v2-scene-national-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  anniversary: `assets/topbar-v2-scene-anniversary.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "women-day": `assets/topbar-v2-scene-women-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "new-year": `assets/topbar-v2-scene-new-year.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "hung-kings": `assets/topbar-v2-scene-hung-kings.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "reunification-day": `assets/topbar-v2-scene-reunification-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "children-day": `assets/topbar-v2-scene-children-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "martyrs-day": `assets/topbar-v2-scene-martyrs-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "august-revolution": `assets/topbar-v2-scene-august-revolution.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "vietnamese-women-day": `assets/topbar-v2-scene-vietnamese-women-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  "vietnamese-culture-day": `assets/topbar-v2-scene-vietnamese-culture-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  christmas: `assets/topbar-v2-scene-christmas.jpg?v=${encodeURIComponent(APP_VERSION)}`,
-  custom: `assets/topbar-v2-scene-anniversary.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  default: `assets/topbar-wide-infrastructure-scene.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  tet: `assets/topbar-wide-scene-tet.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "national-day": `assets/topbar-wide-scene-national-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  anniversary: `assets/topbar-wide-scene-anniversary.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "women-day": `assets/topbar-wide-scene-women-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "new-year": `assets/topbar-wide-scene-new-year.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "hung-kings": `assets/topbar-wide-scene-hung-kings.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "reunification-day": `assets/topbar-wide-scene-reunification-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "children-day": `assets/topbar-wide-scene-children-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "martyrs-day": `assets/topbar-wide-scene-martyrs-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "august-revolution": `assets/topbar-wide-scene-august-revolution.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "vietnamese-women-day": `assets/topbar-wide-scene-vietnamese-women-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  "vietnamese-culture-day": `assets/topbar-wide-scene-vietnamese-culture-day.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  christmas: `assets/topbar-wide-scene-christmas.jpg?v=${encodeURIComponent(APP_VERSION)}`,
+  custom: `assets/topbar-wide-scene-anniversary.jpg?v=${encodeURIComponent(APP_VERSION)}`,
 };
 
 const printableSections = [
@@ -1072,6 +1075,7 @@ const printableSections = [
   { id: "archive", label: "Lưu Trữ" },
   { id: "people", label: "Nhân sự" },
   { id: "tasks", label: "Công việc" },
+  { id: "public-investment-appraisal", label: "Thẩm định dự án đầu tư công" },
   { id: "department-evaluations", label: "KPI phòng" },
   { id: "evaluations", label: "KPI cá nhân" },
   { id: "history", label: "Lịch sử" },
@@ -1085,6 +1089,7 @@ const systemModules = [
   { id: "archive", label: "Lưu Trữ", note: "Kho hồ sơ dự án, nhân sự, văn bản và công văn." },
   { id: "people", label: "Nhân sự", note: "Hồ sơ nhân sự toàn Ban và thông tin hợp đồng, lương." },
   { id: "tasks", label: "Công việc", note: "Danh mục công việc, hồ sơ và tiến độ." },
+  { id: "public-investment-appraisal", label: "Thẩm định dự án đầu tư công", note: "Hồ sơ, checklist, lấy ý kiến và kết luận thẩm định dự án đầu tư công." },
   { id: "calendar", label: "Lịch công việc", note: "Lịch tuần, cuộc họp, kết luận và nhắc lịch." },
   { id: "department-evaluations", label: "KPI phòng", note: "Dữ liệu hoạt động và chấm điểm KPI cấp phòng." },
   { id: "evaluations", label: "KPI cá nhân", note: "Chấm điểm KPI cá nhân và kết quả thi đua tháng." },
@@ -1102,6 +1107,7 @@ const moduleDefaultRoleAccess = {
   archive: [...moduleAccessRoles],
   people: ["director", "manager", "deputy_manager"],
   tasks: [...moduleAccessRoles],
+  "public-investment-appraisal": [...moduleAccessRoles],
   calendar: [...moduleAccessRoles],
   "department-evaluations": ["director", "manager", "deputy_manager"],
   evaluations: [...moduleAccessRoles],
@@ -1110,7 +1116,7 @@ const moduleDefaultRoleAccess = {
   rules: [...moduleAccessRoles],
   help: [...moduleAccessRoles],
 };
-const MODULE_SETTINGS_VERSION = 3;
+const MODULE_SETTINGS_VERSION = 4;
 
 const GPMB_LEGACY_WORKFLOW_TEMPLATE = Object.freeze([
   { id: "plan", title: "Xây dựng kế hoạch thu hồi đất", category: "Điều tra, kiểm đếm đất đai / Trích đo, quy chủ", owner: "Phòng GPMB", documents: "Kế hoạch thu hồi đất", days: 7 },
@@ -1494,6 +1500,106 @@ function normalizeSystemCustomization(customization = {}) {
     theme: normalizeSystemTheme(customization.theme),
     lunaEnabled: customization.lunaEnabled !== false,
   };
+}
+
+// Settings are synchronized as independent records. The legacy aggregate
+// fields remain as a compatibility projection for the existing UI and exports.
+const SYSTEM_SETTING_CUSTOMIZATION_KEYS = ["layout", "kpiFormulas", "kpiParameters", "fieldOverrides", "popupSizes", "customFields"];
+const SYSTEM_SETTING_THEME_KEYS = ["preset", "customName", "primary", "primaryDark", "accent", "background"];
+
+function systemSettingId(key) {
+  return `system-setting:${String(key || "").replace(/[^a-zA-Z0-9_.:-]/g, "-")}`;
+}
+
+function systemSettingKeyFromRecord(record) {
+  return String(record?.key || "").trim();
+}
+
+function systemSettingKeys() {
+  const keys = [];
+  systemModules.forEach((module) => {
+    keys.push(`module.${module.id}.enabled`);
+    moduleAccessRoles.forEach((role) => keys.push(`module.${module.id}.role.${role}`));
+  });
+  keys.push("luna.enabled");
+  SYSTEM_SETTING_THEME_KEYS.forEach((key) => keys.push(`theme.${key}`));
+  SYSTEM_SETTING_CUSTOMIZATION_KEYS.forEach((key) => keys.push(`customization.${key}`));
+  return keys;
+}
+
+function systemSettingValueMap(source = {}) {
+  const modules = normalizeModuleSettings(source.moduleSettings);
+  const customization = normalizeSystemCustomization(source.systemCustomization);
+  const values = new Map();
+  systemModules.forEach((module) => {
+    values.set(`module.${module.id}.enabled`, modules[module.id]?.enabled !== false);
+    moduleAccessRoles.forEach((role) => {
+      values.set(`module.${module.id}.role.${role}`, modules[module.id]?.roles?.[role] === true);
+    });
+  });
+  values.set("luna.enabled", customization.lunaEnabled !== false);
+  SYSTEM_SETTING_THEME_KEYS.forEach((key) => values.set(`theme.${key}`, customization.theme?.[key]));
+  SYSTEM_SETTING_CUSTOMIZATION_KEYS.forEach((key) => values.set(`customization.${key}`, customization[key]));
+  return values;
+}
+
+function systemSettingRecordsFromState(source = {}, existingRecords = source.systemSettings) {
+  const values = systemSettingValueMap(source);
+  const existing = new Map((Array.isArray(existingRecords) ? existingRecords : [])
+    .filter((record) => record && typeof record === "object")
+    .map((record) => [systemSettingKeyFromRecord(record), record]));
+  return systemSettingKeys().map((key) => {
+    const previous = existing.get(key) || {};
+    return {
+      id: String(previous.id || systemSettingId(key)),
+      key,
+      value: cloneStatePayload(values.get(key)),
+      version: Math.max(1, Number(previous.version) || 1),
+      updatedAt: String(previous.updatedAt || ""),
+      updatedById: String(previous.updatedById || ""),
+      updatedBy: String(previous.updatedBy || ""),
+      updatedByUsername: String(previous.updatedByUsername || ""),
+      updatedDeviceId: String(previous.updatedDeviceId || ""),
+    };
+  });
+}
+
+function applySystemSettingRecordToState(target, record) {
+  const key = systemSettingKeyFromRecord(record);
+  if (!key || !record || !Object.prototype.hasOwnProperty.call(record, "value")) return;
+  const value = cloneStatePayload(record.value);
+  const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
+  if (moduleMatch) {
+    const moduleId = moduleMatch[1];
+    const setting = target.moduleSettings[moduleId];
+    if (!setting) return;
+    if (moduleMatch[2] === "enabled") setting.enabled = value !== false;
+    else if (moduleMatch[3] && setting.roles) setting.roles[moduleMatch[3]] = value === true;
+    return;
+  }
+  if (key === "luna.enabled") {
+    target.systemCustomization.lunaEnabled = value !== false;
+    return;
+  }
+  const themeMatch = key.match(/^theme\.(.+)$/);
+  if (themeMatch && SYSTEM_SETTING_THEME_KEYS.includes(themeMatch[1])) {
+    target.systemCustomization.theme[themeMatch[1]] = value;
+    return;
+  }
+  const customizationMatch = key.match(/^customization\.(.+)$/);
+  if (customizationMatch && SYSTEM_SETTING_CUSTOMIZATION_KEYS.includes(customizationMatch[1])) {
+    target.systemCustomization[customizationMatch[1]] = value;
+  }
+}
+
+function applySystemSettingsToState(target, recordsOverride = target.systemSettings) {
+  target.moduleSettings = normalizeModuleSettings(target.moduleSettings);
+  target.systemCustomization = normalizeSystemCustomization(target.systemCustomization);
+  (Array.isArray(recordsOverride) ? recordsOverride : []).forEach((record) => applySystemSettingRecordToState(target, record));
+  target.moduleSettings = normalizeModuleSettings(target.moduleSettings);
+  target.systemCustomization = normalizeSystemCustomization(target.systemCustomization);
+  target.systemSettings = systemSettingRecordsFromState(target, recordsOverride);
+  return target;
 }
 
 function normalizeKpiPeriodLocks(value = []) {
@@ -2553,6 +2659,8 @@ function defaultStatePayload() {
     people: [],
     tasks: [],
     gpmbWorkflows: [],
+    gpmbCases: [],
+    publicInvestmentAppraisals: [],
     calendarEvents: [],
     calendarDirectory: [],
     projectCatalog: [],
@@ -2563,6 +2671,7 @@ function defaultStatePayload() {
     accounts: defaultAccounts(),
     supportRequests: [],
     notifications: [],
+    systemSettings: [],
     moduleSettings: defaultModuleSettings(),
     systemCustomization: defaultSystemCustomization(),
     departments: normalizeDepartmentsCatalog(defaultDepartments),
@@ -2638,6 +2747,17 @@ const GPMB_STEP_WAITING = "waiting";
 const GPMB_STEP_ACTIVE = "active";
 const GPMB_STEP_COMPLETED = "completed";
 const GPMB_STEP_SKIPPED = "skipped";
+const GPMB_CASE_STATUS_NEW = "new";
+const GPMB_CASE_STATUS_PROCESSING = "processing";
+const GPMB_CASE_STATUS_BLOCKED = "blocked";
+const GPMB_CASE_STATUS_COMPLETED = "completed";
+const GPMB_CASE_NOTE_HISTORY_LIMIT = 200;
+const GPMB_CASE_STATUS_VALUES = [
+  GPMB_CASE_STATUS_NEW,
+  GPMB_CASE_STATUS_PROCESSING,
+  GPMB_CASE_STATUS_BLOCKED,
+  GPMB_CASE_STATUS_COMPLETED,
+];
 
 function gpmbIsoDate(value) {
   const date = String(value || "").trim();
@@ -2821,6 +2941,216 @@ function normalizeGpmbWorkflows(workflows = [], projectCatalog = []) {
     });
 }
 
+function gpmbCasePlainText(value, maxLength = 240, multiline = false) {
+  const source = String(value || "").trim();
+  const normalized = multiline
+    ? source.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n")
+    : source.replace(/\s+/g, " ");
+  return normalized.slice(0, maxLength);
+}
+
+function gpmbCaseArea(value) {
+  const normalized = String(value ?? "").trim().replace(",", ".");
+  if (!normalized) return "";
+  const area = Number(normalized);
+  return Number.isFinite(area) && area >= 0 && area <= 1000000000
+    ? Math.round(area * 100) / 100
+    : "";
+}
+
+function gpmbCaseNoteHistory(history = [], fallbackRecord = null) {
+  const rows = (Array.isArray(history) ? history : [])
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => ({
+      id: String(item.id || `gpmb-case-note-${index}`),
+      note: gpmbCasePlainText(item.note, 4000, true),
+      createdAt: String(item.createdAt || ""),
+      createdBy: gpmbCasePlainText(item.createdBy, 160),
+      createdById: String(item.createdById || ""),
+    }))
+    .filter((item) => item.createdAt || item.note || item.createdBy);
+  if (!rows.length && fallbackRecord && gpmbCasePlainText(fallbackRecord.note, 4000, true)) {
+    rows.push({
+      id: `gpmb-case-note-legacy-${String(fallbackRecord.id || "record")}`,
+      note: gpmbCasePlainText(fallbackRecord.note, 4000, true),
+      createdAt: String(fallbackRecord.updatedAt || fallbackRecord.createdAt || ""),
+      createdBy: gpmbCasePlainText(fallbackRecord.updatedBy || fallbackRecord.createdBy || "Không rõ tài khoản", 160),
+      createdById: String(fallbackRecord.updatedById || fallbackRecord.createdById || ""),
+    });
+  }
+  return rows
+    .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")))
+    .slice(-GPMB_CASE_NOTE_HISTORY_LIMIT);
+}
+
+function gpmbCaseEnabledSteps(workflow) {
+  return (workflow?.steps || []).filter((step) => step?.id && step.status !== GPMB_STEP_SKIPPED);
+}
+
+function normalizeGpmbCases(cases = [], workflows = []) {
+  const workflowsById = new Map((Array.isArray(workflows) ? workflows : []).map((workflow) => [String(workflow.id || ""), workflow]));
+  const usedCaseCodes = new Set();
+  return (Array.isArray(cases) ? cases : [])
+    .filter((item) => item && typeof item === "object" && String(item.id || "").trim())
+    .map((item) => {
+      const workflow = workflowsById.get(String(item.workflowId || ""));
+      if (!workflow) return null;
+      const enabledSteps = gpmbCaseEnabledSteps(workflow);
+      const requestedStepId = String(item.currentStepId || "");
+      const currentStepId = enabledSteps.some((step) => step.id === requestedStepId)
+        ? requestedStepId
+        : String(workflow.currentStepId || enabledSteps[0]?.id || "");
+      const rawCode = gpmbCasePlainText(item.caseCode, 80).toUpperCase();
+      const duplicateKey = `${workflow.id}:${rawCode.toLocaleLowerCase("vi")}`;
+      const caseCode = rawCode && !usedCaseCodes.has(duplicateKey) ? rawCode : String(item.id || "").slice(-8).toUpperCase();
+      usedCaseCodes.add(`${workflow.id}:${caseCode.toLocaleLowerCase("vi")}`);
+      const status = GPMB_CASE_STATUS_VALUES.includes(String(item.status || ""))
+        ? String(item.status)
+        : GPMB_CASE_STATUS_NEW;
+      return {
+        ...item,
+        workflowId: workflow.id,
+        projectId: workflow.projectId || "",
+        projectName: workflow.projectName || "",
+        caseCode,
+        subjectType: ["household", "organization", "land_parcel"].includes(String(item.subjectType || ""))
+          ? String(item.subjectType)
+          : "household",
+        subjectName: gpmbCasePlainText(item.subjectName, 180),
+        representative: gpmbCasePlainText(item.representative, 120),
+        phone: gpmbCasePlainText(item.phone, 30),
+        mapSheet: gpmbCasePlainText(item.mapSheet, 80),
+        parcelNumber: gpmbCasePlainText(item.parcelNumber, 120),
+        areaM2: gpmbCaseArea(item.areaM2),
+        address: gpmbCasePlainText(item.address, 260),
+        currentStepId,
+        status,
+        note: gpmbCasePlainText(item.note, 4000, true),
+        noteHistory: gpmbCaseNoteHistory(item.noteHistory, item),
+      };
+    })
+    .filter(Boolean);
+}
+
+const PUBLIC_INVESTMENT_APPRAISAL_TEMPLATE_VERSION = 1;
+const PUBLIC_INVESTMENT_APPRAISAL_STATUS_VALUES = ["draft", "reviewing", "supplement", "completed", "rejected"];
+const PUBLIC_INVESTMENT_APPRAISAL_CHECK_VALUES = ["pending", "pass", "supplement", "fail", "na"];
+const PUBLIC_INVESTMENT_APPRAISAL_CHECKLIST = Object.freeze([
+  { id: "legal", group: "Pháp lý và thẩm quyền", title: "Hồ sơ pháp lý, thẩm quyền quyết định và trình tự lập dự án", basis: "Kiểm tra tính đầy đủ, hợp lệ và đúng thẩm quyền." },
+  { id: "planning", group: "Pháp lý và thẩm quyền", title: "Sự phù hợp với quy hoạch, kế hoạch và chương trình đầu tư công", basis: "Đối chiếu quy hoạch và danh mục kế hoạch vốn có liên quan." },
+  { id: "necessity", group: "Sự cần thiết và mục tiêu", title: "Sự cần thiết đầu tư, mục tiêu và đối tượng thụ hưởng", basis: "Làm rõ vấn đề cần giải quyết và kết quả đầu ra." },
+  { id: "scale", group: "Sự cần thiết và mục tiêu", title: "Quy mô, địa điểm và phương án đầu tư", basis: "Đánh giá sự phù hợp giữa mục tiêu, quy mô và nhu cầu sử dụng." },
+  { id: "land", group: "Đất đai, GPMB và môi trường", title: "Nhu cầu sử dụng đất, hiện trạng và phương án GPMB", basis: "Đối chiếu hồ sơ đất đai, GPMB và khả năng bàn giao mặt bằng." },
+  { id: "environment", group: "Đất đai, GPMB và môi trường", title: "Môi trường, phòng cháy chữa cháy và yêu cầu chuyên ngành", basis: "Xác định thủ tục, giấy phép và rủi ro chuyên ngành cần hoàn thành." },
+  { id: "technical", group: "Giải pháp và tiến độ", title: "Giải pháp kỹ thuật, công nghệ, thiết kế và tiêu chuẩn áp dụng", basis: "Đánh giá phương án kỹ thuật và cấu phần xây dựng nếu có." },
+  { id: "schedule", group: "Giải pháp và tiến độ", title: "Tiến độ, phân kỳ đầu tư và khả năng tổ chức thực hiện", basis: "Kiểm tra tính khả thi của mốc triển khai và nguồn lực." },
+  { id: "cost", group: "Tổng mức đầu tư và nguồn vốn", title: "Tổng mức đầu tư, cơ cấu chi phí và cơ sở xác định", basis: "Đối chiếu khối lượng, suất vốn, định mức và dự phòng." },
+  { id: "capital", group: "Tổng mức đầu tư và nguồn vốn", title: "Nguồn vốn, khả năng cân đối và kế hoạch bố trí vốn", basis: "Đánh giá tính chắc chắn của nguồn vốn và tiến độ giải ngân." },
+  { id: "effectiveness", group: "Hiệu quả và rủi ro", title: "Hiệu quả kinh tế - xã hội và chỉ tiêu đánh giá", basis: "Làm rõ lợi ích, tác động và khả năng đạt mục tiêu." },
+  { id: "risk", group: "Hiệu quả và rủi ro", title: "Rủi ro, điều kiện thực hiện và kiến nghị kiểm soát", basis: "Nhận diện rủi ro chính, trách nhiệm và biện pháp xử lý." },
+]);
+
+function publicInvestmentAppraisalText(value, maxLength = 240, multiline = false) {
+  const source = String(value || "").trim();
+  const normalized = multiline
+    ? source.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n")
+    : source.replace(/\s+/g, " ");
+  return normalized.slice(0, maxLength);
+}
+
+function publicInvestmentAppraisalIds(value, limit = 100) {
+  return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, limit);
+}
+
+function normalizePublicInvestmentAppraisalChecklist(value = []) {
+  const saved = new Map((Array.isArray(value) ? value : [])
+    .filter((item) => item && typeof item === "object")
+    .map((item) => [String(item.id || ""), item]));
+  return PUBLIC_INVESTMENT_APPRAISAL_CHECKLIST.map((template) => {
+    const item = saved.get(template.id) || {};
+    const status = PUBLIC_INVESTMENT_APPRAISAL_CHECK_VALUES.includes(String(item.status || "")) ? String(item.status) : "pending";
+    return {
+      id: template.id,
+      status,
+      note: publicInvestmentAppraisalText(item.note, 3000, true),
+    };
+  });
+}
+
+function normalizePublicInvestmentAppraisalOpinions(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => ({
+      id: String(item.id || `appraisal-opinion-${index}`),
+      unit: publicInvestmentAppraisalText(item.unit, 160),
+      personId: String(item.personId || ""),
+      dueDate: gpmbIsoDate(item.dueDate),
+      status: ["pending", "received"].includes(String(item.status || "")) ? String(item.status) : "pending",
+      response: publicInvestmentAppraisalText(item.response, 4000, true),
+      requestedAt: String(item.requestedAt || ""),
+      respondedAt: String(item.respondedAt || ""),
+    }))
+    .filter((item) => item.unit || item.personId)
+    .slice(-50);
+}
+
+function normalizePublicInvestmentAppraisalHistory(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => ({
+      id: String(item.id || `appraisal-history-${index}`),
+      action: publicInvestmentAppraisalText(item.action, 180),
+      details: publicInvestmentAppraisalText(item.details, 1000, true),
+      createdAt: String(item.createdAt || ""),
+      createdBy: publicInvestmentAppraisalText(item.createdBy, 160),
+      createdById: String(item.createdById || ""),
+    }))
+    .filter((item) => item.action || item.createdAt)
+    .slice(-200);
+}
+
+function normalizePublicInvestmentAppraisals(appraisals = [], projects = []) {
+  const projectByIdentifier = new Map((Array.isArray(projects) ? projects : []).map((project) => [String(project.id || ""), project]));
+  const usedCodes = new Set();
+  return (Array.isArray(appraisals) ? appraisals : [])
+    .filter((item) => item && typeof item === "object" && String(item.id || "").trim())
+    .map((item) => {
+      const project = projectByIdentifier.get(String(item.projectId || ""));
+      if (!project) return null;
+      const rawCode = publicInvestmentAppraisalText(item.code, 80).toUpperCase();
+      const codeKey = rawCode.toLocaleLowerCase("vi");
+      if (!rawCode || usedCodes.has(codeKey)) return null;
+      usedCodes.add(codeKey);
+      return {
+        ...item,
+        projectId: project.id,
+        projectName: String(project.name || ""),
+        code: rawCode,
+        title: publicInvestmentAppraisalText(item.title, 240),
+        stage: ["investment-policy", "investment-decision", "adjustment"].includes(String(item.stage || "")) ? String(item.stage) : "investment-decision",
+        projectGroup: ["A", "B", "C", "other"].includes(String(item.projectGroup || "")) ? String(item.projectGroup) : "C",
+        sector: publicInvestmentAppraisalText(item.sector, 160),
+        authority: publicInvestmentAppraisalText(item.authority, 180),
+        capitalSource: publicInvestmentAppraisalText(item.capitalSource, 220),
+        hasConstructionComponent: item.hasConstructionComponent === true,
+        receivedDate: gpmbIsoDate(item.receivedDate),
+        dueDate: gpmbIsoDate(item.dueDate),
+        status: PUBLIC_INVESTMENT_APPRAISAL_STATUS_VALUES.includes(String(item.status || "")) ? String(item.status) : "draft",
+        departmentId: String(item.departmentId || ""),
+        leadAppraiserId: String(item.leadAppraiserId || ""),
+        assigneeIds: publicInvestmentAppraisalIds(item.assigneeIds).filter((id) => id !== String(item.leadAppraiserId || "")),
+        taskId: String(item.taskId || ""),
+        archiveRecordIds: publicInvestmentAppraisalIds(item.archiveRecordIds),
+        templateVersion: PUBLIC_INVESTMENT_APPRAISAL_TEMPLATE_VERSION,
+        checklist: normalizePublicInvestmentAppraisalChecklist(item.checklist),
+        opinions: normalizePublicInvestmentAppraisalOpinions(item.opinions),
+        conclusion: publicInvestmentAppraisalText(item.conclusion, 12000, true),
+        history: normalizePublicInvestmentAppraisalHistory(item.history),
+      };
+    })
+    .filter(Boolean);
+}
+
 function normalizeGpmbTaskCategories(tasks = []) {
   return (Array.isArray(tasks) ? tasks : []).map((task) => {
     if (!isGpmbWorkflowTask(task)) return task;
@@ -2887,11 +3217,15 @@ function normalizeStatePayload(parsed) {
   const tasks = sourceTasks.filter((task) => !isRetiredAssignmentTaskRecord(task));
   const projectCatalog = normalizeProjectCatalog(parsed.projectCatalog, tasks);
   const gpmbWorkflows = normalizeGpmbWorkflows(parsed.gpmbWorkflows, projectCatalog);
-  return {
+  const gpmbCases = normalizeGpmbCases(parsed.gpmbCases, gpmbWorkflows);
+  const publicInvestmentAppraisals = normalizePublicInvestmentAppraisals(parsed.publicInvestmentAppraisals, projectCatalog);
+  const normalized = {
     activePeriod: parsed.activePeriod || fallback.activePeriod,
     people: Array.isArray(parsed.people) ? parsed.people : [],
     tasks: normalizeGpmbTaskCategories(normalizeTaskProjectLinks(tasks, projectCatalog)),
     gpmbWorkflows,
+    gpmbCases,
+    publicInvestmentAppraisals,
     calendarEvents: Array.isArray(parsed.calendarEvents) ? parsed.calendarEvents.filter((event) => event && typeof event === "object" && event.id) : [],
     calendarDirectory: Array.isArray(parsed.calendarDirectory) ? parsed.calendarDirectory : [],
     projectCatalog,
@@ -2903,6 +3237,9 @@ function normalizeStatePayload(parsed) {
     supportRequests: Array.isArray(parsed.supportRequests) ? parsed.supportRequests : [],
     notifications: Array.isArray(parsed.notifications)
       ? parsed.notifications.filter((notification) => notification && typeof notification === "object" && notification.id)
+      : [],
+    systemSettings: Array.isArray(parsed.systemSettings)
+      ? parsed.systemSettings.filter((setting) => setting && typeof setting === "object" && setting.id)
       : [],
     moduleSettings: normalizeModuleSettings(parsed.moduleSettings),
     systemCustomization: normalizeSystemCustomization(parsed.systemCustomization),
@@ -2922,6 +3259,10 @@ function normalizeStatePayload(parsed) {
       ? [...new Set(parsed.deletedIds.map((id) => String(id || "").trim()).filter(Boolean))].slice(-MAX_DELETED_ID_HISTORY)
       : [],
   };
+  normalized.moduleSettings = normalizeModuleSettings(normalized.moduleSettings);
+  normalized.systemCustomization = normalizeSystemCustomization(normalized.systemCustomization);
+  normalized.systemSettings = systemSettingRecordsFromState(normalized, normalized.systemSettings);
+  return normalized;
 }
 
 function loadState() {
@@ -3230,6 +3571,10 @@ function supabaseSyncConfig() {
 
 function usingSupabaseSync() {
   return !isOfflineFileRuntime() && Boolean(supabaseSyncConfig());
+}
+
+function settingsConflictFreeSyncSupported() {
+  return usingSupabaseSync() && deploymentVersionAtLeast(sharedSync.deploymentVersion, SETTINGS_CONFLICT_FREE_DEPLOYMENT_VERSION);
 }
 
 function sharedEndpoint(action, query = {}) {
@@ -4946,9 +5291,26 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
     supportRequests: "Yêu cầu hỗ trợ",
     calendarEvents: "Lịch công việc",
     activityLog: "Lịch sử hoạt động",
+    systemSettings: "Cấu hình hệ thống",
     field: "Cấu hình hệ thống",
   };
   const changes = Array.isArray(deniedChanges) ? deniedChanges : [];
+  const settingConflicts = changes.filter((change) => change.scope === "systemSettings" && change.settingKey);
+  if (settingConflicts.length) {
+    const formatTime = (value) => {
+      const date = new Date(value || "");
+      if (Number.isNaN(date.getTime())) return "thời điểm không xác định";
+      return new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(date);
+    };
+    const details = settingConflicts.slice(0, 3).map((change) => {
+      const label = change.settingLabel || change.settingKey;
+      const actor = change.serverUpdatedBy || change.serverUpdatedByUsername || "tài khoản khác";
+      const version = Number(change.serverVersion) > 0 ? ` phiên bản ${change.serverVersion}` : "";
+      return `“${label}” đã được ${actor} cập nhật lúc ${formatTime(change.serverUpdatedAt)}${version}`;
+    });
+    const suffix = settingConflicts.length > 3 ? ` và ${settingConflicts.length - 3} thiết lập khác` : "";
+    return `${details.join("; ")}${suffix}. Thay đổi trùng thiết lập trên thiết bị này chưa được lưu; các thiết lập không trùng đã được gộp.`;
+  }
   const conflictOnly = changes.length > 0 && changes.every((change) => change.reason === "Record changed by another user." || change.reason === "Field changed by another user.");
   const targets = [...new Set(changes.map((change) => labels[change.scope] || "Dữ liệu hệ thống"))].slice(0, 3);
   const targetText = targets.length ? targets.join(", ") : "một số dữ liệu";
@@ -5012,6 +5374,7 @@ function restoreDeniedSharedChanges(currentPayload, remotePayload, deniedChanges
     }
   });
 
+  applySystemSettingsToState(current, current.systemSettings);
   return normalizeStatePayload(current);
 }
 
@@ -5058,7 +5421,10 @@ function buildSharedStatePatch(basePayload, nextPayload, serverBasePayload = bas
   const serverBase = sharedServerBasePayload(serverBasePayload) || cloneStatePayload(base);
   const collections = {};
 
-  SHARED_SYNC_COLLECTIONS.forEach((collection) => {
+  const syncCollections = settingsConflictFreeSyncSupported()
+    ? SHARED_SYNC_COLLECTIONS
+    : SHARED_SYNC_COLLECTIONS.filter((collection) => collection !== "systemSettings");
+  syncCollections.forEach((collection) => {
     const baseRecords = sharedRecordMap(base[collection]);
     const serverBaseRecords = sharedRecordMap(serverBase[collection]);
     const nextRecords = sharedRecordMap(next[collection]);
@@ -5078,7 +5444,10 @@ function buildSharedStatePatch(basePayload, nextPayload, serverBasePayload = bas
     if (upserts.length || deletes.length) collections[collection] = { upserts, deletes };
   });
 
+  // New Edge Functions receive per-key records. Before that deployment is
+  // visible, retain the legacy aggregate fields for wire compatibility.
   const fields = SHARED_SYNC_SCALAR_FIELDS
+    .filter((key) => !settingsConflictFreeSyncSupported() || !["moduleSettings", "systemCustomization"].includes(key))
     .filter((key) => !sharedValuesEqual(base[key], next[key]))
     .map((key) => ({
       key,
@@ -5121,6 +5490,7 @@ function mergeRemoteStateWithUnsyncedChanges(sentPayload, currentPayload, remote
     const rebased = mergeSharedScalarFieldChange(key, sent[key], current[key], merged[key]);
     merged[key] = rebased === null ? current[key] : rebased;
   });
+  applySystemSettingsToState(merged, merged.systemSettings);
   merged.activePeriod = current.activePeriod || merged.activePeriod;
   return normalizeStatePayload(merged);
 }
@@ -6875,106 +7245,116 @@ async function stopRecurringTask(taskId) {
   }
 }
 
+function nextRecurringOccurrence(sourceTask, latestTask) {
+  if (!sourceTask || !latestTask || !taskCompletionNeedsReview(latestTask)) return null;
+  const recurrence = normalizeTaskRecurrence(sourceTask);
+  if (recurrence === TASK_RECURRENCE_NONE || sourceTask.recurrenceStoppedAt) return null;
+  const currentDue = String(latestTask.due || latestTask.startDate || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(currentDue)) return null;
+
+  const dayStep = recurrence === TASK_RECURRENCE_DAILY ? 1 : recurrence === TASK_RECURRENCE_WEEKLY ? 7 : 0;
+  const monthStep = recurrenceStepMonths(recurrence);
+  const anchorDay = Number(sourceTask.recurrenceAnchorDay) || Number(sourceTask.due?.slice(8, 10));
+  const due = dayStep
+    ? addDaysToIsoDate(currentDue, dayStep)
+    : monthStep ? addMonthsToIsoDate(currentDue, monthStep, anchorDay) : "";
+  if (!due || due <= currentDue) return null;
+
+  const startDate = !latestTask.startDate
+    ? due
+    : dayStep
+      ? addDaysToIsoDate(latestTask.startDate, dayStep)
+      : addMonthsToIsoDate(
+        latestTask.startDate,
+        monthStep,
+        Number(sourceTask.startDate?.slice(8, 10)) || Number(latestTask.startDate.slice(8, 10)),
+      );
+  return startDate ? { due, startDate } : null;
+}
+
 function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) {
   if (recurringTasksEnsuredPeriod === targetPeriod && recurringTasksEnsuredRevision === derivedStateRevision) {
     return false;
   }
   recurringTasksEnsuredPeriod = targetPeriod;
   recurringTasksEnsuredRevision = derivedStateRevision;
-  const targetIndex = periodIndex(targetPeriod);
-  if (targetIndex < 0) return false;
-  const targetEnd = `${targetPeriod}-${padDatePart(daysInMonth(Number(targetPeriod.slice(0, 4)), Number(targetPeriod.slice(5, 7)) - 1))}`;
+  if (periodIndex(targetPeriod) < 0) return false;
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
   const existingKeys = new Set(
-    (state.tasks || []).map((task) => `${task.recurrenceSeriesId || task.recurrenceSourceId || task.id}|${task.due || ""}`),
+    tasks.map((task) => `${task.recurrenceSeriesId || task.recurrenceSourceId || task.id}|${task.due || ""}`),
   );
   const additions = [];
-  (state.tasks || [])
+  tasks
     .filter((task) => normalizeTaskKind(task) === TASK_KIND_REGULAR)
     .filter((task) => !task.recurrenceSourceId)
     .forEach((sourceTask) => {
       const recurrence = normalizeTaskRecurrence(sourceTask);
       if (recurrence === TASK_RECURRENCE_NONE || sourceTask.recurrenceStoppedAt || !sourceTask.due) return;
-      const sourcePeriod = taskPeriod(sourceTask);
-      const sourceIndex = periodIndex(sourcePeriod);
-      if (sourceIndex < 0 || sourceIndex > targetIndex) return;
       const seriesId = sourceTask.recurrenceSeriesId || sourceTask.id;
       const anchorDay = Number(sourceTask.recurrenceAnchorDay) || Number(sourceTask.due.slice(8, 10));
-      const appendRepeatedTask = (due, startDate) => {
-        if (!due) return;
-        const recurringOwner = recurrenceOwnerForDue(sourceTask, due);
-        if (!recurringOwner) return;
-        const key = `${seriesId}|${due}`;
-        if (existingKeys.has(key)) return;
-        existingKeys.add(key);
-        const repeatedTask = applyRecordAudit(
-          {
-            ...sourceTask,
-            id: uid("task"),
-            ownerId: recurringOwner.id,
-            ownerName: recurringOwner.name,
-            startDate: startDate || due,
-            due,
-            dueTime: sourceTask.dueTime || "",
-            status: TASK_STATUS_PREPARING,
-            progress: 0,
-            qualityPercent: "",
-            qualityAssessedAt: "",
-            qualityAssessedById: "",
-            qualityAssessedByName: "",
-            attachments: [],
-            progressReports: [],
-            completedAt: "",
-            completedById: "",
-            completedByName: "",
-            completionReviewStatus: "",
-            completionReviewedAt: "",
-            completionReviewedById: "",
-            completionReviewedByName: "",
-            completionReviewNote: "",
-            lateCompletion: false,
-            recurrence,
-            recurrenceSourceId: sourceTask.id,
-            recurrenceSeriesId: seriesId,
-            recurrenceAnchorDay: anchorDay,
-            recurrenceAnchorDue: sourceTask.recurrenceAnchorDue || sourceTask.due,
-          },
-          null,
-        );
-        additions.push(repeatedTask);
-        const owner = personById(repeatedTask.ownerId);
-        logActivity({
-          action: "Tự tạo định kỳ",
-          module: "Công việc",
-          targetType: "task",
-          targetId: repeatedTask.id,
-          personId: repeatedTask.ownerId,
-          departmentId: owner?.departmentId || "",
-          period: taskPeriod(repeatedTask),
-          title: repeatedTask.title,
-          details: `${taskRecurrenceLabels[recurrence]} · từ công việc gốc ${sourceTask.title} · hoàn thành ${formatTaskDeadline(repeatedTask)}`,
-          score: "0%",
-        });
-      };
+      const seriesTasks = tasks.filter((task) => `${task.recurrenceSeriesId || task.recurrenceSourceId || task.id}` === String(seriesId));
+      const latestTask = seriesTasks.reduce((latest, task) => {
+        const latestDate = String(latest?.due || latest?.startDate || "");
+        const taskDate = String(task?.due || task?.startDate || "");
+        return taskDate > latestDate ? task : latest;
+      }, sourceTask);
+      const nextOccurrence = nextRecurringOccurrence(sourceTask, latestTask);
+      if (!nextOccurrence) return;
 
-      const recurringDayStep = recurrence === TASK_RECURRENCE_DAILY ? 1 : recurrence === TASK_RECURRENCE_WEEKLY ? 7 : 0;
-      if (recurringDayStep) {
-        const anchorDue = sourceTask.recurrenceAnchorDue || sourceTask.due;
-        const daysToTargetStart = Math.max(0, daysBetweenIsoDates(anchorDue, `${targetPeriod}-01`));
-        const firstOffset = Math.max(recurringDayStep, Math.ceil(daysToTargetStart / recurringDayStep) * recurringDayStep);
-        for (let offset = firstOffset; ; offset += recurringDayStep) {
-          const due = addDaysToIsoDate(anchorDue, offset);
-          if (!due || due > targetEnd) break;
-          appendRepeatedTask(due, sourceTask.startDate ? addDaysToIsoDate(sourceTask.startDate, offset) : due);
-        }
-        return;
-      }
-
-      const step = recurrenceStepMonths(recurrence);
-      if (!step || sourceIndex >= targetIndex) return;
-      for (let offset = step; sourceIndex + offset <= targetIndex && offset <= 60; offset += step) {
-        const due = addMonthsToIsoDate(sourceTask.due, offset, anchorDay);
-        appendRepeatedTask(due, sourceTask.startDate ? addMonthsToIsoDate(sourceTask.startDate, offset, Number(sourceTask.startDate.slice(8, 10))) : due);
-      }
+      const { due, startDate } = nextOccurrence;
+      const key = `${seriesId}|${due}`;
+      if (existingKeys.has(key)) return;
+      const recurringOwner = recurrenceOwnerForDue(sourceTask, due);
+      if (!recurringOwner) return;
+      existingKeys.add(key);
+      const repeatedTask = applyRecordAudit(
+        {
+          ...sourceTask,
+          id: uid("task"),
+          ownerId: recurringOwner.id,
+          ownerName: recurringOwner.name,
+          startDate,
+          due,
+          dueTime: sourceTask.dueTime || "",
+          status: TASK_STATUS_PREPARING,
+          progress: 0,
+          qualityPercent: "",
+          qualityAssessedAt: "",
+          qualityAssessedById: "",
+          qualityAssessedByName: "",
+          attachments: [],
+          progressReports: [],
+          completedAt: "",
+          completedById: "",
+          completedByName: "",
+          completionReviewStatus: "",
+          completionReviewedAt: "",
+          completionReviewedById: "",
+          completionReviewedByName: "",
+          completionReviewNote: "",
+          lateCompletion: false,
+          recurrence,
+          recurrenceSourceId: sourceTask.id,
+          recurrenceSeriesId: seriesId,
+          recurrenceAnchorDay: anchorDay,
+          recurrenceAnchorDue: sourceTask.recurrenceAnchorDue || sourceTask.due,
+        },
+        null,
+      );
+      additions.push(repeatedTask);
+      const owner = personById(repeatedTask.ownerId);
+      logActivity({
+        action: "Tự tạo định kỳ",
+        module: "Công việc",
+        targetType: "task",
+        targetId: repeatedTask.id,
+        personId: repeatedTask.ownerId,
+        departmentId: owner?.departmentId || "",
+        period: taskPeriod(repeatedTask),
+        title: repeatedTask.title,
+        details: `${taskRecurrenceLabels[recurrence]} · từ công việc gốc ${sourceTask.title} · hoàn thành ${formatTaskDeadline(repeatedTask)}`,
+        score: "0%",
+      });
     });
   if (!additions.length) return false;
   state.tasks = [...state.tasks, ...additions];
@@ -8628,6 +9008,11 @@ function deleteTaskProjectCatalog(projectId) {
   }
   const project = projectById(projectId);
   if (!project) return;
+  const linkedAppraisalCount = (state.publicInvestmentAppraisals || []).filter((record) => record.projectId === project.id).length;
+  if (linkedAppraisalCount) {
+    alert(`Không thể xóa dự án đang được liên kết với ${linkedAppraisalCount} hồ sơ thẩm định. Hãy chuyển hoặc xóa hồ sơ thẩm định trước.`);
+    return;
+  }
   const linkedTaskCount = state.tasks.filter((task) => projectIdForTask(task) === project.id).length;
   const linkedTaskNote = linkedTaskCount
     ? ` ${linkedTaskCount} công việc đã liên kết vẫn được giữ nguyên để tra cứu lịch sử.`
@@ -9974,11 +10359,44 @@ function openTaskDetailDialog(taskId) {
     : "";
   const attachments = task.attachments || [];
   const violations = taskViolationReasons(task);
+  const relatedGpmbCases = isGpmbWorkflowTask(task)
+    ? (state.gpmbCases || [])
+        .filter((record) => String(record.workflowId || "") === String(task.gpmbWorkflowId || ""))
+        .sort((left, right) => {
+          const leftCurrent = String(left.currentStepId || "") === String(task.gpmbStepId || "") ? 1 : 0;
+          const rightCurrent = String(right.currentStepId || "") === String(task.gpmbStepId || "") ? 1 : 0;
+          return rightCurrent - leftCurrent
+            || String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || ""));
+        })
+    : [];
+  const currentStepCaseCount = relatedGpmbCases.filter((record) => String(record.currentStepId || "") === String(task.gpmbStepId || "")).length;
+  const visibleGpmbCases = relatedGpmbCases.slice(0, 20);
   const attachmentList = attachments.length
     ? `<div class="task-detail-attachments">${attachments
         .map((file) => taskAttachmentLinkHtml(file))
         .join("")}</div>`
-    : `<p class="muted">Chưa có hồ sơ liên quan.</p>`;
+    : `<p class="muted">${relatedGpmbCases.length ? "Chưa có tệp đính kèm; hồ sơ GPMB liên quan được hiển thị bên dưới." : "Chưa có hồ sơ liên quan."}</p>`;
+  const gpmbCaseList = relatedGpmbCases.length ? `
+    <div class="task-related-gpmb-cases">
+      <div class="task-related-gpmb-head">
+        <div><strong>Hồ sơ GPMB theo hộ/thửa</strong><span>${currentStepCaseCount} hồ sơ ở bước công việc này · ${relatedGpmbCases.length} hồ sơ cùng đợt GPMB</span></div>
+      </div>
+      <div class="task-related-gpmb-list">${visibleGpmbCases.map((record) => {
+        const atCurrentStep = String(record.currentStepId || "") === String(task.gpmbStepId || "");
+        const workflow = gpmbWorkflowById(record.workflowId);
+        const step = gpmbCaseEnabledSteps(workflow).find((item) => item.id === record.currentStepId);
+        const land = [record.mapSheet ? `Tờ ${record.mapSheet}` : "", record.parcelNumber ? `Thửa ${record.parcelNumber}` : "", gpmbCaseAreaLabel(record.areaM2)].filter(Boolean).join(" · ");
+        return `<article class="task-related-gpmb-item${atCurrentStep ? " is-current-step" : ""}">
+          <div class="task-related-gpmb-item-head"><span class="gpmb-case-code">${escapeHtml(record.caseCode || "Chưa cấp mã")}</span><span class="gpmb-case-status is-${escapeHtml(record.status || GPMB_CASE_STATUS_NEW)}">${escapeHtml(gpmbCaseStatusLabel(record.status))}</span></div>
+          <strong>${escapeHtml(record.subjectName || "Đối tượng chưa cập nhật")}</strong>
+          <span>${escapeHtml(land || "Chưa cập nhật tờ, thửa, diện tích")}</span>
+          <span>${escapeHtml(atCurrentStep ? "Đang ở bước công việc này" : step ? `${gpmbWorkflowStepLabel(step)} · ${step.title}` : "Cùng đợt GPMB")}</span>
+          ${record.note ? `<p>${escapeHtml(record.note)}</p>` : ""}
+          <small>Cập nhật ${escapeHtml(formatDateTime(record.updatedAt) || "chưa rõ")} · ${escapeHtml(record.updatedBy || record.createdBy || "Không rõ tài khoản")}</small>
+        </article>`;
+      }).join("")}</div>
+      ${relatedGpmbCases.length > visibleGpmbCases.length ? `<p class="muted task-related-gpmb-more">Đang hiển thị 20/${relatedGpmbCases.length} hồ sơ cập nhật gần nhất.</p>` : ""}
+    </div>` : "";
 
   byId("taskDetailSubtitle").textContent = taskKindLabels[normalizeTaskKind(task)] || "Công việc";
   byId("taskDetailTitle").textContent = task.title || "Công việc";
@@ -10041,6 +10459,7 @@ function openTaskDetailDialog(taskId) {
     <section class="task-detail-section">
       <h3>Hồ sơ liên quan</h3>
       ${attachmentList}
+      ${gpmbCaseList}
     </section>
     ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
   `;
@@ -11332,6 +11751,30 @@ function renderGradeDistribution(periodEvaluations, eligiblePeople = state.peopl
 }
 
 function renderDepartmentEffectivenessChart(context = null) {
+  if (dashboardHasManagedTeamScope()) {
+    const people = dashboardPeopleForEvaluation().filter(isActivePerson);
+    const personIds = new Set(people.map((person) => person.id));
+    const evaluations = personalEvaluationsForDashboard(state.activePeriod, context)
+      .filter((evaluation) => personIds.has(evaluation.personId) && hasRecordedKpiResult(evaluation));
+    const score = averageScore(evaluations);
+    const title = byId("dashboardDepartmentEffectivenessTitle");
+    if (title) title.textContent = "Hiệu quả nhóm phụ trách";
+    byId("departmentChartSummary").textContent = people.length
+      ? `${evaluations.length}/${people.length} thành viên đã có kết quả KPI trong kỳ ${formatMonthPeriod(state.activePeriod)}.`
+      : "Chưa có nhân sự thuộc nhóm quản lý.";
+    byId("departmentSummary").innerHTML = `
+      <article class="department-donut-card dashboard-team-effectiveness-card">
+        <span class="department-donut-title">${escapeHtml(dashboardScopeLabel())}</span>
+        <span class="department-donut-chart" data-dashboard-department-donut data-department-progress="${clamp(score, 0, 100)}" style="--department-color: ${evaluations.length ? "#16805f" : "#94a3b8"}; --department-progress: ${clamp(score, 0, 100)}%;">
+          <span class="department-donut-center"><strong>${evaluations.length ? formatScore(score) : "-"}</strong><small>điểm TB</small></span>
+        </span>
+        <span class="department-donut-meta"><strong>${evaluations.length ? gradePersonal(score) : "Chưa chấm"}</strong><small>${people.length} thành viên</small></span>
+      </article>
+    `;
+    return;
+  }
+  const title = byId("dashboardDepartmentEffectivenessTitle");
+  if (title) title.textContent = "Hiệu quả theo phòng";
   const eligibleDepartments = visibleDepartmentsForDepartmentEvaluations();
   const items = eligibleDepartments.map((department, index) => {
     const people = state.people.filter((person) => person.departmentId === department.id);
@@ -12009,7 +12452,7 @@ function dailyWorkReportData(reportDate) {
   const date = dailyReportDateValue(reportDate);
   const visibleTaskById = new Map();
   state.tasks.forEach((task, index) => {
-    if (isRecurrenceStoppedTask(task) || !canViewTaskRecord(task)) return;
+    if (isRecurrenceStoppedTask(task) || !canViewTaskRecord(task) || !dashboardTaskMatchesAccountScope(task)) return;
     const key = String(task?.id || "").trim() || `task-row-${index}`;
     if (!visibleTaskById.has(key)) visibleTaskById.set(key, task);
   });
@@ -12235,7 +12678,7 @@ function weeklyWorkReportData(anchorDate) {
   const range = weeklyWorkReportDateRange(anchorDate);
   const visibleTaskById = new Map();
   state.tasks.forEach((task, index) => {
-    if (isRecurrenceStoppedTask(task) || !canViewTaskRecord(task)) return;
+    if (isRecurrenceStoppedTask(task) || !canViewTaskRecord(task) || !dashboardTaskMatchesAccountScope(task)) return;
     const key = String(task?.id || "").trim() || `task-row-${index}`;
     if (!visibleTaskById.has(key)) visibleTaskById.set(key, task);
   });
@@ -12609,6 +13052,7 @@ function dashboardTasksForPeriod(period = state.activePeriod) {
     .filter((task) => !isRecurrenceStoppedTask(task))
     .filter((task) => taskMatchesDisplayScope(task))
     .filter((task) => canViewTaskRecord(task))
+    .filter((task) => dashboardTaskMatchesAccountScope(task))
     .slice()
     .sort(compareTaskRecords);
 }
@@ -12619,6 +13063,7 @@ function dashboardDepartmentTasks(departmentId) {
     .filter((task) => taskHasParticipantInDepartment(task, departmentId))
     .filter((task) => taskMatchesDisplayScope(task))
     .filter((task) => canViewTaskRecord(task))
+    .filter((task) => dashboardTaskMatchesAccountScope(task))
     .slice()
     .sort(compareTaskRecords);
 }
@@ -12642,9 +13087,10 @@ function openDashboardPeriodTaskDetail(kind) {
   if (!canAccessView("tasks")) return;
   const completed = kind === "completed";
   const tasks = completed ? dashboardApprovedTasksForPeriod() : dashboardTasksForPeriod();
+  const scopeLabel = dashboardScopeLabel();
   openTaskStatusDetailDialog("", {
     tasks,
-    title: completed ? "Công việc toàn Ban đã hoàn thành" : "Tổng số công việc",
+    title: completed ? `Công việc hoàn thành đạt - ${scopeLabel}` : `Tổng số công việc - ${scopeLabel}`,
     subtitle: completed
       ? `Công việc đã Hoàn thành và được đánh giá Đạt trong phạm vi ${taskDisplayScopeLabel()}.`
       : `Toàn bộ công việc trong phạm vi ${taskDisplayScopeLabel()}.`,
@@ -12655,14 +13101,55 @@ function openDashboardPeriodTaskDetail(kind) {
   });
 }
 
-function dashboardPeopleForEvaluation() {
-  if (canViewSystemContent()) return state.people.filter(isKpiEligiblePerson);
+function dashboardHasManagedTeamScope() {
+  return isSectionHead() && !canViewSystemContent() && !hasDepartmentManagementAccess();
+}
+
+function dashboardScopePeople() {
+  if (canViewSystemContent()) return state.people;
   if (hasDepartmentManagementAccess()) {
     const departmentId = currentDepartmentId();
-    return state.people.filter((person) => person.departmentId === departmentId && isKpiEligiblePerson(person));
+    return state.people.filter((person) => person.departmentId === departmentId);
   }
   const person = currentPerson();
-  return isKpiEligiblePerson(person) ? [person] : [];
+  if (!person) return [];
+  if (!dashboardHasManagedTeamScope()) return [person];
+  const peopleById = new Map([[person.id, person]]);
+  managedTeamMembers(person.id).forEach((member) => peopleById.set(member.id, member));
+  return [...peopleById.values()];
+}
+
+function dashboardPeopleForEvaluation() {
+  return dashboardScopePeople().filter(isKpiEligiblePerson);
+}
+
+function dashboardPersonIsInScope(personId) {
+  if (!dashboardHasManagedTeamScope()) return true;
+  const id = String(personId || "").trim();
+  return !!id && dashboardScopePeople().some((person) => person.id === id);
+}
+
+function dashboardTaskMatchesAccountScope(task) {
+  if (!dashboardHasManagedTeamScope()) return true;
+  return taskParticipantIds(task).some((personId) => dashboardPersonIsInScope(personId));
+}
+
+function dashboardScopeLabel() {
+  if (canViewSystemContent()) return "Toàn Ban";
+  if (hasDepartmentManagementAccess()) return departmentById(currentDepartmentId())?.name || "Phòng đang quản lý";
+  if (dashboardHasManagedTeamScope()) return `Nhóm ${currentPerson()?.name || "đang quản lý"}`;
+  return currentPerson()?.name || "Cá nhân";
+}
+
+function dashboardScopeDescription() {
+  if (dashboardHasManagedTeamScope()) {
+    const leader = currentPerson();
+    const memberCount = leader ? managedTeamMembers(leader.id).filter(isActivePerson).length : 0;
+    return `Số liệu của Trưởng nhóm và ${memberCount} nhân sự trực thuộc.`;
+  }
+  if (canViewSystemContent()) return "Số liệu trong phạm vi toàn Ban.";
+  if (hasDepartmentManagementAccess()) return `Số liệu của ${departmentById(currentDepartmentId())?.name || "phòng đang quản lý"}.`;
+  return "Số liệu cá nhân trong phạm vi tài khoản được phép xem.";
 }
 
 function dashboardKpiSummaryRows(period = state.activePeriod) {
@@ -12787,10 +13274,13 @@ function openDashboardDepartmentTaskDetail(departmentId) {
   const row = dashboardDepartmentSituationRows(state.activePeriod).find((item) => item.department.id === departmentId);
   if (!row) return;
   const tasks = dashboardDepartmentTasks(departmentId);
+  const teamScope = dashboardHasManagedTeamScope();
   openTaskStatusDetailDialog("", {
     tasks,
-    title: `Tình hình ${row.department.name}`,
-    subtitle: `Công việc của phòng trong phạm vi ${taskDisplayScopeLabel()}.`,
+    title: teamScope ? `Tình hình ${dashboardScopeLabel()}` : `Tình hình ${row.department.name}`,
+    subtitle: teamScope
+      ? `Công việc của Trưởng nhóm và nhân sự trực thuộc trong phạm vi ${taskDisplayScopeLabel()}.`
+      : `Công việc của phòng trong phạm vi ${taskDisplayScopeLabel()}.`,
     contextHtml: [
       `<span><strong>${row.total}</strong> tổng công việc</span>`,
       `<span><strong>${row.approved}</strong> hoàn thành Đạt</span>`,
@@ -12804,22 +13294,29 @@ function renderDashboardDepartmentStatus(period = state.activePeriod) {
   const container = byId("dashboardDepartmentStatus");
   if (!container) return;
   const rows = dashboardDepartmentSituationRows(period);
+  const teamScope = dashboardHasManagedTeamScope();
+  const title = byId("dashboardDepartmentStatusTitle");
+  if (title) title.textContent = teamScope ? "Tình hình nhóm phụ trách" : "Tình hình các phòng";
   container.classList.toggle("empty-state", !rows.length);
   container.innerHTML = rows.length
     ? rows.map((row) => `
-        <button class="dashboard-department-status-row dashboard-link" data-dashboard-department-task-detail="${escapeHtml(row.department.id)}" type="button" aria-label="Xem chi tiết công việc ${escapeHtml(row.department.name)}">
-          <strong>${escapeHtml(row.department.name)}</strong>
+        <button class="dashboard-department-status-row dashboard-link" data-dashboard-department-task-detail="${escapeHtml(row.department.id)}" type="button" aria-label="Xem chi tiết công việc ${escapeHtml(teamScope ? dashboardScopeLabel() : row.department.name)}">
+          <strong>${escapeHtml(teamScope ? dashboardScopeLabel() : row.department.name)}</strong>
           <span>${row.total} việc</span>
           <span class="is-success">${row.approved} đạt</span>
           <span class="is-warning">${row.pending} chờ duyệt</span>
           <span class="is-danger">${row.overdue} quá hạn</span>
         </button>
       `).join("")
-    : "Chưa có phòng áp dụng KPI để thống kê.";
+    : teamScope ? "Chưa có dữ liệu nhóm phụ trách để thống kê." : "Chưa có phòng áp dụng KPI để thống kê.";
 }
 
 function dashboardOperationalTasks() {
-  return state.tasks.filter((task) => !isRecurrenceStoppedTask(task) && personById(task.ownerId) && taskMatchesDisplayScope(task) && canViewTaskRecord(task));
+  return state.tasks.filter((task) => !isRecurrenceStoppedTask(task)
+    && personById(taskParticipantPersonId(task.ownerId))
+    && taskMatchesDisplayScope(task)
+    && canViewTaskRecord(task)
+    && dashboardTaskMatchesAccountScope(task));
 }
 
 function dashboardOperationRows(visibleTasks = dashboardOperationalTasks(), today = new Date()) {
@@ -12909,6 +13406,7 @@ function dashboardWorkloadProjectName(task) {
 
 function dashboardWorkloadDepartmentOptions(tasks) {
   const people = uniquePersonIds(tasks.flatMap(taskParticipantIds))
+    .filter((personId) => dashboardPersonIsInScope(personId))
     .map(personById)
     .filter(Boolean);
   return dashboardDepartmentFilterOptions(people);
@@ -12946,7 +13444,8 @@ function dashboardWorkloadProjectRows(tasks = dashboardTasksForPeriod(), now = n
       const dailyTasks = todayTasks.filter((task) => allIds.has(task.id));
       const weeklyTasks = weekTasks.filter((task) => allIds.has(task.id));
       const selectedTasks = dashboardWorkloadPeriod === "week" ? weeklyTasks : dailyTasks;
-      const participantIds = uniquePersonIds(row.tasks.flatMap(taskParticipantIds));
+      const participantIds = uniquePersonIds(row.tasks.flatMap(taskParticipantIds))
+        .filter((personId) => dashboardPersonIsInScope(personId));
       const departmentNames = [...new Set(participantIds.map((personId) => departmentById(personById(personId)?.departmentId)?.name).filter(Boolean))];
       return {
         ...row,
@@ -12971,6 +13470,7 @@ function dashboardWorkloadPeopleRows(tasks = dashboardTasksForPeriod(), now = ne
   const rows = new Map();
   scopedTasks.forEach((task) => {
     taskParticipantIds(task).forEach((personId) => {
+      if (!dashboardPersonIsInScope(personId)) return;
       const person = personById(personId);
       if (!person) return;
       const row = rows.get(personId) || { person, tasks: [] };
@@ -13194,6 +13694,7 @@ function dashboardAnalyticsWorkloadRows(tasks) {
   tasks.forEach((task) => {
     if (taskCompletionIsApproved(task)) return;
     taskParticipantIds(task).forEach((personId) => {
+      if (!dashboardPersonIsInScope(personId)) return;
       const person = personById(personId);
       if (!person) return;
       const row = rowsByPerson.get(personId) || { person, total: 0, active: 0, pending: 0, overdue: 0, blocked: 0 };
@@ -13282,6 +13783,7 @@ function dashboardAnalyticsHeatmapRows(tasks, departmentRows = dashboardAnalytic
     row.tasks.forEach((task) => {
       if (!dashboardAnalyticsOpenTask(task) && !taskCompletionNeedsReview(task)) return;
       taskParticipantIds(task).forEach((personId) => {
+        if (!dashboardPersonIsInScope(personId)) return;
         const person = personById(personId);
         if (person?.departmentId !== row.department.id) return;
         const group = dashboardAnalyticsRoleGroup(person);
@@ -13380,7 +13882,9 @@ function renderDashboardAnalyticsPeople(tasks, kpiContext) {
   const workloadRows = dashboardAnalyticsWorkloadRows(scopedTasks);
   const workloadChart = byId("dashboardPersonLoadChart");
   const workloadNote = byId("dashboardPersonLoadNote");
-  if (workloadNote) workloadNote.textContent = selectedDepartment ? selectedDepartment.name : "Toàn Ban";
+  if (workloadNote) workloadNote.textContent = dashboardHasManagedTeamScope()
+    ? dashboardScopeLabel()
+    : selectedDepartment ? selectedDepartment.name : dashboardScopeLabel();
   if (workloadChart) {
     if (!workloadRows.length) {
       workloadChart.classList.add("empty-state");
@@ -13482,6 +13986,7 @@ function dashboardAnalyticsProjectRows(tasks, departmentId = "") {
       const approvedTasks = row.tasks.filter(taskCompletionIsApproved);
       const onTime = approvedTasks.filter((task) => !taskIsLateCompletion(task)).length;
       const people = uniquePersonIds(row.tasks.flatMap(taskParticipantIds))
+        .filter((personId) => dashboardPersonIsInScope(personId))
         .filter((personId) => !departmentId || personById(personId)?.departmentId === departmentId);
       const pending = row.tasks.filter(taskCompletionNeedsReview).length;
       const overdue = row.tasks.filter((task) => getDueStatus(task) === "Quá hạn").length;
@@ -13538,7 +14043,9 @@ function renderDashboardAnalyticsProjects(tasks) {
   const selectedDepartmentId = departmentById(dashboardWorkloadDepartmentFilter)?.id || "";
   const selectedDepartment = selectedDepartmentId ? departmentById(selectedDepartmentId) : null;
   const rows = dashboardAnalyticsProjectRows(tasks, selectedDepartmentId);
-  const contextLabel = selectedDepartment ? selectedDepartment.name : "Toàn Ban";
+  const contextLabel = dashboardHasManagedTeamScope()
+    ? dashboardScopeLabel()
+    : selectedDepartment ? selectedDepartment.name : dashboardScopeLabel();
   const healthNote = byId("dashboardProjectHealthNote");
   if (healthNote) healthNote.textContent = contextLabel;
 
@@ -13831,6 +14338,8 @@ function renderDashboard(options = {}) {
   const monthlyReportAction = byId("exportMonthlyWorkReportPdf")?.closest(".dashboard-monthly-report-action");
   if (monthlyReportPeriod) monthlyReportPeriod.textContent = `Kỳ ${formatMonthPeriod(dashboardPeriod)}`;
   if (monthlyReportAction) monthlyReportAction.classList.toggle("is-hidden", !canViewMonthlyWorkReport());
+  const dashboardScopeNote = byId("dashboardScopeNote");
+  if (dashboardScopeNote) dashboardScopeNote.textContent = dashboardScopeDescription();
   syncTaskDisplayScopeControls();
   const kpiContext = cachedDashboardKpiContext(state.activePeriod);
   const visiblePeople = dashboardPeopleForEvaluation().filter(isActivePerson);
@@ -13889,10 +14398,12 @@ function renderDashboard(options = {}) {
   periodEvaluations
     .filter((item) => kpiResultScore(item) < 70)
     .forEach((item) => alerts.push({ text: `KPI dưới 70: ${personById(item.personId)?.name || "nhân sự đã xóa"} - ${formatScore(kpiResultScore(item))}`, personId: item.personId }));
-  visibleDepartmentsForDepartmentEvaluations()
-    .map((department) => kpiContext.departmentEvaluationsById.get(department.id))
-    .filter((item) => hasRecordedKpiResult(item) && kpiResultScore(item) < 65)
-    .forEach((item) => alerts.push({ text: `KPI phòng dưới mức khá: ${departmentById(item.departmentId)?.name || "phòng đã xóa"} - ${formatScore(kpiResultScore(item))}`, departmentId: item.departmentId }));
+  if (!dashboardHasManagedTeamScope()) {
+    visibleDepartmentsForDepartmentEvaluations()
+      .map((department) => kpiContext.departmentEvaluationsById.get(department.id))
+      .filter((item) => hasRecordedKpiResult(item) && kpiResultScore(item) < 65)
+      .forEach((item) => alerts.push({ text: `KPI phòng dưới mức khá: ${departmentById(item.departmentId)?.name || "phòng đã xóa"} - ${formatScore(kpiResultScore(item))}`, departmentId: item.departmentId }));
+  }
   alerts.sort((left, right) => (left.priority || 9) - (right.priority || 9));
   byId("alertList").classList.toggle("empty-state", !alerts.length);
   byId("alertList").innerHTML = alerts.length
@@ -17100,7 +17611,7 @@ function resetNotificationRuntimeForAccount() {
 }
 
 function notificationCurrentAccountId() {
-  return String(currentAccount()?.id || "");
+  return String(currentAccount()?.id || notificationCenter.accountId || "");
 }
 
 function notificationServerWriteAvailable() {
@@ -17342,6 +17853,8 @@ function setupLunaNotificationPreferences() {
   });
   renderLunaNotificationPreferences();
 }
+
+window.phucThinhRenderLunaNotificationPreferences = renderLunaNotificationPreferences;
 
 function notificationIsScheduledAnnouncementInFuture(item, now = Date.now()) {
   if (String(item?.targetType || "") !== "luna-announcement" || !item?.scheduledAt) return false;
@@ -17938,6 +18451,7 @@ function applyAccessControls() {
   byId("openPersonForm").classList.toggle("is-hidden", !canManagePeople);
   if (!canManagePeople) closePersonFormDialog();
   byId("openDepartmentEvaluationFromPersonal").classList.toggle("is-hidden", !canAccessView("department-evaluations"));
+  byId("openPublicInvestmentAppraisalForm")?.classList.toggle("is-hidden", !canCreatePublicInvestmentAppraisal());
   updateAccountFormAccess();
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("is-hidden", !canAccessView(button.dataset.view));
@@ -17984,6 +18498,8 @@ function renderActiveView(viewId = activeViewId(), { animateDashboard = false } 
     updateTaskFormLock();
     renderGpmbWorkflows();
     renderTaskBoard({ applyCustomization: false });
+  } else if (viewId === "public-investment-appraisal") {
+    renderPublicInvestmentAppraisals();
   } else if (viewId === "calendar") {
     renderCalendarView();
   } else if (viewId === "department-evaluations") {
@@ -18291,6 +18807,449 @@ function gpmbWorkflowTodayIso() {
 
 function canManageGpmbWorkflows() {
   return moduleIsAvailableToAccount("tasks") && (isAdmin() || isDirector() || hasDepartmentTaskAccess());
+}
+
+let publicInvestmentAppraisalOpinionDrafts = [];
+
+function publicInvestmentAppraisalOnlineSyncSupported() {
+  if (isOfflineFileRuntime() || ["localhost", "127.0.0.1"].includes(window.location.hostname)) return true;
+  return usingSupabaseSync() && deploymentVersionAtLeast(sharedSync.deploymentVersion, PUBLIC_INVESTMENT_APPRAISAL_DEPLOYMENT_VERSION);
+}
+
+function publicInvestmentAppraisalPersonId(account = currentAccount()) {
+  return String(account?.personId || currentPerson()?.id || "");
+}
+
+function canCreatePublicInvestmentAppraisal(account = currentAccount()) {
+  if (!account || !moduleIsAvailableToAccount("public-investment-appraisal", account)) return false;
+  return ["admin", "director", "manager", "deputy_manager", "section_head"].includes(account.role);
+}
+
+function canViewPublicInvestmentAppraisal(record, account = currentAccount()) {
+  if (!account || !record || !moduleIsAvailableToAccount("public-investment-appraisal", account)) return false;
+  if (["admin", "director"].includes(account.role)) return true;
+  const personId = publicInvestmentAppraisalPersonId(account);
+  const assigned = String(record.leadAppraiserId || "") === personId || (record.assigneeIds || []).includes(personId);
+  if (assigned) return true;
+  return ["manager", "deputy_manager", "section_head"].includes(account.role)
+    && String(record.departmentId || "") === String(account.departmentId || currentDepartmentId() || "");
+}
+
+function canEditPublicInvestmentAppraisal(record, account = currentAccount()) {
+  if (!canViewPublicInvestmentAppraisal(record, account)) return false;
+  if (["admin", "director", "manager", "deputy_manager", "section_head"].includes(account.role)) return true;
+  return String(record.leadAppraiserId || "") === publicInvestmentAppraisalPersonId(account)
+    || (record.assigneeIds || []).includes(publicInvestmentAppraisalPersonId(account));
+}
+
+function canConcludePublicInvestmentAppraisal(record, account = currentAccount()) {
+  if (!account || !record) return false;
+  if (["admin", "director"].includes(account.role)) return true;
+  return ["manager", "deputy_manager"].includes(account.role)
+    && String(record.departmentId || "") === String(account.departmentId || currentDepartmentId() || "");
+}
+
+function canDeletePublicInvestmentAppraisal(record) {
+  return Boolean(record && isAdmin());
+}
+
+function publicInvestmentAppraisalById(id) {
+  return (state.publicInvestmentAppraisals || []).find((item) => item.id === String(id || "")) || null;
+}
+
+function publicInvestmentAppraisalStatusLabel(status) {
+  return {
+    draft: "Đang chuẩn bị",
+    reviewing: "Đang thẩm định",
+    supplement: "Chờ bổ sung",
+    completed: "Đã kết luận",
+    rejected: "Không đạt",
+  }[status] || "Đang chuẩn bị";
+}
+
+function publicInvestmentAppraisalStageLabel(stage) {
+  return {
+    "investment-policy": "Chủ trương đầu tư",
+    "investment-decision": "Quyết định đầu tư",
+    adjustment: "Điều chỉnh dự án",
+  }[stage] || "Quyết định đầu tư";
+}
+
+function publicInvestmentAppraisalCheckLabel(status) {
+  return {
+    pending: "Chưa đánh giá",
+    pass: "Đạt",
+    supplement: "Cần bổ sung",
+    fail: "Không đạt",
+    na: "Không áp dụng",
+  }[status] || "Chưa đánh giá";
+}
+
+function publicInvestmentAppraisalProgress(record) {
+  const checklist = normalizePublicInvestmentAppraisalChecklist(record?.checklist);
+  const applicable = checklist.filter((item) => item.status !== "na");
+  const reviewed = applicable.filter((item) => item.status !== "pending").length;
+  return applicable.length ? Math.round(reviewed / applicable.length * 100) : 100;
+}
+
+function visiblePublicInvestmentAppraisals() {
+  return (state.publicInvestmentAppraisals || []).filter((record) => canViewPublicInvestmentAppraisal(record));
+}
+
+function renderPublicInvestmentAppraisalMetrics(records = visiblePublicInvestmentAppraisals()) {
+  const today = gpmbWorkflowTodayIso();
+  const counts = {
+    total: records.length,
+    reviewing: records.filter((item) => ["draft", "reviewing"].includes(item.status)).length,
+    supplement: records.filter((item) => item.status === "supplement").length,
+    overdue: records.filter((item) => item.dueDate && item.dueDate < today && !["completed", "rejected"].includes(item.status)).length,
+  };
+  const container = byId("publicInvestmentAppraisalMetrics");
+  if (!container) return;
+  container.innerHTML = [
+    ["Tổng hồ sơ", counts.total, "Trong phạm vi tài khoản"],
+    ["Đang xử lý", counts.reviewing, "Chuẩn bị hoặc đang thẩm định"],
+    ["Chờ bổ sung", counts.supplement, "Cần hoàn thiện hồ sơ"],
+    ["Quá thời hạn", counts.overdue, "Chưa có kết luận"],
+  ].map(([label, value, note]) => `<article class="appraisal-metric"><span>${escapeHtml(label)}</span><strong>${value}</strong><small>${escapeHtml(note)}</small></article>`).join("");
+}
+
+function renderPublicInvestmentAppraisals() {
+  const search = normalizeSearchText(byId("publicInvestmentAppraisalSearch")?.value || "");
+  const stage = byId("publicInvestmentAppraisalStageFilter")?.value || "";
+  const status = byId("publicInvestmentAppraisalStatusFilter")?.value || "";
+  const allRecords = visiblePublicInvestmentAppraisals();
+  const records = allRecords.filter((record) => {
+    if (stage && record.stage !== stage) return false;
+    if (status && record.status !== status) return false;
+    if (!search) return true;
+    return normalizeSearchText([record.code, record.title, record.projectName, record.sector, record.authority].join(" ")).includes(search);
+  }).sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
+  renderPublicInvestmentAppraisalMetrics(allRecords);
+  const container = byId("publicInvestmentAppraisalList");
+  if (!container) return;
+  if (!records.length) {
+    container.innerHTML = `<div class="empty-state">${allRecords.length ? "Không có hồ sơ phù hợp bộ lọc." : "Chưa có hồ sơ thẩm định trong phạm vi tài khoản."}</div>`;
+    return;
+  }
+  container.innerHTML = records.slice(0, 150).map((record) => {
+    const progress = publicInvestmentAppraisalProgress(record);
+    const lead = personById(record.leadAppraiserId)?.name || "Chưa phân công";
+    const overdue = record.dueDate && record.dueDate < gpmbWorkflowTodayIso() && !["completed", "rejected"].includes(record.status);
+    return `<article class="appraisal-record">
+      <div class="appraisal-record-main">
+        <div class="appraisal-record-kicker"><strong>${escapeHtml(record.code)}</strong><span class="appraisal-status" data-status="${escapeHtml(record.status)}">${escapeHtml(publicInvestmentAppraisalStatusLabel(record.status))}</span>${overdue ? '<span class="appraisal-status" data-status="rejected">Quá thời hạn</span>' : ""}</div>
+        <h3>${escapeHtml(record.title)}</h3>
+        <div class="appraisal-record-meta"><span>Dự án: ${escapeHtml(record.projectName)}</span><span>${escapeHtml(publicInvestmentAppraisalStageLabel(record.stage))}</span><span>Nhóm ${escapeHtml(record.projectGroup)}</span></div>
+        <div class="appraisal-record-progress"><span>Chủ trì: ${escapeHtml(lead)}</span><span>Hạn: ${formatDate(record.dueDate) || "Chưa đặt"}</span><span>Checklist: ${progress}%</span></div>
+        <div class="appraisal-progress-bar" aria-label="Tiến độ checklist ${progress}%"><span style="width:${progress}%"></span></div>
+      </div>
+      <div class="appraisal-record-actions">
+        <button class="ghost" type="button" data-appraisal-print="${escapeHtml(record.id)}">Báo cáo</button>
+        <button type="button" data-appraisal-open="${escapeHtml(record.id)}">${canEditPublicInvestmentAppraisal(record) ? "Cập nhật" : "Xem"}</button>
+        ${canDeletePublicInvestmentAppraisal(record) ? `<button class="danger ghost" type="button" data-appraisal-delete="${escapeHtml(record.id)}">Xóa</button>` : ""}
+      </div>
+    </article>`;
+  }).join("");
+}
+
+function publicInvestmentAppraisalSelectOptions(record = null) {
+  const projectSelect = byId("publicInvestmentAppraisalProjectId");
+  projectSelect.innerHTML = '<option value="">Chọn dự án</option>' + (state.projectCatalog || [])
+    .slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "vi"))
+    .map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join("");
+  const people = (state.people || []).filter(isActivePerson).slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "vi"));
+  const personOptions = people.map((person) => `<option value="${escapeHtml(person.id)}">${escapeHtml(person.name)}${person.departmentId ? ` · ${escapeHtml(departmentById(person.departmentId)?.name || "")}` : ""}</option>`).join("");
+  byId("publicInvestmentAppraisalLeadId").innerHTML = '<option value="">Chọn người chủ trì</option>' + personOptions;
+  byId("publicInvestmentAppraisalAssigneeIds").innerHTML = personOptions;
+  byId("publicInvestmentAppraisalOpinionPerson").innerHTML = '<option value="">Chọn người xử lý (tùy chọn)</option>' + personOptions;
+  byId("publicInvestmentAppraisalArchiveIds").innerHTML = (state.archiveRecords || [])
+    .slice().sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
+    .slice(0, 300)
+    .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title || item.name || item.code || "Hồ sơ lưu trữ")}</option>`).join("");
+  renderPublicInvestmentAppraisalTaskOptions(record?.projectId || "", record?.taskId || "");
+}
+
+function renderPublicInvestmentAppraisalTaskOptions(projectId = "", selectedId = "") {
+  const select = byId("publicInvestmentAppraisalTaskId");
+  if (!select) return;
+  const options = (state.tasks || [])
+    .filter((task) => !projectId || String(task.projectId || "") === String(projectId))
+    .slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .slice(0, 300);
+  select.innerHTML = '<option value="">Không liên kết công việc</option>' + options.map((task) => `<option value="${escapeHtml(task.id)}">${escapeHtml(task.title || "Công việc")}</option>`).join("");
+  select.value = options.some((task) => task.id === selectedId) ? selectedId : "";
+}
+
+function setPublicInvestmentAppraisalMultipleSelection(selectId, values = []) {
+  const selected = new Set(values || []);
+  Array.from(byId(selectId)?.options || []).forEach((option) => { option.selected = selected.has(option.value); });
+}
+
+function publicInvestmentAppraisalMultipleSelection(selectId) {
+  return Array.from(byId(selectId)?.selectedOptions || []).map((option) => option.value).filter(Boolean);
+}
+
+function renderPublicInvestmentAppraisalChecklist(checklist = []) {
+  const values = new Map(normalizePublicInvestmentAppraisalChecklist(checklist).map((item) => [item.id, item]));
+  const groups = new Map();
+  PUBLIC_INVESTMENT_APPRAISAL_CHECKLIST.forEach((template) => {
+    if (!groups.has(template.group)) groups.set(template.group, []);
+    groups.get(template.group).push(template);
+  });
+  byId("publicInvestmentAppraisalChecklist").innerHTML = [...groups.entries()].map(([group, items]) => `<section class="appraisal-checklist-group"><h4>${escapeHtml(group)}</h4>${items.map((template) => {
+    const value = values.get(template.id) || { status: "pending", note: "" };
+    return `<div class="appraisal-checklist-row" data-appraisal-check="${escapeHtml(template.id)}">
+      <div class="appraisal-checklist-title"><strong>${escapeHtml(template.title)}</strong><small>${escapeHtml(template.basis)}</small></div>
+      <select aria-label="Kết quả ${escapeHtml(template.title)}">${PUBLIC_INVESTMENT_APPRAISAL_CHECK_VALUES.map((status) => `<option value="${status}"${status === value.status ? " selected" : ""}>${escapeHtml(publicInvestmentAppraisalCheckLabel(status))}</option>`).join("")}</select>
+      <input value="${escapeHtml(value.note)}" maxlength="3000" placeholder="Căn cứ, nội dung cần bổ sung..." aria-label="Ghi chú ${escapeHtml(template.title)}">
+    </div>`;
+  }).join("")}</section>`).join("");
+}
+
+function readPublicInvestmentAppraisalChecklist() {
+  return Array.from(byId("publicInvestmentAppraisalChecklist")?.querySelectorAll("[data-appraisal-check]") || []).map((row) => ({
+    id: row.dataset.appraisalCheck,
+    status: row.querySelector("select")?.value || "pending",
+    note: row.querySelector("input")?.value || "",
+  }));
+}
+
+function collectPublicInvestmentAppraisalOpinionDrafts() {
+  publicInvestmentAppraisalOpinionDrafts = Array.from(byId("publicInvestmentAppraisalOpinionList")?.querySelectorAll("[data-appraisal-opinion]") || []).map((row) => {
+    const previous = publicInvestmentAppraisalOpinionDrafts.find((item) => item.id === row.dataset.appraisalOpinion) || {};
+    const status = row.querySelector("select")?.value || "pending";
+    return {
+      ...previous,
+      id: row.dataset.appraisalOpinion,
+      status,
+      response: row.querySelector("textarea")?.value || "",
+      respondedAt: status === "received" ? previous.respondedAt || new Date().toISOString() : "",
+    };
+  });
+  return publicInvestmentAppraisalOpinionDrafts;
+}
+
+function renderPublicInvestmentAppraisalOpinions() {
+  const container = byId("publicInvestmentAppraisalOpinionList");
+  if (!container) return;
+  if (!publicInvestmentAppraisalOpinionDrafts.length) {
+    container.innerHTML = '<div class="empty-state">Chưa có yêu cầu lấy ý kiến.</div>';
+    return;
+  }
+  container.innerHTML = publicInvestmentAppraisalOpinionDrafts.map((item) => `<article class="appraisal-opinion-item" data-appraisal-opinion="${escapeHtml(item.id)}">
+    <div><strong>${escapeHtml(item.unit || personById(item.personId)?.name || "Ý kiến phối hợp")}</strong><p>${item.personId ? `Người xử lý: ${escapeHtml(personById(item.personId)?.name || "Không xác định")} · ` : ""}Hạn phản hồi: ${formatDate(item.dueDate) || "Chưa đặt"}</p></div>
+    <button class="danger ghost" type="button" data-appraisal-opinion-remove="${escapeHtml(item.id)}" aria-label="Xóa yêu cầu lấy ý kiến">Xóa</button>
+    <div class="appraisal-opinion-response"><select aria-label="Trạng thái phản hồi"><option value="pending"${item.status !== "received" ? " selected" : ""}>Đang chờ</option><option value="received"${item.status === "received" ? " selected" : ""}>Đã nhận</option></select><textarea rows="2" maxlength="4000" placeholder="Nội dung phản hồi...">${escapeHtml(item.response || "")}</textarea></div>
+  </article>`).join("");
+}
+
+function renderPublicInvestmentAppraisalHistory(history = []) {
+  const container = byId("publicInvestmentAppraisalHistory");
+  const records = normalizePublicInvestmentAppraisalHistory(history).slice().reverse();
+  container.innerHTML = records.length ? records.map((item) => `<article class="appraisal-history-item"><div><strong>${escapeHtml(item.action || "Cập nhật hồ sơ")}</strong><p>${escapeHtml(item.details || "")} ${item.createdBy ? `· ${escapeHtml(item.createdBy)}` : ""} ${item.createdAt ? `· ${escapeHtml(formatDateTime(item.createdAt))}` : ""}</p></div></article>`).join("") : '<div class="empty-state">Lịch sử sẽ được ghi tự động khi lưu hồ sơ.</div>';
+}
+
+function resetPublicInvestmentAppraisalForm() {
+  byId("publicInvestmentAppraisalForm")?.reset();
+  byId("publicInvestmentAppraisalId").value = "";
+  byId("publicInvestmentAppraisalReceivedDate").value = gpmbWorkflowTodayIso();
+  byId("publicInvestmentAppraisalDueDate").value = addDaysToIsoDate(gpmbWorkflowTodayIso(), 15);
+  const current = currentPerson();
+  if (current?.id) byId("publicInvestmentAppraisalLeadId").value = current.id;
+  publicInvestmentAppraisalOpinionDrafts = [];
+  renderPublicInvestmentAppraisalChecklist([]);
+  renderPublicInvestmentAppraisalOpinions();
+  renderPublicInvestmentAppraisalHistory([]);
+  byId("printPublicInvestmentAppraisal")?.classList.add("is-hidden");
+  byId("publicInvestmentAppraisalDialogTitle").textContent = "Tạo hồ sơ thẩm định";
+}
+
+function openPublicInvestmentAppraisalFormDialog(recordId = "") {
+  if (!publicInvestmentAppraisalOnlineSyncSupported()) {
+    showSystemToast("Máy chủ chưa hỗ trợ phân hệ thẩm định", "Cần triển khai Edge Function và migration phiên bản mới trước khi lưu hồ sơ online.", { tone: "warning", duration: 10000 });
+    return;
+  }
+  const record = publicInvestmentAppraisalById(recordId);
+  if (record && !canViewPublicInvestmentAppraisal(record)) {
+    showSystemToast("Không có quyền xem hồ sơ", "Hồ sơ này nằm ngoài phạm vi tài khoản hiện tại.", { tone: "warning" });
+    return;
+  }
+  if (!record && !canCreatePublicInvestmentAppraisal()) {
+    showSystemToast("Không có quyền tạo hồ sơ", "Chỉ Ban lãnh đạo, Trưởng/Phó phòng hoặc Trưởng bộ phận/Trưởng nhóm được tạo hồ sơ thẩm định.", { tone: "warning" });
+    return;
+  }
+  publicInvestmentAppraisalSelectOptions(record);
+  resetPublicInvestmentAppraisalForm();
+  if (record) {
+    byId("publicInvestmentAppraisalId").value = record.id;
+    byId("publicInvestmentAppraisalProjectId").value = record.projectId;
+    byId("publicInvestmentAppraisalCode").value = record.code;
+    byId("publicInvestmentAppraisalStage").value = record.stage;
+    byId("publicInvestmentAppraisalTitle").value = record.title;
+    byId("publicInvestmentAppraisalGroup").value = record.projectGroup;
+    byId("publicInvestmentAppraisalSector").value = record.sector || "";
+    byId("publicInvestmentAppraisalAuthority").value = record.authority || "";
+    byId("publicInvestmentAppraisalCapitalSource").value = record.capitalSource || "";
+    byId("publicInvestmentAppraisalConstruction").checked = record.hasConstructionComponent === true;
+    byId("publicInvestmentAppraisalReceivedDate").value = record.receivedDate || "";
+    byId("publicInvestmentAppraisalDueDate").value = record.dueDate || "";
+    byId("publicInvestmentAppraisalStatus").value = record.status;
+    byId("publicInvestmentAppraisalLeadId").value = record.leadAppraiserId || "";
+    setPublicInvestmentAppraisalMultipleSelection("publicInvestmentAppraisalAssigneeIds", record.assigneeIds);
+    setPublicInvestmentAppraisalMultipleSelection("publicInvestmentAppraisalArchiveIds", record.archiveRecordIds);
+    renderPublicInvestmentAppraisalTaskOptions(record.projectId, record.taskId);
+    renderPublicInvestmentAppraisalChecklist(record.checklist);
+    publicInvestmentAppraisalOpinionDrafts = normalizePublicInvestmentAppraisalOpinions(record.opinions);
+    renderPublicInvestmentAppraisalOpinions();
+    byId("publicInvestmentAppraisalConclusion").value = record.conclusion || "";
+    renderPublicInvestmentAppraisalHistory(record.history);
+    byId("publicInvestmentAppraisalDialogTitle").textContent = canEditPublicInvestmentAppraisal(record) ? "Cập nhật hồ sơ thẩm định" : "Chi tiết hồ sơ thẩm định";
+    byId("printPublicInvestmentAppraisal").classList.remove("is-hidden");
+  }
+  const editable = !record || canEditPublicInvestmentAppraisal(record);
+  Array.from(byId("publicInvestmentAppraisalForm")?.elements || []).forEach((element) => {
+    if (["printPublicInvestmentAppraisal", "resetPublicInvestmentAppraisal"].includes(element.id)) return;
+    element.disabled = !editable;
+  });
+  byId("savePublicInvestmentAppraisal")?.classList.toggle("is-hidden", !editable);
+  byId("resetPublicInvestmentAppraisal")?.classList.toggle("is-hidden", Boolean(record) || !editable);
+  const coreEditable = !record || canCreatePublicInvestmentAppraisal();
+  if (record && editable && !coreEditable) {
+    [
+      "publicInvestmentAppraisalProjectId",
+      "publicInvestmentAppraisalCode",
+      "publicInvestmentAppraisalStage",
+      "publicInvestmentAppraisalTitle",
+      "publicInvestmentAppraisalGroup",
+      "publicInvestmentAppraisalSector",
+      "publicInvestmentAppraisalAuthority",
+      "publicInvestmentAppraisalCapitalSource",
+      "publicInvestmentAppraisalConstruction",
+      "publicInvestmentAppraisalReceivedDate",
+      "publicInvestmentAppraisalDueDate",
+      "publicInvestmentAppraisalLeadId",
+      "publicInvestmentAppraisalAssigneeIds",
+      "publicInvestmentAppraisalTaskId",
+      "publicInvestmentAppraisalArchiveIds",
+    ].forEach((id) => {
+      const field = byId(id);
+      if (field) field.disabled = true;
+    });
+  }
+  if (record && !canConcludePublicInvestmentAppraisal(record)) {
+    byId("publicInvestmentAppraisalConclusion").readOnly = true;
+  }
+  openModal("publicInvestmentAppraisalDialog");
+}
+
+function closePublicInvestmentAppraisalFormDialog() {
+  closeModal("publicInvestmentAppraisalDialog");
+}
+
+function savePublicInvestmentAppraisal() {
+  if (!publicInvestmentAppraisalOnlineSyncSupported()) return;
+  const existing = publicInvestmentAppraisalById(byId("publicInvestmentAppraisalId").value);
+  if (existing && !canEditPublicInvestmentAppraisal(existing)) return;
+  if (!existing && !canCreatePublicInvestmentAppraisal()) return;
+  const project = projectById(byId("publicInvestmentAppraisalProjectId").value);
+  const receivedDate = byId("publicInvestmentAppraisalReceivedDate").value;
+  const dueDate = byId("publicInvestmentAppraisalDueDate").value;
+  if (!project || !receivedDate || !dueDate || dueDate < receivedDate) {
+    showSystemToast("Chưa thể lưu hồ sơ", "Hãy chọn dự án và kiểm tra thời hạn thẩm định không trước ngày tiếp nhận.", { tone: "warning" });
+    return;
+  }
+  const account = currentAccount();
+  const timestamp = new Date().toISOString();
+  const leadId = byId("publicInvestmentAppraisalLeadId").value;
+  const lead = personById(leadId);
+  const requestedStatus = byId("publicInvestmentAppraisalStatus").value;
+  const conclusionScopeRecord = existing || { departmentId: lead?.departmentId || currentDepartmentId() };
+  if (["completed", "rejected"].includes(requestedStatus) && !canConcludePublicInvestmentAppraisal(conclusionScopeRecord)) {
+    showSystemToast("Chưa thể kết luận hồ sơ", "Chỉ Ban lãnh đạo hoặc Trưởng/Phó phòng phụ trách mới được kết luận hồ sơ thẩm định.", { tone: "warning" });
+    return;
+  }
+  const status = requestedStatus;
+  const action = existing ? "Cập nhật hồ sơ thẩm định" : "Tạo hồ sơ thẩm định";
+  const next = normalizePublicInvestmentAppraisals([{
+    ...(existing || {}),
+    id: existing?.id || `public-appraisal-${crypto.randomUUID?.() || Date.now()}`,
+    projectId: project.id,
+    code: byId("publicInvestmentAppraisalCode").value,
+    title: byId("publicInvestmentAppraisalTitle").value,
+    stage: byId("publicInvestmentAppraisalStage").value,
+    projectGroup: byId("publicInvestmentAppraisalGroup").value,
+    sector: byId("publicInvestmentAppraisalSector").value,
+    authority: byId("publicInvestmentAppraisalAuthority").value,
+    capitalSource: byId("publicInvestmentAppraisalCapitalSource").value,
+    hasConstructionComponent: byId("publicInvestmentAppraisalConstruction").checked,
+    receivedDate,
+    dueDate,
+    status,
+    departmentId: existing?.departmentId || lead?.departmentId || currentDepartmentId(),
+    leadAppraiserId: leadId,
+    assigneeIds: publicInvestmentAppraisalMultipleSelection("publicInvestmentAppraisalAssigneeIds"),
+    taskId: byId("publicInvestmentAppraisalTaskId").value,
+    archiveRecordIds: publicInvestmentAppraisalMultipleSelection("publicInvestmentAppraisalArchiveIds"),
+    checklist: readPublicInvestmentAppraisalChecklist(),
+    opinions: collectPublicInvestmentAppraisalOpinionDrafts(),
+    conclusion: byId("publicInvestmentAppraisalConclusion").value,
+    history: [...(existing?.history || []), { id: `appraisal-history-${Date.now()}`, action, details: `${publicInvestmentAppraisalStatusLabel(status)} · Checklist ${publicInvestmentAppraisalProgress({ checklist: readPublicInvestmentAppraisalChecklist() })}%`, createdAt: timestamp, createdBy: account?.displayName || account?.username || "", createdById: account?.id || "" }],
+    createdAt: existing?.createdAt || timestamp,
+    createdBy: existing?.createdBy || account?.displayName || account?.username || "",
+    createdById: existing?.createdById || account?.id || "",
+    updatedAt: timestamp,
+    updatedBy: account?.displayName || account?.username || "",
+    updatedById: account?.id || "",
+  }], state.projectCatalog)[0];
+  if (!next || !next.code || !next.title || !next.leadAppraiserId) {
+    showSystemToast("Chưa thể lưu hồ sơ", "Mã hồ sơ, nội dung thẩm định và người chủ trì là bắt buộc.", { tone: "warning" });
+    return;
+  }
+  const duplicate = (state.publicInvestmentAppraisals || []).some((item) => item.id !== next.id && normalizeSearchText(item.code) === normalizeSearchText(next.code));
+  if (duplicate) {
+    showSystemToast("Trùng mã hồ sơ", "Mỗi hồ sơ thẩm định phải có một mã riêng.", { tone: "warning" });
+    return;
+  }
+  const index = (state.publicInvestmentAppraisals || []).findIndex((item) => item.id === next.id);
+  if (index >= 0) state.publicInvestmentAppraisals[index] = next;
+  else state.publicInvestmentAppraisals = [...(state.publicInvestmentAppraisals || []), next];
+  logActivity({ action, module: "Thẩm định dự án đầu tư công", targetType: "public-investment-appraisal", targetId: next.id, title: next.title, details: `${next.code} · ${next.projectName}` });
+  saveState();
+  closePublicInvestmentAppraisalFormDialog();
+  renderPublicInvestmentAppraisals();
+  showSystemToast("Đã lưu hồ sơ thẩm định", `${next.code} đã được cập nhật.`, { tone: "success" });
+}
+
+function deletePublicInvestmentAppraisal(id) {
+  const record = publicInvestmentAppraisalById(id);
+  if (!canDeletePublicInvestmentAppraisal(record)) return;
+  if (!window.confirm(`Xóa hồ sơ ${record.code}? Thao tác này không thể hoàn tác.`)) return;
+  state.publicInvestmentAppraisals = (state.publicInvestmentAppraisals || []).filter((item) => item.id !== record.id);
+  registerDeletedId(record.id);
+  logActivity({ action: "Xóa hồ sơ thẩm định", module: "Thẩm định dự án đầu tư công", targetType: "public-investment-appraisal", targetId: record.id, title: record.title, details: record.code });
+  saveState();
+  renderPublicInvestmentAppraisals();
+}
+
+function printPublicInvestmentAppraisalReport(id) {
+  const record = publicInvestmentAppraisalById(id);
+  if (!record || !canViewPublicInvestmentAppraisal(record)) return;
+  const checklist = normalizePublicInvestmentAppraisalChecklist(record.checklist);
+  const reportWindow = window.open("", "_blank", "width=1100,height=800");
+  if (!reportWindow) {
+    showSystemToast("Không thể mở báo cáo", "Trình duyệt đang chặn cửa sổ báo cáo. Hãy cho phép popup rồi thử lại.", { tone: "warning" });
+    return;
+  }
+  reportWindow.document.write(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>${escapeHtml(record.code)} - Báo cáo thẩm định</title><style>body{font-family:Arial,sans-serif;color:#17283a;margin:28px;line-height:1.45}h1{font-size:24px;margin:4px 0}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #b9c9d4;padding-bottom:5px}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;margin-top:18px}.meta div{border-bottom:1px dotted #ccd6dd;padding:4px 0}table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}th,td{border:1px solid #bccbd5;padding:7px;text-align:left;vertical-align:top}th{background:#edf4f6}.result{font-weight:700}.footer{margin-top:30px;text-align:right}@media print{body{margin:12mm}.no-print{display:none}}</style></head><body><p>PHÂN HỆ THẨM ĐỊNH DỰ ÁN ĐẦU TƯ CÔNG</p><h1>BÁO CÁO THẨM ĐỊNH</h1><strong>${escapeHtml(record.title)}</strong><div class="meta"><div>Mã hồ sơ: <b>${escapeHtml(record.code)}</b></div><div>Trạng thái: <b>${escapeHtml(publicInvestmentAppraisalStatusLabel(record.status))}</b></div><div>Dự án: ${escapeHtml(record.projectName)}</div><div>Giai đoạn: ${escapeHtml(publicInvestmentAppraisalStageLabel(record.stage))}</div><div>Nhóm dự án: ${escapeHtml(record.projectGroup)}</div><div>Thời hạn: ${escapeHtml(formatDate(record.dueDate))}</div><div>Chủ trì: ${escapeHtml(personById(record.leadAppraiserId)?.name || "")}</div><div>Nguồn vốn: ${escapeHtml(record.capitalSource || "Chưa cập nhật")}</div></div><h2>Kết quả checklist</h2><table><thead><tr><th>Nhóm</th><th>Nội dung</th><th>Kết quả</th><th>Ghi chú / căn cứ</th></tr></thead><tbody>${PUBLIC_INVESTMENT_APPRAISAL_CHECKLIST.map((template) => { const value = checklist.find((item) => item.id === template.id); return `<tr><td>${escapeHtml(template.group)}</td><td>${escapeHtml(template.title)}</td><td class="result">${escapeHtml(publicInvestmentAppraisalCheckLabel(value?.status))}</td><td>${escapeHtml(value?.note || "")}</td></tr>`; }).join("")}</tbody></table><h2>Kết luận / kiến nghị</h2><p>${escapeHtml(record.conclusion || "Chưa có kết luận.").replace(/\n/g, "<br>")}</p><p class="footer">Người xuất: ${escapeHtml(currentAccount()?.displayName || "")}<br>${escapeHtml(formatDateTime(new Date().toISOString()))}</p></body></html>`);
+  reportWindow.document.close();
+  reportWindow.onafterprint = () => reportWindow.close();
+  window.setTimeout(() => { reportWindow.focus(); reportWindow.print(); }, 350);
+}
+
+function gpmbCasesOnlineSyncSupported() {
+  if (isOfflineFileRuntime()) return true;
+  return usingSupabaseSync() && deploymentVersionAtLeast(sharedSync.deploymentVersion, GPMB_CASES_DEPLOYMENT_VERSION);
 }
 
 function canAdjustGpmbWorkflowTimeline() {
@@ -18635,30 +19594,316 @@ function saveGpmbWorkflowInfo() {
   return true;
 }
 
+function gpmbCaseById(caseId) {
+  return (state.gpmbCases || []).find((item) => item.id === String(caseId || "")) || null;
+}
+
+function canDeleteGpmbCase(record) {
+  return !!record && isAdmin();
+}
+
+function gpmbCaseStatusLabel(status) {
+  return {
+    [GPMB_CASE_STATUS_NEW]: "Mới tiếp nhận",
+    [GPMB_CASE_STATUS_PROCESSING]: "Đang xử lý",
+    [GPMB_CASE_STATUS_BLOCKED]: "Có vướng mắc",
+    [GPMB_CASE_STATUS_COMPLETED]: "Đã bàn giao",
+  }[status] || "Mới tiếp nhận";
+}
+
+function gpmbCaseSubjectTypeLabel(type) {
+  return {
+    household: "Hộ gia đình, cá nhân",
+    organization: "Tổ chức",
+    land_parcel: "Thửa đất độc lập",
+  }[type] || "Hộ gia đình, cá nhân";
+}
+
+function gpmbCaseAreaLabel(value) {
+  const area = gpmbCaseArea(value);
+  return area === "" ? "" : `${new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 }).format(area)} m²`;
+}
+
+function gpmbCaseNoteHistoryHtml(record) {
+  const history = gpmbCaseNoteHistory(record?.noteHistory, record).slice().reverse();
+  if (!history.length) return '<p class="muted">Chưa có lịch sử cập nhật nội dung vướng mắc hoặc ghi chú xử lý.</p>';
+  return `<div class="gpmb-case-note-history-list">${history.map((entry) => `
+    <article class="gpmb-case-note-history-item">
+      <div><strong>${escapeHtml(entry.createdBy || "Không rõ tài khoản")}</strong><time datetime="${escapeHtml(entry.createdAt)}">${escapeHtml(formatDateTime(entry.createdAt) || "Chưa rõ thời điểm")}</time></div>
+      <p>${escapeHtml(entry.note || "Đã xóa nội dung vướng mắc / ghi chú xử lý.")}</p>
+    </article>`).join("")}</div>`;
+}
+
+function renderGpmbCaseNoteHistory(record = null) {
+  const container = byId("gpmbCaseNoteHistory");
+  if (!container) return;
+  container.classList.toggle("is-hidden", !record);
+  container.innerHTML = record
+    ? `<div class="gpmb-case-note-history-head"><strong>Lịch sử nội dung vướng mắc / ghi chú xử lý</strong><span>${gpmbCaseNoteHistory(record.noteHistory, record).length} lần cập nhật</span></div>${gpmbCaseNoteHistoryHtml(record)}`
+    : "";
+}
+
+function gpmbCaseWorkflowOptions(selectedId = "", includeBlank = true) {
+  const workflows = [...(state.gpmbWorkflows || [])]
+    .sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
+  const blank = includeBlank ? `<option value="">${workflows.length ? "Chọn đợt GPMB" : "Chưa có đợt GPMB"}</option>` : "";
+  return blank + workflows.map((workflow) => `<option value="${escapeHtml(workflow.id)}"${workflow.id === selectedId ? " selected" : ""}>${escapeHtml(workflow.title || "Đợt GPMB")} · ${escapeHtml(workflow.projectName || "Chưa gắn dự án")}</option>`).join("");
+}
+
+function renderGpmbCaseFormSteps(selectedStepId = "") {
+  const select = byId("gpmbCaseCurrentStep");
+  const workflow = gpmbWorkflowById(byId("gpmbCaseWorkflowId")?.value);
+  if (!select) return;
+  const steps = gpmbCaseEnabledSteps(workflow);
+  if (!workflow || !steps.length) {
+    select.innerHTML = '<option value="">Chọn đợt GPMB trước</option>';
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = steps.map((step) => `<option value="${escapeHtml(step.id)}">${escapeHtml(gpmbWorkflowStepLabel(step))} · ${escapeHtml(step.title || "")}</option>`).join("");
+  const preferred = steps.some((step) => step.id === selectedStepId)
+    ? selectedStepId
+    : (steps.some((step) => step.id === workflow.currentStepId) ? workflow.currentStepId : steps[0].id);
+  select.value = preferred;
+}
+
+function openGpmbCaseManagerDialog(workflowId = "") {
+  if (!canManageGpmbWorkflows()) return;
+  const filter = byId("gpmbCaseWorkflowFilter");
+  const activeValue = String(workflowId || filter?.value || "");
+  if (filter) {
+    filter.innerHTML = `<option value="">Tất cả đợt GPMB</option>${gpmbCaseWorkflowOptions(activeValue, false)}`;
+    filter.value = activeValue;
+  }
+  renderGpmbCases();
+  const dialog = byId("gpmbCaseManagerDialog");
+  if (!dialog) return;
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+  byId("openGpmbCaseCreate")?.focus();
+}
+
+function closeGpmbCaseManagerDialog() {
+  const dialog = byId("gpmbCaseManagerDialog");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
+}
+
+function openGpmbCaseFormDialog(caseId = "") {
+  if (!canManageGpmbWorkflows()) return;
+  const record = caseId ? gpmbCaseById(caseId) : null;
+  if (caseId && !record) return;
+  const workflows = state.gpmbWorkflows || [];
+  if (!record && !workflows.length) {
+    showSystemToast("Chưa có đợt GPMB", "Khởi tạo một đợt GPMB trước khi thêm hồ sơ theo hộ/thửa đất.", { tone: "warning" });
+    return;
+  }
+  closeGpmbCaseManagerDialog();
+  const form = byId("gpmbCaseForm");
+  form?.reset();
+  byId("gpmbCaseId").value = record?.id || "";
+  byId("gpmbCaseFormTitle").textContent = record ? "Cập nhật hồ sơ GPMB" : "Thêm hồ sơ GPMB";
+  const workflowSelect = byId("gpmbCaseWorkflowId");
+  workflowSelect.innerHTML = gpmbCaseWorkflowOptions(record?.workflowId || "", true);
+  workflowSelect.value = record?.workflowId || "";
+  byId("gpmbCaseCode").value = record?.caseCode || "";
+  byId("gpmbCaseSubjectType").value = record?.subjectType || "household";
+  byId("gpmbCaseSubjectName").value = record?.subjectName || "";
+  byId("gpmbCaseRepresentative").value = record?.representative || "";
+  byId("gpmbCasePhone").value = record?.phone || "";
+  byId("gpmbCaseMapSheet").value = record?.mapSheet || "";
+  byId("gpmbCaseParcelNumber").value = record?.parcelNumber || "";
+  byId("gpmbCaseArea").value = record?.areaM2 ?? "";
+  byId("gpmbCaseAddress").value = record?.address || "";
+  byId("gpmbCaseStatus").value = record?.status || GPMB_CASE_STATUS_NEW;
+  byId("gpmbCaseNote").value = record?.note || "";
+  renderGpmbCaseNoteHistory(record);
+  renderGpmbCaseFormSteps(record?.currentStepId || "");
+  const dialog = byId("gpmbCaseFormDialog");
+  dialog.classList.remove("is-hidden");
+  dialog.setAttribute("aria-hidden", "false");
+  byId("gpmbCaseCode")?.focus();
+}
+
+function closeGpmbCaseFormDialog() {
+  const dialog = byId("gpmbCaseFormDialog");
+  dialog?.classList.add("is-hidden");
+  dialog?.setAttribute("aria-hidden", "true");
+  if (canManageGpmbWorkflows()) openGpmbCaseManagerDialog();
+}
+
+function saveGpmbCase() {
+  if (!canManageGpmbWorkflows()) return false;
+  if (!gpmbCasesOnlineSyncSupported()) {
+    showSystemToast("Máy chủ cần cập nhật", "Máy chủ online chưa hỗ trợ Hồ sơ GPMB theo hộ/thửa. Chưa có thay đổi nào được lưu; vui lòng triển khai đúng phiên bản máy chủ rồi thử lại.", { tone: "warning" });
+    return false;
+  }
+  const existing = gpmbCaseById(byId("gpmbCaseId")?.value);
+  const workflow = gpmbWorkflowById(byId("gpmbCaseWorkflowId")?.value);
+  const caseCode = gpmbCasePlainText(byId("gpmbCaseCode")?.value, 80).toUpperCase();
+  const subjectName = gpmbCasePlainText(byId("gpmbCaseSubjectName")?.value, 180);
+  const requestedArea = String(byId("gpmbCaseArea")?.value || "").trim();
+  const areaM2 = gpmbCaseArea(requestedArea);
+  if (!workflow || !caseCode || !subjectName) {
+    showSystemToast("Thiếu thông tin", "Chọn đợt GPMB, nhập mã hồ sơ và tên hộ dân hoặc đối tượng trước khi lưu.", { tone: "warning" });
+    return false;
+  }
+  if (requestedArea && areaM2 === "") {
+    showSystemToast("Diện tích chưa hợp lệ", "Diện tích phải là số từ 0 đến 1.000.000.000 m².", { tone: "warning" });
+    byId("gpmbCaseArea")?.focus();
+    return false;
+  }
+  const currentStepId = String(byId("gpmbCaseCurrentStep")?.value || "");
+  if (!gpmbCaseEnabledSteps(workflow).some((step) => step.id === currentStepId)) {
+    showSystemToast("Bước xử lý chưa hợp lệ", "Chọn một bước đang áp dụng trong đợt GPMB trước khi lưu.", { tone: "warning" });
+    return false;
+  }
+  const duplicate = (state.gpmbCases || []).find((item) => item.id !== existing?.id
+    && String(item.workflowId || "") === workflow.id
+    && String(item.caseCode || "").localeCompare(caseCode, "vi", { sensitivity: "accent" }) === 0);
+  if (duplicate) {
+    showSystemToast("Trùng mã hồ sơ", `Mã ${caseCode} đã được dùng cho ${duplicate.subjectName || "một hồ sơ khác"} trong đợt này.`, { tone: "warning" });
+    byId("gpmbCaseCode")?.focus();
+    return false;
+  }
+  const note = gpmbCasePlainText(byId("gpmbCaseNote")?.value, 4000, true);
+  const noteHistory = gpmbCaseNoteHistory(existing?.noteHistory, existing);
+  if (note !== gpmbCasePlainText(existing?.note, 4000, true)) {
+    const actor = currentActorInfo();
+    noteHistory.push({
+      id: uid("gpmb-case-note"),
+      note,
+      createdAt: new Date().toISOString(),
+      createdBy: actor.name,
+      createdById: actor.id,
+    });
+  }
+  const next = applyRecordAudit({
+    ...(existing || {}),
+    id: existing?.id || uid("gpmb-case"),
+    workflowId: workflow.id,
+    projectId: workflow.projectId || "",
+    projectName: workflow.projectName || "",
+    caseCode,
+    subjectType: String(byId("gpmbCaseSubjectType")?.value || "household"),
+    subjectName,
+    representative: gpmbCasePlainText(byId("gpmbCaseRepresentative")?.value, 120),
+    phone: gpmbCasePlainText(byId("gpmbCasePhone")?.value, 30),
+    mapSheet: gpmbCasePlainText(byId("gpmbCaseMapSheet")?.value, 80),
+    parcelNumber: gpmbCasePlainText(byId("gpmbCaseParcelNumber")?.value, 120),
+    areaM2,
+    address: gpmbCasePlainText(byId("gpmbCaseAddress")?.value, 260),
+    currentStepId,
+    status: GPMB_CASE_STATUS_VALUES.includes(String(byId("gpmbCaseStatus")?.value || ""))
+      ? String(byId("gpmbCaseStatus")?.value)
+      : GPMB_CASE_STATUS_NEW,
+    note,
+    noteHistory: noteHistory.slice(-GPMB_CASE_NOTE_HISTORY_LIMIT),
+  }, existing);
+  const index = (state.gpmbCases || []).findIndex((item) => item.id === next.id);
+  if (index >= 0) state.gpmbCases[index] = next;
+  else state.gpmbCases = [...(state.gpmbCases || []), next];
+  logActivity({
+    action: existing ? "Cập nhật hồ sơ GPMB" : "Thêm hồ sơ GPMB",
+    module: "Công việc",
+    targetType: "gpmb-case",
+    targetId: next.id,
+    details: `${next.caseCode} · ${next.subjectName} · ${workflow.title}`,
+  });
+  saveState();
+  renderAll();
+  closeGpmbCaseFormDialog();
+  openGpmbCaseManagerDialog(workflow.id);
+  showSystemToast(existing ? "Đã cập nhật hồ sơ" : "Đã thêm hồ sơ", `${next.caseCode} đã được gắn với ${workflow.title}.`, { tone: "success" });
+  return true;
+}
+
+function deleteGpmbCase(caseId) {
+  const record = gpmbCaseById(caseId);
+  if (!record || !canDeleteGpmbCase(record)) return false;
+  if (!gpmbCasesOnlineSyncSupported()) {
+    showSystemToast("Máy chủ cần cập nhật", "Máy chủ online chưa hỗ trợ xóa Hồ sơ GPMB theo hộ/thửa. Chưa có thay đổi nào được lưu.", { tone: "warning" });
+    return false;
+  }
+  if (!confirm(`Xóa hồ sơ ${record.caseCode} của ${record.subjectName || "đối tượng chưa rõ"}? Dữ liệu sẽ bị xóa trên toàn hệ thống.`)) return false;
+  registerDeletedId(record.id);
+  state.gpmbCases = (state.gpmbCases || []).filter((item) => item.id !== record.id);
+  logActivity({
+    action: "Xóa hồ sơ GPMB",
+    module: "Công việc",
+    targetType: "gpmb-case",
+    targetId: record.id,
+    details: `${record.caseCode} · ${record.subjectName || "Chưa rõ"}`,
+  });
+  saveState();
+  renderAll();
+  renderGpmbCases();
+  showSystemToast("Đã xóa hồ sơ", `${record.caseCode} không còn trong đợt GPMB.`, { tone: "success" });
+  return true;
+}
+
+function renderGpmbCases() {
+  const list = byId("gpmbCaseList");
+  const summary = byId("gpmbCaseSummary");
+  if (!list || !canManageGpmbWorkflows()) return;
+  const workflowId = String(byId("gpmbCaseWorkflowFilter")?.value || "");
+  const status = String(byId("gpmbCaseStatusFilter")?.value || "");
+  const search = String(byId("gpmbCaseSearch")?.value || "").trim().toLocaleLowerCase("vi");
+  const allRecords = state.gpmbCases || [];
+  const filtered = allRecords
+    .filter((record) => !workflowId || record.workflowId === workflowId)
+    .filter((record) => !status || record.status === status)
+    .filter((record) => !search || [record.caseCode, record.subjectName, record.representative, record.mapSheet, record.parcelNumber, record.address, record.projectName]
+      .some((value) => String(value || "").toLocaleLowerCase("vi").includes(search)))
+    .sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
+  const scope = workflowId ? allRecords.filter((record) => record.workflowId === workflowId) : allRecords;
+  const blockedCount = scope.filter((record) => record.status === GPMB_CASE_STATUS_BLOCKED).length;
+  const completedCount = scope.filter((record) => record.status === GPMB_CASE_STATUS_COMPLETED).length;
+  if (summary) summary.innerHTML = `<span><strong>${scope.length}</strong>Tổng hồ sơ</span><span><strong>${blockedCount}</strong>Có vướng mắc</span><span><strong>${completedCount}</strong>Đã bàn giao</span><span><strong>${filtered.length}</strong>Đang hiển thị</span>`;
+  list.classList.toggle("empty-state", !filtered.length);
+  list.innerHTML = filtered.length ? filtered.map((record) => {
+    const workflow = gpmbWorkflowById(record.workflowId);
+    const step = gpmbCaseEnabledSteps(workflow).find((item) => item.id === record.currentStepId);
+    const land = [record.mapSheet ? `Tờ ${record.mapSheet}` : "", record.parcelNumber ? `Thửa ${record.parcelNumber}` : "", gpmbCaseAreaLabel(record.areaM2)].filter(Boolean).join(" · ");
+    const note = String(record.note || "").split("\n").find(Boolean) || "Chưa ghi nhận vướng mắc hoặc nội dung xử lý.";
+    return `<article class="gpmb-case-card">
+      <div class="gpmb-case-card-head"><div><span class="gpmb-case-code">${escapeHtml(record.caseCode || "Chưa cấp mã")}</span><h3>${escapeHtml(record.subjectName || "Đối tượng chưa cập nhật")}</h3><p>${escapeHtml(gpmbCaseSubjectTypeLabel(record.subjectType))}${record.representative ? ` · ${escapeHtml(record.representative)}` : ""}</p></div><span class="gpmb-case-status is-${escapeHtml(record.status || GPMB_CASE_STATUS_NEW)}">${escapeHtml(gpmbCaseStatusLabel(record.status))}</span></div>
+      <div class="gpmb-case-card-grid"><span><b>Đợt GPMB</b>${escapeHtml(workflow?.title || "Không còn đợt liên kết")}</span><span><b>Hộ/thửa đất</b>${escapeHtml(land || "Chưa cập nhật tờ, thửa, diện tích")}</span><span><b>Bước xử lý</b>${escapeHtml(step ? `${gpmbWorkflowStepLabel(step)} · ${step.title}` : "Chưa xác định")}</span><span><b>Cập nhật</b>${escapeHtml(formatDateTime(record.updatedAt) || "Chưa rõ")}</span></div>
+      <p class="gpmb-case-card-note">${escapeHtml(note)}</p>
+      <div class="gpmb-case-card-actions"><button class="ghost" type="button" data-edit-gpmb-case="${escapeHtml(record.id)}">Cập nhật</button>${canDeleteGpmbCase(record) ? `<button class="ghost danger-action" type="button" data-delete-gpmb-case="${escapeHtml(record.id)}">Xóa</button>` : ""}</div>
+    </article>`;
+  }).join("") : "Chưa có hồ sơ phù hợp với bộ lọc.";
+}
+
 function deleteGpmbWorkflow(workflowId) {
   const workflow = gpmbWorkflowById(workflowId);
   if (!workflow || !canDeleteGpmbWorkflow(workflow)) return false;
   const linkedTasks = (state.tasks || []).filter((task) => String(task.gpmbWorkflowId || "") === workflow.id);
+  const linkedCases = (state.gpmbCases || []).filter((record) => String(record.workflowId || "") === workflow.id);
   const completedSteps = (workflow.steps || []).filter((step) => step.status === GPMB_STEP_COMPLETED).length;
-  const message = `Xóa đợt GPMB "${workflow.title}"? ${linkedTasks.length} công việc GPMB đã sinh sẽ bị xóa cùng đợt này.${completedSteps ? ` Đợt đã có ${completedSteps} bước hoàn thành.` : ""} Dữ liệu sẽ bị xóa trên toàn hệ thống.`;
+  const message = `Xóa đợt GPMB "${workflow.title}"? ${linkedTasks.length} công việc GPMB và ${linkedCases.length} hồ sơ hộ/thửa liên quan sẽ bị xóa cùng đợt này.${completedSteps ? ` Đợt đã có ${completedSteps} bước hoàn thành.` : ""} Dữ liệu sẽ bị xóa trên toàn hệ thống.`;
   if (!confirm(message)) return false;
   registerDeletedId(workflow.id);
   linkedTasks.forEach((task) => {
     registerDeletedId(task.id);
     syncPersonalEvaluationTaskScoresForTask(null, task);
   });
+  linkedCases.forEach((record) => registerDeletedId(record.id));
   state.gpmbWorkflows = (state.gpmbWorkflows || []).filter((item) => item.id !== workflow.id);
   state.tasks = (state.tasks || []).filter((task) => String(task.gpmbWorkflowId || "") !== workflow.id);
+  state.gpmbCases = (state.gpmbCases || []).filter((record) => String(record.workflowId || "") !== workflow.id);
   logActivity({
     action: "Xóa đợt GPMB",
     module: "Công việc",
     targetType: "gpmb-workflow",
     targetId: workflow.id,
-    details: `${workflow.title} · ${workflow.projectName || "Chưa gắn dự án"} · xóa kèm ${linkedTasks.length} công việc GPMB.`,
+    details: `${workflow.title} · ${workflow.projectName || "Chưa gắn dự án"} · xóa kèm ${linkedTasks.length} công việc GPMB và ${linkedCases.length} hồ sơ hộ/thửa.`,
   });
   saveState();
   renderAll();
-  showSystemToast("Đã xóa đợt GPMB", `${linkedTasks.length} công việc GPMB liên quan cũng đã được xóa.`, { tone: "success" });
+  showSystemToast("Đã xóa đợt GPMB", `${linkedTasks.length} công việc và ${linkedCases.length} hồ sơ hộ/thửa liên quan cũng đã được xóa.`, { tone: "success" });
   return true;
 }
 
@@ -18851,11 +20096,12 @@ function renderGpmbWorkflows() {
   const canAdjustTimeline = canAdjustGpmbWorkflowTimeline();
   const canEditInfo = canEditGpmbWorkflowInfo();
   byId("openGpmbWorkflowCreate")?.classList.toggle("is-hidden", !canManage);
+  byId("openGpmbCaseManager")?.classList.toggle("is-hidden", !canManage);
   if (summary) {
     const activeCount = workflows.filter((workflow) => workflow.status === GPMB_WORKFLOW_ACTIVE).length;
     summary.textContent = workflows.length
-      ? `16 bước theo quy trình đã phê duyệt · ${activeCount} đợt đang thực hiện trên ${workflows.length} đợt GPMB.`
-      : "16 bước theo quy trình đã phê duyệt · Chưa có đợt GPMB nào được khởi tạo.";
+      ? `${GPMB_WORKFLOW_TEMPLATE.length} bước theo quy trình đã phê duyệt · ${activeCount} đợt đang thực hiện trên ${workflows.length} đợt GPMB.`
+      : `${GPMB_WORKFLOW_TEMPLATE.length} bước theo quy trình đã phê duyệt · Chưa có đợt GPMB nào được khởi tạo.`;
   }
   if (notice) notice.textContent = canManage
     ? `${canAdjustTimeline ? "Bạn có thể điều chỉnh mốc thời hạn của bước chưa phát sinh. " : "Bạn có thể điều chỉnh phân công, phối hợp và nhánh nhiệm vụ; mốc thời hạn do Ban lãnh đạo hoặc Quản trị viên quyết định. "}${canEditInfo ? "Ban lãnh đạo và Quản trị viên có thể sửa tên đợt, dự án liên quan. " : ""}Bước sau chỉ xuất hiện sau khi bước trước hoàn thành và được duyệt Đạt.`
@@ -18866,10 +20112,12 @@ function renderGpmbWorkflows() {
     const task = current?.taskId ? (state.tasks || []).find((item) => item.id === current.taskId) : null;
     const completed = (workflow.steps || []).filter((step) => step.status === GPMB_STEP_COMPLETED).length;
     const canDelete = canDeleteGpmbWorkflow(workflow);
+    const workflowCases = (state.gpmbCases || []).filter((record) => record.workflowId === workflow.id);
+    const blockedCases = workflowCases.filter((record) => record.status === GPMB_CASE_STATUS_BLOCKED).length;
     return `<article class="gpmb-workflow-card">
-      <div class="gpmb-workflow-card-main"><div><span class="eyebrow">${escapeHtml(workflow.projectName || "Chưa gắn dự án")}</span><h4>${escapeHtml(workflow.title)}</h4><p>${escapeHtml(gpmbWorkflowStatusLabel(workflow.status))} · ${completed}/${workflow.steps.length} bước đã hoàn thành</p></div><span class="badge ${workflow.status === GPMB_WORKFLOW_COMPLETED ? "is-complete" : "is-active"}">${escapeHtml(gpmbWorkflowStatusLabel(workflow.status))}</span></div>
+      <div class="gpmb-workflow-card-main"><div><span class="eyebrow">${escapeHtml(workflow.projectName || "Chưa gắn dự án")}</span><h4>${escapeHtml(workflow.title)}</h4><p>${escapeHtml(gpmbWorkflowStatusLabel(workflow.status))} · ${completed}/${workflow.steps.length} bước đã hoàn thành · ${workflowCases.length} hồ sơ hộ/thửa${blockedCases ? ` · ${blockedCases} vướng mắc` : ""}</p></div><span class="badge ${workflow.status === GPMB_WORKFLOW_COMPLETED ? "is-complete" : "is-active"}">${escapeHtml(gpmbWorkflowStatusLabel(workflow.status))}</span></div>
       <div class="gpmb-workflow-card-current"><strong>${current ? `${gpmbWorkflowStepLabel(current)} · ${current.title}` : "Đã hoàn tất quy trình"}</strong><span>${current ? `${formatDate(current.startDate)} - ${formatDate(current.due)} · ${current.ownerName || "Chưa phân công"}${gpmbWorkflowCollaboratorNames(current.collaboratorIds).length ? ` · phối hợp ${gpmbWorkflowCollaboratorNames(current.collaboratorIds).join(", ")}` : ""}` : ""}</span></div>
-      <div class="gpmb-workflow-card-actions"><button class="ghost" type="button" data-open-gpmb-workflow="${escapeHtml(workflow.id)}">Xem quy trình</button>${canEditInfo ? `<button class="ghost" type="button" data-edit-gpmb-workflow="${escapeHtml(workflow.id)}">Sửa đợt</button>` : ""}${task ? `<button class="primary" type="button" data-open-gpmb-task="${escapeHtml(task.id)}">Mở công việc hiện tại</button>` : ""}${canDelete ? `<button class="ghost danger-action" type="button" data-delete-gpmb-workflow="${escapeHtml(workflow.id)}">Xóa đợt</button>` : ""}</div>
+      <div class="gpmb-workflow-card-actions"><button class="ghost" type="button" data-open-gpmb-workflow="${escapeHtml(workflow.id)}">Xem quy trình</button><button class="ghost" type="button" data-open-gpmb-cases-workflow="${escapeHtml(workflow.id)}">Hồ sơ hộ/thửa</button>${canEditInfo ? `<button class="ghost" type="button" data-edit-gpmb-workflow="${escapeHtml(workflow.id)}">Sửa đợt</button>` : ""}${task ? `<button class="primary" type="button" data-open-gpmb-task="${escapeHtml(task.id)}">Mở công việc hiện tại</button>` : ""}${canDelete ? `<button class="ghost danger-action" type="button" data-delete-gpmb-workflow="${escapeHtml(workflow.id)}">Xóa đợt</button>` : ""}</div>
     </article>`;
   }).join("") : "Chưa có đợt GPMB nào được khởi tạo.";
 }
@@ -19965,6 +21213,15 @@ function renderAll(options = {}) {
   byId("evalPeriod").value = state.activePeriod;
   byId("deptEvalPeriod").value = state.activePeriod;
   renderActiveView(viewId, { animateDashboard: options.animateDashboard === true });
+  if (canManageGpmbWorkflows() && !byId("gpmbCaseManagerDialog")?.classList.contains("is-hidden")) {
+    const filter = byId("gpmbCaseWorkflowFilter");
+    const selectedWorkflowId = String(filter?.value || "");
+    if (filter) {
+      filter.innerHTML = `<option value="">Tất cả đợt GPMB</option>${gpmbCaseWorkflowOptions(selectedWorkflowId, false)}`;
+      filter.value = selectedWorkflowId;
+    }
+    renderGpmbCases();
+  }
   renderHelpSupportBadge();
   renderBirthdayCelebration();
   if (typeof checkCalendarReminders === "function") checkCalendarReminders();
@@ -20507,8 +21764,68 @@ document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
 });
 
+runWhenDocumentReady(() => {
+  const openButton = byId("openPublicInvestmentAppraisalForm");
+  if (!openButton) return;
+  openButton.onclick = (event) => {
+    event.preventDefault();
+    openPublicInvestmentAppraisalFormDialog();
+  };
+});
+byId("closePublicInvestmentAppraisalForm")?.addEventListener("click", closePublicInvestmentAppraisalFormDialog);
+byId("publicInvestmentAppraisalDialog")?.addEventListener("click", (event) => {
+  if (event.target === byId("publicInvestmentAppraisalDialog")) closePublicInvestmentAppraisalFormDialog();
+});
+byId("publicInvestmentAppraisalForm")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  savePublicInvestmentAppraisal();
+});
+byId("resetPublicInvestmentAppraisal")?.addEventListener("click", () => {
+  publicInvestmentAppraisalSelectOptions();
+  resetPublicInvestmentAppraisalForm();
+});
+byId("printPublicInvestmentAppraisal")?.addEventListener("click", () => printPublicInvestmentAppraisalReport(byId("publicInvestmentAppraisalId")?.value));
+byId("publicInvestmentAppraisalProjectId")?.addEventListener("change", (event) => renderPublicInvestmentAppraisalTaskOptions(event.target.value, ""));
+byId("addPublicInvestmentAppraisalOpinion")?.addEventListener("click", () => {
+  collectPublicInvestmentAppraisalOpinionDrafts();
+  const unit = byId("publicInvestmentAppraisalOpinionUnit").value.trim();
+  const personId = byId("publicInvestmentAppraisalOpinionPerson").value;
+  const dueDate = byId("publicInvestmentAppraisalOpinionDue").value;
+  if (!unit && !personId) {
+    showSystemToast("Chưa đủ thông tin", "Nhập đơn vị hoặc chọn người cần lấy ý kiến.", { tone: "warning" });
+    return;
+  }
+  publicInvestmentAppraisalOpinionDrafts.push({ id: `appraisal-opinion-${crypto.randomUUID?.() || Date.now()}`, unit, personId, dueDate, status: "pending", response: "", requestedAt: new Date().toISOString(), respondedAt: "" });
+  byId("publicInvestmentAppraisalOpinionUnit").value = "";
+  byId("publicInvestmentAppraisalOpinionPerson").value = "";
+  byId("publicInvestmentAppraisalOpinionDue").value = "";
+  renderPublicInvestmentAppraisalOpinions();
+});
+byId("publicInvestmentAppraisalOpinionList")?.addEventListener("click", (event) => {
+  const removeButton = event.target.closest("[data-appraisal-opinion-remove]");
+  if (!removeButton) return;
+  collectPublicInvestmentAppraisalOpinionDrafts();
+  publicInvestmentAppraisalOpinionDrafts = publicInvestmentAppraisalOpinionDrafts.filter((item) => item.id !== removeButton.dataset.appraisalOpinionRemove);
+  renderPublicInvestmentAppraisalOpinions();
+});
+byId("publicInvestmentAppraisalList")?.addEventListener("click", (event) => {
+  const openButton = event.target.closest("[data-appraisal-open]");
+  if (openButton) return openPublicInvestmentAppraisalFormDialog(openButton.dataset.appraisalOpen);
+  const printButton = event.target.closest("[data-appraisal-print]");
+  if (printButton) return printPublicInvestmentAppraisalReport(printButton.dataset.appraisalPrint);
+  const deleteButton = event.target.closest("[data-appraisal-delete]");
+  if (deleteButton) deletePublicInvestmentAppraisal(deleteButton.dataset.appraisalDelete);
+});
+["publicInvestmentAppraisalSearch", "publicInvestmentAppraisalStageFilter", "publicInvestmentAppraisalStatusFilter"].forEach((id) => {
+  byId(id)?.addEventListener(id.endsWith("Search") ? "input" : "change", renderPublicInvestmentAppraisals);
+});
+
 byId("openGpmbWorkflowManager")?.addEventListener("click", openGpmbWorkflowManagerDialog);
 byId("closeGpmbWorkflowManager")?.addEventListener("click", closeGpmbWorkflowManagerDialog);
+byId("openGpmbCaseManager")?.addEventListener("click", () => {
+  closeGpmbWorkflowManagerDialog();
+  openGpmbCaseManagerDialog();
+});
 byId("openGpmbWorkflowCreate")?.addEventListener("click", openGpmbWorkflowCreateDialog);
 byId("closeGpmbWorkflowCreate")?.addEventListener("click", closeGpmbWorkflowCreateDialog);
 byId("resetGpmbWorkflowCreate")?.addEventListener("click", resetGpmbWorkflowCreateForm);
@@ -20549,6 +21866,34 @@ byId("gpmbWorkflowDetailForm")?.addEventListener("submit", (event) => {
   event.preventDefault();
   saveGpmbWorkflowDetail();
 });
+byId("closeGpmbCaseManager")?.addEventListener("click", closeGpmbCaseManagerDialog);
+byId("openGpmbCaseCreate")?.addEventListener("click", () => openGpmbCaseFormDialog());
+byId("closeGpmbCaseForm")?.addEventListener("click", closeGpmbCaseFormDialog);
+byId("cancelGpmbCaseForm")?.addEventListener("click", closeGpmbCaseFormDialog);
+byId("gpmbCaseManagerDialog")?.addEventListener("click", (event) => {
+  if (event.target === byId("gpmbCaseManagerDialog")) closeGpmbCaseManagerDialog();
+});
+byId("gpmbCaseFormDialog")?.addEventListener("click", (event) => {
+  if (event.target === byId("gpmbCaseFormDialog")) closeGpmbCaseFormDialog();
+});
+byId("gpmbCaseWorkflowId")?.addEventListener("change", () => renderGpmbCaseFormSteps());
+byId("gpmbCaseForm")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveGpmbCase();
+});
+["gpmbCaseWorkflowFilter", "gpmbCaseStatusFilter"].forEach((id) => {
+  byId(id)?.addEventListener("change", renderGpmbCases);
+});
+byId("gpmbCaseSearch")?.addEventListener("input", debounce(renderGpmbCases, 120));
+byId("gpmbCaseList")?.addEventListener("click", (event) => {
+  const deleteButton = event.target.closest("[data-delete-gpmb-case]");
+  if (deleteButton) {
+    deleteGpmbCase(deleteButton.dataset.deleteGpmbCase);
+    return;
+  }
+  const editButton = event.target.closest("[data-edit-gpmb-case]");
+  if (editButton) openGpmbCaseFormDialog(editButton.dataset.editGpmbCase);
+});
 byId("openGpmbWorkflowCurrentTask")?.addEventListener("click", () => {
   const workflow = gpmbWorkflowById(byId("gpmbWorkflowDetailId")?.value);
   const taskId = gpmbWorkflowCurrentStep(workflow)?.taskId;
@@ -20557,6 +21902,12 @@ byId("openGpmbWorkflowCurrentTask")?.addEventListener("click", () => {
   openTaskDetailDialog(taskId);
 });
 byId("gpmbWorkflowList")?.addEventListener("click", (event) => {
+  const casesButton = event.target.closest("[data-open-gpmb-cases-workflow]");
+  if (casesButton) {
+    closeGpmbWorkflowManagerDialog();
+    openGpmbCaseManagerDialog(casesButton.dataset.openGpmbCasesWorkflow);
+    return;
+  }
   const editWorkflowButton = event.target.closest("[data-edit-gpmb-workflow]");
   if (editWorkflowButton) {
     openGpmbWorkflowEditDialog(editWorkflowButton.dataset.editGpmbWorkflow);
@@ -22801,6 +24152,7 @@ byId("taskDetailActions").addEventListener("click", (event) => {
     return;
   }
   if (action === "report" && canUpdateTaskProgress(task)) {
+    if (window.virtualAssistantSelectProgressTask?.(taskId) === true) return;
     openTaskDetailInlineEditor(
       taskId,
       isAssignedTask(task) ? "assignmentTaskResponseNote" : "taskNote",
@@ -22916,6 +24268,7 @@ byId("taskBoard").addEventListener("click", (event) => {
   if (respondId) {
     const task = state.tasks.find((item) => item.id === respondId);
     if (!task || !canUpdateTaskProgress(task)) return;
+    if (window.virtualAssistantSelectProgressTask?.(respondId) === true) return;
     if (isAssignedTask(task)) {
       renderTaskInboxDialog();
       byId("taskInboxDialog").classList.remove("is-hidden");

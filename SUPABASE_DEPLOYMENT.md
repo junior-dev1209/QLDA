@@ -30,7 +30,11 @@ Quy trinh GPMB duoc dua hoan toan vao muc **Cong viec** va lien ket truc tiep vo
 
 Edge Function la noi dieu hanh trang thai: chi khi cong viec cua buoc dang thuc hien da chuyen `Hoan thanh` va duoc danh gia `Dat` (`completionReviewStatus = passed`), may chu moi danh dau buoc do hoan thanh va sinh duy nhat mot cong viec cho buoc ke tiep. Ma cong viec duoc dinh danh theo dot va buoc, nen dong bo lai, thao tac dong thoi hoac tai lai trinh duyet khong the tao trung cong viec. Nhap nguoi phoi hop dung tich chon, khong phu thuoc Ctrl. Nhanh co the bat/tat khi van con buoc chua phat sinh; nhiem vu da phat sinh duoc giu lai de bao toan lich su. Chi Ban giam doc va Admin duoc dieu chinh thoi han cua buoc chua phat sinh; Admin co quyen dieu chinh cao nhat.
 
-Migration `20261007000000_gpmb_workflows.sql` tao bang `gpmb_workflows` bat RLS va khong cap quyen truy cap truc tiep. Bang nay la ban phan chieu cua lenh duoc Edge Function chap nhan; `kpi_shared_state` duoc giu tam thoi de tuong thich voi du lieu hien co. Khi cap nhat ban nay, bat buoc chay `Deploy-KpiSync.cmd` de day ca migration va Function, sau do kiem tra `action=status` tra `gpmbWorkflows: true` va `deploymentVersion: 2026.10.09.1`.
+Migration `20261007000000_gpmb_workflows.sql` tao bang `gpmb_workflows` bat RLS va khong cap quyen truy cap truc tiep. Bang nay la ban phan chieu cua lenh duoc Edge Function chap nhan; `kpi_shared_state` duoc giu tam thoi de tuong thich voi du lieu hien co. Khi cap nhat ban nay, bat buoc chay `Deploy-KpiSync.cmd` de day ca migration va Function, sau do kiem tra `action=status` tra `gpmbWorkflows: true` va `deploymentVersion: 2026.11.06.1`.
+
+Tu phien ban `2026.11.05.1`, cac thiet lap he thong duoc luu trong collection `systemSettings` theo tung khoa doc lap. `moduleSettings`, `lunaEnabled`, `theme` va cac quyen cau hinh van duoc duy tri nhu truong chieu nguoc de tuong thich voi giao dien cu. Khi hai thiet bi sua cac khoa khac nhau, Edge Function tu dong gop; chi tu choi khoa trung nhau va tra ve ten thiet lap, phien ban, thoi diem, tai khoan va thiet bi da cap nhat.
+
+Phien ban giao dien `3.4.129` cho phep nguoi dung chu dong bat nghe nen “Luna oi” tren HTTPS khi trinh duyet cung cap `SpeechRecognition`; Chrome va Edge se tu dong khoi dong lai phien nghe khi trinh duyet ket thuc mot luot. Tab an se dung micro, va Safari se hien huong dan dung nut “Noi” neu thiet bi khong cung cap nghe nen. Thiet lap “Bat gio yen lang” van luu theo tung tai khoan tren thiet bi va duoc ap dung ngay cho thong bao chu dong.
 
 ## Ban 2026.10.02.1: trung tam thong bao
 
@@ -67,7 +71,7 @@ Moi tai khoan online chi co mot phien hop le. Khi dang nhap tren thiet bi moi, m
 .\tools\supabase-cli\supabase.exe link --project-ref hqquobfaccxnydeyvioe
 ```
 
-Tep `Supabase-Login.cmd` mo rieng luong dang nhap va giu cua so lai de nhap ma xac nhan; no khong chay migration hay deploy. Script dung Supabase CLI da duoc dat trong `tools\supabase-cli`, khong phu thuoc lenh `supabase` toan cuc hay bien moi truong `PATH`. `-CheckOnly` kiem tra CLI va xac nhan may chu da thuc su chay phien ban `2026.11.03.1`. Khi deploy binh thuong, script chay `db push` truoc khi deploy Function; dung `-SkipDatabaseMigrations` chi khi migration da duoc ap dung thu cong.
+Tep `Supabase-Login.cmd` mo rieng luong dang nhap va giu cua so lai de nhap ma xac nhan; no khong chay migration hay deploy. Script dung Supabase CLI da duoc dat trong `tools\supabase-cli`, khong phu thuoc lenh `supabase` toan cuc hay bien moi truong `PATH`. `-CheckOnly` kiem tra CLI va xac nhan may chu da thuc su chay phien ban Edge Function dang khai bao trong `release.json`. Khi deploy binh thuong, script chay `db push` truoc khi deploy Function; dung `-SkipDatabaseMigrations` chi khi migration da duoc ap dung thu cong.
 
 Luu y: `action=status` trong Edge Function co co che tu phuc hoi bang cach dong bo lai cac bang projection neu marker revision dang lech. Vi vay `-CheckOnly` co the ghi lai cac bang dan xuat nay; no khong sua trang thai cong viec chuan trong `kpi_shared_state`.
 
@@ -220,7 +224,7 @@ Quy trinh khoi tao hoac phuc hoi du lieu trung tam:
 
 1. Mo phien ban moi, dang nhap Admin tren may dang co ban JSON day du va moi nhat.
 2. Neu may chu rong, he thong hien canh bao va khong tu dong tai bat ky du lieu cuc bo nao. Tai khoan Admin chon Nhap JSON, chon tep JSON day du (it nhat Nhan su - Tai khoan va Van hanh), sau do xac nhan khoi phuc trung tam.
-3. Kiem tra `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`. Sau khi hoan tat, `initialized` phai la `true`, `revision` lon hon `0`, `deploymentVersion` la `2026.11.03.1`, `storageModel` la `record-projection-transition`, `singleDeviceSession`, `credentialHashing`, `calendarEvents`, `notifications` va `gpmbWorkflows` la `true`, `recordProjection.available` va `recordProjection.synchronized` la `true`, `releaseUpdates` la `false` va `originRestricted` la `true`.
+3. Kiem tra `https://<project-ref>.supabase.co/functions/v1/kpi-sync?action=status`. Sau khi hoan tat, `initialized` phai la `true`, `revision` lon hon `0`, `deploymentVersion` phai trung `edgeFunctionVersion` trong `release.json`, `storageModel` la `record-projection-transition`, `singleDeviceSession`, `credentialHashing`, `calendarEvents`, `notifications` va `gpmbWorkflows` la `true`, `recordProjection.available` va `recordProjection.synchronized` la `true`, `releaseUpdates` la `false` va `originRestricted` la `true`.
 4. Dang nhap tren may thu hai, tai lai trang va kiem tra du lieu van con day du.
 
 Neu ket qua `status` co `initialized: false` hoac `revision: 0`, Postgres trung tam chua co du lieu va tat ca may khac se chi nhan trang thai rong. Ban giao dien khong bao gio tu khoi tao hoac dong bo ban sao cuc bo len may chu trong truong hop do. Chi Admin dang nhap tren may co ban sao JSON da kiem tra moi duoc phep chon Nhap JSON va xac nhan khoi phuc. Khong tao du lieu moi, khong thao tac tu may khac va khong dung tep JSON thieu nhom Nhan su - Tai khoan hoac Van hanh truoc khi hoan tat khoi phuc.
