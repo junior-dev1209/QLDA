@@ -17,7 +17,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.11.03.1";
+const deploymentVersion = "2026.11.11.3";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -26,16 +26,17 @@ const passwordHashIterations = 310_000;
 const passwordSaltBytes = 16;
 const passwordHashBytes = 32;
 
-const collections = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog"] as const;
+const collections = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "nhanVienTongHopGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "kpiPeriodLocks", "deletedIds"] as const;
 const moduleAccessRoles = ["director", "manager", "deputy_manager", "section_head", "employee"] as const;
-const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "calendar", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
+const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "public-investment-appraisal", "calendar", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
 const moduleDefaultRoleAccess: Record<string, string[]> = {
   dashboard: ["director"],
   bulletin: [...moduleAccessRoles],
   archive: [...moduleAccessRoles],
   people: ["director", "manager", "deputy_manager"],
   tasks: [...moduleAccessRoles],
+  "public-investment-appraisal": [...moduleAccessRoles],
   calendar: [...moduleAccessRoles],
   "department-evaluations": ["director", "manager", "deputy_manager"],
   evaluations: [...moduleAccessRoles],
@@ -44,11 +45,11 @@ const moduleDefaultRoleAccess: Record<string, string[]> = {
   rules: [...moduleAccessRoles],
   help: [...moduleAccessRoles],
 };
-const moduleSettingsVersion = 3;
+const moduleSettingsVersion = 4;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows";
+type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -95,6 +96,7 @@ type MutationEntry = {
   id: string;
   value?: JsonRecord;
   baseValue?: JsonRecord | null;
+  deviceId?: string;
 };
 
 type StatePatch = {
@@ -131,6 +133,8 @@ const projectionTableByCollection: Partial<Record<CollectionName, RecordProjecti
   people: "people",
   tasks: "tasks",
   gpmbWorkflows: "gpmb_workflows",
+  gpmbCases: "gpmb_cases",
+  publicInvestmentAppraisals: "public_investment_appraisals",
   evaluations: "evaluations",
   notifications: "notifications",
   activityLog: "activity_log",
@@ -144,7 +148,20 @@ const kpiCatalogScalarFields: ScalarField[] = [
 ];
 const projectionBatchSize = 200;
 
-type DeniedMutation = { scope: string; id: string; reason: string };
+type DeniedMutation = {
+  scope: string;
+  id: string;
+  reason: string;
+  settingKey?: string;
+  settingLabel?: string;
+  serverVersion?: number;
+  serverUpdatedAt?: string;
+  serverUpdatedBy?: string;
+  serverUpdatedById?: string;
+  serverUpdatedByUsername?: string;
+  serverUpdatedDeviceId?: string;
+  expectedVersion?: number;
+};
 
 function corsHeaders(request: Request): HeadersInit {
   const configuredOrigins = (Deno.env.get("KPI_ALLOWED_ORIGIN") || "*")
@@ -234,6 +251,162 @@ function normalizeModuleSettings(value: unknown): JsonRecord {
     return [moduleId, { enabled: saved.enabled !== false, roles }];
   }));
   return { schemaVersion: moduleSettingsVersion, ...modules };
+}
+
+const systemSettingCustomizationKeys = ["layout", "kpiFormulas", "kpiParameters", "fieldOverrides", "popupSizes", "customFields"] as const;
+const systemSettingThemeKeys = ["preset", "customName", "primary", "primaryDark", "accent", "background"] as const;
+
+function systemSettingId(key: string): string {
+  return `system-setting:${key.replace(/[^a-zA-Z0-9_.:-]/g, "-")}`;
+}
+
+function systemSettingLabel(key: string): string {
+  if (key === "luna.enabled") return "Hiển thị trợ lý Luna";
+  const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
+  if (moduleMatch) {
+    const moduleLabels: Record<string, string> = {
+      dashboard: "Tổng quan",
+      bulletin: "Bảng tin",
+      archive: "Lưu trữ",
+      people: "Nhân sự",
+      tasks: "Công việc",
+      calendar: "Lịch công việc",
+      "department-evaluations": "KPI phòng",
+      evaluations: "KPI cá nhân",
+      history: "Lịch sử",
+      accounts: "Tài khoản",
+      rules: "Quy chế",
+      help: "Trợ giúp",
+    };
+    const roleLabels: Record<string, string> = {
+      director: "Ban giám đốc",
+      manager: "Trưởng phòng",
+      deputy_manager: "Phó phòng",
+      section_head: "Trưởng bộ phận/Trưởng nhóm",
+      employee: "Nhân viên",
+    };
+    const moduleName = moduleLabels[moduleMatch[1]] || moduleMatch[1];
+    return moduleMatch[2] === "enabled"
+      ? `Bật mục ${moduleName}`
+      : `Quyền ${moduleName} - ${roleLabels[moduleMatch[3]] || moduleMatch[3]}`;
+  }
+  const themeMatch = key.match(/^theme\.(.+)$/);
+  if (themeMatch) {
+    const labels: Record<string, string> = { preset: "Chủ đề giao diện", customName: "Tên chủ đề", primary: "Màu chủ đạo", primaryDark: "Màu chủ đạo đậm", accent: "Màu nhấn", background: "Màu nền" };
+    return labels[themeMatch[1]] || "Chủ đề giao diện";
+  }
+  if (key.startsWith("customization.")) return `Thiết lập ${key.slice("customization.".length)}`;
+  return key;
+}
+
+function systemSettingKeys(): string[] {
+  const keys: string[] = [];
+  configurableModules.forEach((moduleId) => {
+    keys.push(`module.${moduleId}.enabled`);
+    moduleAccessRoles.forEach((role) => keys.push(`module.${moduleId}.role.${role}`));
+  });
+  keys.push("luna.enabled");
+  systemSettingThemeKeys.forEach((key) => keys.push(`theme.${key}`));
+  systemSettingCustomizationKeys.forEach((key) => keys.push(`customization.${key}`));
+  return keys;
+}
+
+function systemSettingValueMap(state: JsonRecord): Map<string, unknown> {
+  const modules = normalizeModuleSettings(state.moduleSettings);
+  const customization = isRecord(state.systemCustomization) ? state.systemCustomization : {};
+  const theme = isRecord(customization.theme) ? customization.theme : {};
+  const values = new Map<string, unknown>();
+  configurableModules.forEach((moduleId) => {
+    const moduleSetting = isRecord(modules[moduleId]) ? modules[moduleId] : {};
+    const roles = isRecord(moduleSetting.roles) ? moduleSetting.roles : {};
+    values.set(`module.${moduleId}.enabled`, moduleSetting.enabled !== false);
+    moduleAccessRoles.forEach((role) => values.set(`module.${moduleId}.role.${role}`, roles[role] === true));
+  });
+  values.set("luna.enabled", customization.lunaEnabled !== false);
+  systemSettingThemeKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(theme, key)) values.set(`theme.${key}`, theme[key]);
+  });
+  systemSettingCustomizationKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(customization, key)) values.set(`customization.${key}`, customization[key]);
+  });
+  return values;
+}
+
+function systemSettingRecordsFromState(state: JsonRecord, existingValue: unknown = state.systemSettings): JsonRecord[] {
+  const values = systemSettingValueMap(state);
+  const existing = new Map((Array.isArray(existingValue) ? existingValue : [])
+    .filter(isRecord)
+    .map((record) => [String(record.key || "").trim(), record]));
+  const keys = [...new Set([...systemSettingKeys(), ...values.keys(), ...existing.keys()])]
+    .filter((key) => values.has(key) || existing.has(key));
+  return keys.map((key) => {
+    const previous = existing.get(key);
+    const value = values.has(key) ? values.get(key) : previous?.value;
+    return {
+      id: String(previous?.id || systemSettingId(key)),
+      key,
+      value: clone(value),
+      version: Math.max(1, Number(previous?.version) || 1),
+      updatedAt: String(previous?.updatedAt || ""),
+      updatedById: String(previous?.updatedById || ""),
+      updatedBy: String(previous?.updatedBy || ""),
+      updatedByUsername: String(previous?.updatedByUsername || ""),
+      updatedDeviceId: String(previous?.updatedDeviceId || ""),
+    };
+  });
+}
+
+function applySystemSettingRecordToState(state: JsonRecord, record: JsonRecord): void {
+  const key = String(record.key || "").trim();
+  if (!key || !Object.prototype.hasOwnProperty.call(record, "value")) return;
+  const value = clone(record.value);
+  const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
+  const moduleSettings = isRecord(state.moduleSettings) ? state.moduleSettings : {};
+  const moduleSetting = moduleMatch && isRecord(moduleSettings[moduleMatch[1]]) ? moduleSettings[moduleMatch[1]] : null;
+  if (moduleMatch && moduleSetting) {
+    if (moduleMatch[2] === "enabled") moduleSetting.enabled = value !== false;
+    else if (isRecord(moduleSetting.roles)) moduleSetting.roles[moduleMatch[3]] = value === true;
+    return;
+  }
+  if (key === "luna.enabled") {
+    if (!isRecord(state.systemCustomization)) state.systemCustomization = {};
+    state.systemCustomization.lunaEnabled = value !== false;
+    return;
+  }
+  const themeMatch = key.match(/^theme\.(.+)$/);
+  if (themeMatch && systemSettingThemeKeys.includes(themeMatch[1] as (typeof systemSettingThemeKeys)[number])) {
+    if (!isRecord(state.systemCustomization)) state.systemCustomization = {};
+    if (!isRecord(state.systemCustomization.theme)) state.systemCustomization.theme = {};
+    state.systemCustomization.theme[themeMatch[1]] = value;
+    return;
+  }
+  const customizationMatch = key.match(/^customization\.(.+)$/);
+  if (customizationMatch && systemSettingCustomizationKeys.includes(customizationMatch[1] as (typeof systemSettingCustomizationKeys)[number])) {
+    if (!isRecord(state.systemCustomization)) state.systemCustomization = {};
+    state.systemCustomization[customizationMatch[1]] = value;
+  }
+}
+
+function applySystemSettingsToState(state: JsonRecord, recordsValue: unknown = state.systemSettings): void {
+  state.moduleSettings = normalizeModuleSettings(state.moduleSettings);
+  if (!isRecord(state.systemCustomization)) state.systemCustomization = {};
+  (Array.isArray(recordsValue) ? recordsValue : []).filter(isRecord).forEach((record) => applySystemSettingRecordToState(state, record));
+  state.moduleSettings = normalizeModuleSettings(state.moduleSettings);
+  state.systemSettings = systemSettingRecordsFromState(state, recordsValue);
+}
+
+function ensureSystemSettings(state: JsonRecord): boolean {
+  const before = clone(state);
+  const existing = Array.isArray(state.systemSettings) ? state.systemSettings : [];
+  if (existing.some((record) => isRecord(record) && String(record.key || "").trim())) applySystemSettingsToState(state, existing);
+  else {
+    if (!isRecord(state.systemCustomization)) state.systemCustomization = {};
+    state.moduleSettings = normalizeModuleSettings(state.moduleSettings);
+    state.systemSettings = systemSettingRecordsFromState(state, existing);
+  }
+  return !sameJson(before.systemSettings, state.systemSettings)
+    || !sameJson(before.moduleSettings, state.moduleSettings)
+    || !sameJson(before.systemCustomization, state.systemCustomization);
 }
 
 function clone<T>(value: T): T {
@@ -759,6 +932,8 @@ function defaultState(): JsonRecord {
     people: [],
     tasks: [],
     gpmbWorkflows: [],
+    gpmbCases: [],
+    publicInvestmentAppraisals: [],
     calendarEvents: [],
     projectCatalog: [],
     bulletins: [],
@@ -768,6 +943,7 @@ function defaultState(): JsonRecord {
     accounts: bootstrapAccounts(),
     supportRequests: [],
     notifications: [],
+    systemSettings: [],
     moduleSettings: {},
     systemCustomization: {},
     departments: [],
@@ -788,7 +964,7 @@ function validState(state: unknown): state is JsonRecord {
   // projectCatalog and supportRequests were added after the first production
   // snapshots. Keep older central data readable until their next update.
   return isRecord(state) && collections
-    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents" && key !== "notifications" && key !== "gpmbWorkflows")
+    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents" && key !== "notifications" && key !== "gpmbWorkflows" && key !== "gpmbCases" && key !== "publicInvestmentAppraisals" && key !== "systemSettings")
     .every((key) => Array.isArray(state[key]));
 }
 
@@ -807,6 +983,10 @@ async function prepareInitialState(incoming: JsonRecord, actor: JsonRecord): Pro
   if (!Array.isArray(next.calendarEvents)) next.calendarEvents = [];
   if (!Array.isArray(next.notifications)) next.notifications = [];
   if (!Array.isArray(next.gpmbWorkflows)) next.gpmbWorkflows = [];
+  if (!Array.isArray(next.gpmbCases)) next.gpmbCases = [];
+  if (!Array.isArray(next.publicInvestmentAppraisals)) next.publicInvestmentAppraisals = [];
+  if (!Array.isArray(next.systemSettings)) next.systemSettings = [];
+  ensureSystemSettings(next);
   if (!Array.isArray(next.deletedIds)) next.deletedIds = [];
   const accounts = records(next, "accounts");
   let restoredActor = accounts.find((account) => recordId(account) === recordId(actor));
@@ -903,12 +1083,14 @@ async function snapshot(): Promise<StateSnapshot> {
   if (!Array.isArray(state.supportRequests)) state.supportRequests = [];
   if (!Array.isArray(state.calendarEvents)) state.calendarEvents = [];
   if (!Array.isArray(state.notifications)) state.notifications = [];
+  if (!Array.isArray(state.systemSettings)) state.systemSettings = [];
   const current = {
     revision: Number(data.revision) || 0,
     updatedAt: String(data.updated_at || ""),
     state,
   };
-  const repairedRecords = repairPersonnelAccountLinks(current.state)
+  const repairedRecords = (ensureSystemSettings(current.state) ? 1 : 0)
+    + repairPersonnelAccountLinks(current.state)
     + repairTaskParticipantLinks(current.state)
     + clearMandatoryPasswordChangeFlags(current.state);
   if (!purgeRetiredAssignmentTasks(current.state) && !repairedRecords) return current;
@@ -2669,6 +2851,350 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
   };
 }
 
+const gpmbCaseStatuses = new Set(["new", "processing", "blocked", "completed"]);
+const gpmbCaseSubjectTypes = new Set(["household", "organization", "land_parcel"]);
+const gpmbCaseNoteHistoryLimit = 200;
+
+function gpmbCaseText(value: unknown, maxLength: number, multiline = false): string {
+  const source = String(value || "").trim();
+  const normalized = multiline
+    ? source.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n")
+    : source.replace(/\s+/g, " ");
+  return normalized.slice(0, maxLength);
+}
+
+function gpmbCaseArea(value: unknown): number | "" | null {
+  const source = String(value ?? "").trim().replace(",", ".");
+  if (!source) return "";
+  const area = Number(source);
+  if (!Number.isFinite(area) || area < 0 || area > 1_000_000_000) return null;
+  return Math.round(area * 100) / 100;
+}
+
+function gpmbCaseNoteHistory(value: unknown, fallback?: JsonRecord): JsonRecord[] {
+  const rows = (Array.isArray(value) ? value : [])
+    .filter(isRecord)
+    .map((item, index) => ({
+      id: String(item.id || `gpmb-case-note-${index}`),
+      note: gpmbCaseText(item.note, 4000, true),
+      createdAt: String(item.createdAt || ""),
+      createdBy: gpmbCaseText(item.createdBy, 160),
+      createdById: String(item.createdById || ""),
+    }))
+    .filter((item) => item.createdAt || item.note || item.createdBy);
+  if (!rows.length && fallback && gpmbCaseText(fallback.note, 4000, true)) {
+    rows.push({
+      id: `gpmb-case-note-legacy-${recordId(fallback) || "record"}`,
+      note: gpmbCaseText(fallback.note, 4000, true),
+      createdAt: String(fallback.updatedAt || fallback.createdAt || ""),
+      createdBy: gpmbCaseText(fallback.updatedBy || fallback.createdBy || "Không rõ tài khoản", 160),
+      createdById: String(fallback.updatedById || fallback.createdById || ""),
+    });
+  }
+  return rows
+    .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")))
+    .slice(-gpmbCaseNoteHistoryLimit);
+}
+
+function gpmbCaseEnabledSteps(workflow: JsonRecord): JsonRecord[] {
+  return (Array.isArray(workflow.steps) ? workflow.steps : [])
+    .filter(isRecord)
+    .filter((step) => String(step.id || "") && String(step.status || "") !== "skipped");
+}
+
+function normalizeGpmbCase(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord | null {
+  const id = recordId(candidate);
+  const canMoveWorkflow = !previous || isAdmin(actor) || isDirector(actor);
+  const workflowId = String(canMoveWorkflow ? candidate.workflowId : previous?.workflowId || "").trim();
+  const workflow = records(state, "gpmbWorkflows").find((item) => recordId(item) === workflowId);
+  const caseCode = gpmbCaseText(candidate.caseCode, 80).toUpperCase();
+  const subjectName = gpmbCaseText(candidate.subjectName, 180);
+  const areaM2 = gpmbCaseArea(candidate.areaM2);
+  if (!id || !workflow || !caseCode || !subjectName || areaM2 === null) return null;
+  const duplicate = records(state, "gpmbCases").some((item) => recordId(item) !== id
+    && String(item.workflowId || "") === workflowId
+    && gpmbCaseText(item.caseCode, 80).toLocaleLowerCase("vi") === caseCode.toLocaleLowerCase("vi"));
+  if (duplicate) return null;
+  const availableSteps = gpmbCaseEnabledSteps(workflow);
+  const requestedStepId = String(candidate.currentStepId || "").trim();
+  const fallbackStepId = String(workflow.currentStepId || availableSteps[0]?.id || "");
+  const currentStepId = availableSteps.some((step) => String(step.id || "") === requestedStepId)
+    ? requestedStepId
+    : (!requestedStepId ? fallbackStepId : "");
+  if (!currentStepId) return null;
+  const timestamp = new Date().toISOString();
+  const status = String(candidate.status || "");
+  const note = gpmbCaseText(candidate.note, 4000, true);
+  const previousNote = gpmbCaseText(previous?.note, 4000, true);
+  const noteHistory = gpmbCaseNoteHistory(previous?.noteHistory, previous);
+  if (previous && note !== previousNote) {
+    noteHistory.push({
+      id: `gpmb-case-note-${crypto.randomUUID()}`,
+      note,
+      createdAt: timestamp,
+      createdBy: String(actor.displayName || actor.username || "Không rõ tài khoản"),
+      createdById: String(actor.id || ""),
+    });
+  } else if (!previous && note && !noteHistory.length) {
+    noteHistory.push({
+      id: `gpmb-case-note-${crypto.randomUUID()}`,
+      note,
+      createdAt: timestamp,
+      createdBy: String(actor.displayName || actor.username || "Không rõ tài khoản"),
+      createdById: String(actor.id || ""),
+    });
+  }
+  return {
+    ...clone(candidate),
+    id,
+    workflowId,
+    projectId: String(workflow.projectId || ""),
+    projectName: String(workflow.projectName || ""),
+    caseCode,
+    subjectType: gpmbCaseSubjectTypes.has(String(candidate.subjectType || "")) ? String(candidate.subjectType) : "household",
+    subjectName,
+    representative: gpmbCaseText(candidate.representative, 120),
+    phone: gpmbCaseText(candidate.phone, 30),
+    mapSheet: gpmbCaseText(candidate.mapSheet, 80),
+    parcelNumber: gpmbCaseText(candidate.parcelNumber, 120),
+    areaM2,
+    address: gpmbCaseText(candidate.address, 260),
+    currentStepId,
+    status: gpmbCaseStatuses.has(status) ? status : "new",
+    note,
+    noteHistory: noteHistory.slice(-gpmbCaseNoteHistoryLimit),
+    createdAt: previous?.createdAt || timestamp,
+    createdBy: previous?.createdBy || actor.displayName || actor.username || "",
+    createdById: previous?.createdById || actor.id || "",
+    updatedAt: timestamp,
+    updatedBy: actor.displayName || actor.username || "",
+    updatedById: actor.id || "",
+  };
+}
+
+const publicInvestmentAppraisalTemplateVersion = 1;
+const publicInvestmentAppraisalStatuses = new Set(["draft", "reviewing", "supplement", "completed", "rejected"]);
+const publicInvestmentAppraisalCheckStatuses = new Set(["pending", "pass", "supplement", "fail", "na"]);
+const publicInvestmentAppraisalChecklistIds = ["legal", "planning", "necessity", "scale", "land", "environment", "technical", "schedule", "cost", "capital", "effectiveness", "risk"] as const;
+
+function publicInvestmentAppraisalText(value: unknown, maxLength = 240, multiline = false): string {
+  const source = String(value || "").trim();
+  const normalized = multiline
+    ? source.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n")
+    : source.replace(/\s+/g, " ");
+  return normalized.slice(0, maxLength);
+}
+
+function publicInvestmentAppraisalIds(value: unknown, limit = 100): string[] {
+  return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, limit);
+}
+
+function normalizePublicInvestmentAppraisalChecklist(value: unknown): JsonRecord[] {
+  const saved = new Map((Array.isArray(value) ? value : [])
+    .filter(isRecord)
+    .map((item) => [String(item.id || ""), item]));
+  return publicInvestmentAppraisalChecklistIds.map((id) => {
+    const item = saved.get(id) || {};
+    const status = publicInvestmentAppraisalCheckStatuses.has(String(item.status || "")) ? String(item.status) : "pending";
+    return { id, status, note: publicInvestmentAppraisalText(item.note, 3000, true) };
+  });
+}
+
+function normalizePublicInvestmentAppraisalOpinions(state: JsonRecord, value: unknown): JsonRecord[] {
+  return (Array.isArray(value) ? value : [])
+    .filter(isRecord)
+    .map((item, index) => {
+      const personId = String(item.personId || "");
+      const status = String(item.status || "") === "received" ? "received" : "pending";
+      return {
+        id: String(item.id || `appraisal-opinion-${index}`),
+        unit: publicInvestmentAppraisalText(item.unit, 160),
+        personId: personId && personIsActive(personForId(state, personId)) ? personId : "",
+        dueDate: gpmbIsoDate(item.dueDate),
+        status,
+        response: publicInvestmentAppraisalText(item.response, 4000, true),
+        requestedAt: String(item.requestedAt || ""),
+        respondedAt: status === "received" ? String(item.respondedAt || new Date().toISOString()) : "",
+      };
+    })
+    .filter((item) => item.unit || item.personId)
+    .slice(-50);
+}
+
+function normalizePublicInvestmentAppraisalHistory(value: unknown): JsonRecord[] {
+  return (Array.isArray(value) ? value : [])
+    .filter(isRecord)
+    .map((item, index) => ({
+      id: String(item.id || `appraisal-history-${index}`),
+      action: publicInvestmentAppraisalText(item.action, 180),
+      details: publicInvestmentAppraisalText(item.details, 1000, true),
+      createdAt: String(item.createdAt || ""),
+      createdBy: publicInvestmentAppraisalText(item.createdBy, 160),
+      createdById: String(item.createdById || ""),
+    }))
+    .filter((item) => item.action || item.createdAt)
+    .slice(-200);
+}
+
+function publicInvestmentAppraisalAssignedPersonIds(record: JsonRecord): string[] {
+  return [...new Set([String(record.leadAppraiserId || ""), ...publicInvestmentAppraisalIds(record.assigneeIds)].filter(Boolean))];
+}
+
+function canManagePublicInvestmentAppraisalRecord(state: JsonRecord, actor: JsonRecord, record?: JsonRecord): boolean {
+  if (!moduleIsAvailableToAccount(state, actor, "public-investment-appraisal")) return false;
+  if (isAdmin(actor) || isDirector(actor)) return true;
+  if (!hasDepartmentTaskAccess(actor)) return false;
+  if (!record) return true;
+  return String(record.departmentId || "") === accountDepartmentId(state, actor);
+}
+
+function canViewPublicInvestmentAppraisalRecord(state: JsonRecord, actor: JsonRecord, record: JsonRecord): boolean {
+  if (!moduleIsAvailableToAccount(state, actor, "public-investment-appraisal")) return false;
+  if (canManagePublicInvestmentAppraisalRecord(state, actor, record)) return true;
+  return publicInvestmentAppraisalAssignedPersonIds(record).includes(accountPersonId(state, actor));
+}
+
+function canUpdatePublicInvestmentAppraisalRecord(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined): boolean {
+  if (!previous) return canManagePublicInvestmentAppraisalRecord(state, actor);
+  return canManagePublicInvestmentAppraisalRecord(state, actor, previous)
+    || publicInvestmentAppraisalAssignedPersonIds(previous).includes(accountPersonId(state, actor));
+}
+
+function canConcludePublicInvestmentAppraisalRecord(state: JsonRecord, actor: JsonRecord, record: JsonRecord): boolean {
+  if (isAdmin(actor) || isDirector(actor)) return true;
+  return ["manager", "deputy_manager"].includes(accountRole(actor))
+    && String(record.departmentId || "") === accountDepartmentId(state, actor);
+}
+
+function normalizePublicInvestmentAppraisal(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord | null {
+  if (!canUpdatePublicInvestmentAppraisalRecord(state, actor, previous)) return null;
+  const managerCanEdit = canManagePublicInvestmentAppraisalRecord(state, actor, previous || candidate);
+  const core = managerCanEdit ? candidate : previous || candidate;
+  const id = recordId(candidate);
+  const projectId = String(core.projectId || "").trim();
+  const project = records(state, "projectCatalog").find((item) => recordId(item) === projectId);
+  const code = publicInvestmentAppraisalText(core.code, 80).toUpperCase();
+  const title = publicInvestmentAppraisalText(core.title, 240);
+  const receivedDate = gpmbIsoDate(core.receivedDate);
+  const dueDate = gpmbIsoDate(core.dueDate);
+  const leadAppraiserId = String(core.leadAppraiserId || "");
+  const lead = personForId(state, leadAppraiserId);
+  if (!id || !project || !code || !title || !receivedDate || !dueDate || dueDate < receivedDate || !personIsActive(lead)) return null;
+  const departmentId = String(lead?.departmentId || previous?.departmentId || accountDepartmentId(state, actor));
+  if (!isAdmin(actor) && !isDirector(actor) && departmentId !== accountDepartmentId(state, actor)) return null;
+  const duplicate = records(state, "publicInvestmentAppraisals").some((item) => recordId(item) !== id
+    && publicInvestmentAppraisalText(item.code, 80).toLocaleLowerCase("vi") === code.toLocaleLowerCase("vi"));
+  if (duplicate) return null;
+  const assigneeIds = publicInvestmentAppraisalIds(core.assigneeIds).filter((personId) => personId !== leadAppraiserId);
+  if (!assigneeIds.every((personId) => personIsActive(personForId(state, personId)))) return null;
+  const taskId = String(core.taskId || "");
+  if (taskId && !records(state, "tasks").some((item) => recordId(item) === taskId && String(item.projectId || "") === projectId)) return null;
+  const archiveRecordIds = publicInvestmentAppraisalIds(core.archiveRecordIds);
+  const archiveIds = new Set(records(state, "archiveRecords").map(recordId));
+  if (!archiveRecordIds.every((archiveId) => archiveIds.has(archiveId))) return null;
+  const timestamp = new Date().toISOString();
+  const requestedStatus = publicInvestmentAppraisalStatuses.has(String(candidate.status || "")) ? String(candidate.status) : "draft";
+  const status = ["completed", "rejected"].includes(requestedStatus)
+    && !canConcludePublicInvestmentAppraisalRecord(state, actor, previous || { ...candidate, departmentId: String(lead?.departmentId || "") })
+      ? String(previous?.status || "reviewing")
+      : requestedStatus;
+  const checklist = normalizePublicInvestmentAppraisalChecklist(candidate.checklist);
+  const opinions = normalizePublicInvestmentAppraisalOpinions(state, candidate.opinions);
+  const conclusion = canConcludePublicInvestmentAppraisalRecord(state, actor, previous || { ...candidate, departmentId: String(lead?.departmentId || "") })
+    ? publicInvestmentAppraisalText(candidate.conclusion, 12000, true)
+    : publicInvestmentAppraisalText(previous?.conclusion, 12000, true);
+  const history = normalizePublicInvestmentAppraisalHistory(previous?.history);
+  const action = !previous
+    ? "Tạo hồ sơ thẩm định"
+    : String(previous.status || "") !== status
+      ? `Chuyển trạng thái sang ${status}`
+      : "Cập nhật hồ sơ thẩm định";
+  history.push({
+    id: `appraisal-history-${crypto.randomUUID()}`,
+    action,
+    details: `${code} · Checklist ${checklist.filter((item) => item.status !== "pending" && item.status !== "na").length}/${checklist.filter((item) => item.status !== "na").length}`,
+    createdAt: timestamp,
+    createdBy: String(actor.displayName || actor.username || ""),
+    createdById: String(actor.id || ""),
+  });
+  return {
+    ...(previous ? clone(previous) : {}),
+    id,
+    projectId,
+    projectName: String(project.name || ""),
+    code,
+    title,
+    stage: ["investment-policy", "investment-decision", "adjustment"].includes(String(core.stage || "")) ? String(core.stage) : "investment-decision",
+    projectGroup: ["A", "B", "C", "other"].includes(String(core.projectGroup || "")) ? String(core.projectGroup) : "C",
+    sector: publicInvestmentAppraisalText(core.sector, 160),
+    authority: publicInvestmentAppraisalText(core.authority, 180),
+    capitalSource: publicInvestmentAppraisalText(core.capitalSource, 220),
+    hasConstructionComponent: core.hasConstructionComponent === true,
+    receivedDate,
+    dueDate,
+    status,
+    departmentId,
+    leadAppraiserId,
+    assigneeIds,
+    taskId,
+    archiveRecordIds,
+    templateVersion: publicInvestmentAppraisalTemplateVersion,
+    checklist,
+    opinions,
+    conclusion,
+    history: history.slice(-200),
+    createdAt: previous?.createdAt || timestamp,
+    createdBy: previous?.createdBy || actor.displayName || actor.username || "",
+    createdById: previous?.createdById || actor.id || "",
+    updatedAt: timestamp,
+    updatedBy: actor.displayName || actor.username || "",
+    updatedById: actor.id || "",
+  };
+}
+
+function synchronizeGpmbCaseWorkflowLinks(state: JsonRecord, actor: JsonRecord): { updatedCaseIds: string[]; deletedCaseIds: string[] } {
+  const workflows = new Map(records(state, "gpmbWorkflows").map((workflow) => [recordId(workflow), workflow]));
+  const updatedCaseIds: string[] = [];
+  const deletedCaseIds: string[] = [];
+  const timestamp = new Date().toISOString();
+  const actorName = String(actor.displayName || actor.username || "");
+  const retained: JsonRecord[] = [];
+  records(state, "gpmbCases").forEach((record) => {
+    const workflow = workflows.get(String(record.workflowId || ""));
+    if (!workflow) {
+      deletedCaseIds.push(recordId(record));
+      return;
+    }
+    const availableSteps = gpmbCaseEnabledSteps(workflow);
+    const currentStepId = String(record.currentStepId || "");
+    const linkedStepId = availableSteps.some((step) => String(step.id || "") === currentStepId)
+      ? currentStepId
+      : String(workflow.currentStepId || availableSteps[0]?.id || "");
+    if (!linkedStepId) {
+      deletedCaseIds.push(recordId(record));
+      return;
+    }
+    if (String(record.projectId || "") === String(workflow.projectId || "")
+      && String(record.projectName || "") === String(workflow.projectName || "")
+      && currentStepId === linkedStepId) {
+      retained.push(record);
+      return;
+    }
+    updatedCaseIds.push(recordId(record));
+    retained.push({
+      ...record,
+      projectId: String(workflow.projectId || ""),
+      projectName: String(workflow.projectName || ""),
+      currentStepId: linkedStepId,
+      updatedAt: timestamp,
+      updatedBy: actorName,
+      updatedById: String(actor.id || ""),
+    });
+  });
+  state.gpmbCases = retained;
+  return { updatedCaseIds: updatedCaseIds.filter(Boolean), deletedCaseIds: deletedCaseIds.filter(Boolean) };
+}
+
 function synchronizeGpmbWorkflowTaskLinks(state: JsonRecord, actor: JsonRecord): { updatedTaskIds: string[]; deletedTaskIds: string[] } {
   const workflows = new Map(records(state, "gpmbWorkflows").map((workflow) => [recordId(workflow), workflow]));
   const updatedTaskIds: string[] = [];
@@ -2796,8 +3322,11 @@ function advanceGpmbWorkflows(state: JsonRecord, actor: JsonRecord): { taskIds: 
 }
 
 function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionName, previous: JsonRecord | undefined, next: JsonRecord): boolean {
+  if (collection === "systemSettings") return isAdmin(actor);
   if (collection === "notifications") return notificationAcknowledgementIsValid(state, actor, previous, next);
   if (collection === "gpmbWorkflows") return canManageGpmbWorkflow(state, actor);
+  if (collection === "gpmbCases") return canManageGpmbWorkflow(state, actor);
+  if (collection === "publicInvestmentAppraisals") return canUpdatePublicInvestmentAppraisalRecord(state, actor, previous);
   if (collection === "tasks" && typeof gpmbWorkflowManagedTask === "function" && (gpmbWorkflowManagedTask(previous) || gpmbWorkflowManagedTask(next))) {
     return Boolean(previous) && gpmbWorkflowTaskChangeAllowed(state, actor, previous, next);
   }
@@ -2836,6 +3365,7 @@ function personHasRetainedReferences(state: JsonRecord, personId: string): boole
   if (records(state, "evaluations").some((evaluation) => String(evaluation.personId || "") === personId)) return true;
   if (records(state, "accounts").some((account) => String(account.personId || "") === personId)) return true;
   if (records(state, "activityLog").some((entry) => String(entry.personId || "") === personId)) return true;
+  if (records(state, "publicInvestmentAppraisals").some((record) => publicInvestmentAppraisalAssignedPersonIds(record).includes(personId))) return true;
   return records(state, "calendarEvents").some((event) => [
     ...calendarIds(event.leaderIds),
     ...calendarIds(event.participantIds),
@@ -2843,14 +3373,20 @@ function personHasRetainedReferences(state: JsonRecord, personId: string): boole
 }
 
 function canDelete(state: JsonRecord, actor: JsonRecord, collection: CollectionName, previous: JsonRecord): boolean {
+  if (collection === "systemSettings") return false;
   if (collection === "notifications") return false;
   if (collection === "gpmbWorkflows") return isAdmin(actor);
+  if (collection === "gpmbCases") return isAdmin(actor);
+  if (collection === "publicInvestmentAppraisals") return isAdmin(actor);
   if (collection === "calendarEvents") return canManageCalendarEvent(state, actor)
     && !records(state, "tasks").some((task) => task.sourceCalendarEventId === previous.id);
   if (collection === "people") return canManagePeople(state, actor) && !personHasRetainedReferences(state, recordId(previous));
+  if (collection === "archiveRecords" && records(state, "publicInvestmentAppraisals").some((record) => publicInvestmentAppraisalIds(record.archiveRecordIds).includes(recordId(previous)))) return false;
+  if (collection === "projectCatalog") return moduleIsAvailableToAccount(state, actor, "tasks")
+    && (isAdmin(actor) || hasDepartmentManagement(actor) || accountRole(actor) === "section_head")
+    && !records(state, "publicInvestmentAppraisals").some((record) => String(record.projectId || "") === recordId(previous));
   if (isAdmin(actor)) return true;
   if (collection === "activityLog") return false;
-  if (collection === "projectCatalog") return moduleIsAvailableToAccount(state, actor, "tasks") && (isAdmin(actor) || hasDepartmentManagement(actor) || accountRole(actor) === "section_head");
   if (collection === "accounts") return false;
   if (collection === "bulletins" || collection === "archiveRecords" || collection === "supportRequests") return false;
   if (collection === "tasks") return false;
@@ -2898,7 +3434,13 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
   if (canViewSystemContent(account)) {
     const output = sanitizedState(state);
     Object.assign(output, calendarState);
-    if (!canManageGpmbWorkflow(state, account)) output.gpmbWorkflows = [];
+    if (!canManageGpmbWorkflow(state, account)) {
+      output.gpmbWorkflows = [];
+      output.gpmbCases = [];
+    }
+    output.publicInvestmentAppraisals = moduleIsAvailableToAccount(state, account, "public-investment-appraisal")
+      ? records(state, "publicInvestmentAppraisals").filter((record) => canViewPublicInvestmentAppraisalRecord(state, account, record))
+      : [];
     output.notifications = notificationFeedForAccount(state, account);
     // Support conversations are private to the reporter and Admin, even when
     // a non-Admin account is granted broad read access for operational data.
@@ -2930,6 +3472,10 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
     people: gpmbWorkflowAllowed ? records(state, "people") : taskParticipantDirectory(state, visibleTasks, primaryPeople),
     tasks: visibleTasks,
     gpmbWorkflows: gpmbWorkflowAllowed ? records(state, "gpmbWorkflows") : [],
+    gpmbCases: gpmbWorkflowAllowed ? records(state, "gpmbCases") : [],
+    publicInvestmentAppraisals: moduleIsAvailableToAccount(state, account, "public-investment-appraisal")
+      ? records(state, "publicInvestmentAppraisals").filter((record) => canViewPublicInvestmentAppraisalRecord(state, account, record))
+      : [],
     evaluations: records(state, "evaluations").filter((evaluation) =>
       departmentScoped
         ? String(personForId(state, String(evaluation.personId || ""))?.departmentId || "") === departmentId
@@ -3267,9 +3813,83 @@ function addCalendarEventActivity(state: JsonRecord, actor: JsonRecord, action: 
   state.activityLog = activityLog.slice(-5000);
 }
 
-function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): { state: JsonRecord; denied: DeniedMutation[]; changed: number; serverNotificationIds: string[]; serverGeneratedTaskIds: string[]; serverUpdatedGpmbWorkflowIds: string[] } {
+function systemSettingConflict(id: string, previous: JsonRecord | undefined, operation: MutationEntry, expectedVersion = 0): DeniedMutation {
+  return {
+    scope: "systemSettings",
+    id,
+    reason: "Setting changed by another user.",
+    settingKey: String(previous?.key || operation.value?.key || id),
+    settingLabel: systemSettingLabel(String(previous?.key || operation.value?.key || id)),
+    serverVersion: Number(previous?.version) || 0,
+    serverUpdatedAt: String(previous?.updatedAt || ""),
+    serverUpdatedBy: String(previous?.updatedBy || ""),
+    serverUpdatedById: String(previous?.updatedById || ""),
+    serverUpdatedByUsername: String(previous?.updatedByUsername || ""),
+    serverUpdatedDeviceId: String(previous?.updatedDeviceId || ""),
+    expectedVersion: Number(expectedVersion) || Number(isRecord(operation.baseValue) ? operation.baseValue.version : 0) || 0,
+  };
+}
+
+function normalizeSystemSettingCandidate(operation: MutationEntry): JsonRecord | null {
+  if (!isRecord(operation.value)) return null;
+  const id = String(operation.id || "").trim();
+  const key = String(operation.value.key || "").trim();
+  if (!id || !key || id !== systemSettingId(key) || !systemSettingKeys().includes(key)) return null;
+  if (!Object.prototype.hasOwnProperty.call(operation.value, "value")) return null;
+  return { id, key, value: clone(operation.value.value) };
+}
+
+function committedSystemSettingRecord(previous: JsonRecord | undefined, candidate: JsonRecord, actor: JsonRecord, deviceId = ""): JsonRecord {
+  const now = new Date().toISOString();
+  return {
+    id: String(candidate.id || previous?.id || ""),
+    key: String(candidate.key || previous?.key || ""),
+    value: clone(candidate.value),
+    version: Math.max(1, Number(previous?.version) || 0) + 1,
+    updatedAt: now,
+    updatedById: String(actor.id || ""),
+    updatedBy: String(actor.displayName || actor.username || "Tài khoản"),
+    updatedByUsername: String(actor.username || ""),
+    updatedDeviceId: String(deviceId || ""),
+  };
+}
+
+function applyLegacySystemSettingFields(next: JsonRecord, current: JsonRecord, actor: JsonRecord, fields: Array<{ key: ScalarField; value: unknown; baseValue?: unknown }>, denied: DeniedMutation[]): number {
+  const legacyFields = fields.filter((field) => field.key === "moduleSettings" || field.key === "systemCustomization");
+  if (!legacyFields.length) return 0;
+  if (!isAdmin(actor)) {
+    legacyFields.forEach((field) => denied.push({ scope: "field", id: field.key, reason: "Permission denied." }));
+    return 0;
+  }
+  const currentRecords = recordMap(current, "systemSettings");
+  const nextRecords = recordMap(next, "systemSettings");
+  let changed = 0;
+  legacyFields.forEach((field) => {
+    const baseState = clone(current);
+    const requestedState = clone(current);
+    baseState[field.key] = field.baseValue === undefined ? undefined : clone(field.baseValue);
+    requestedState[field.key] = clone(field.value);
+    const baseSettings = new Map(systemSettingRecordsFromState(baseState, current.systemSettings).map((record) => [record.key as string, record]));
+    const requestedSettings = new Map(systemSettingRecordsFromState(requestedState, current.systemSettings).map((record) => [record.key as string, record]));
+    requestedSettings.forEach((requested, key) => {
+      const before = baseSettings.get(key);
+      if (!before || sameJson(before.value, requested.value)) return;
+      const actual = nextRecords.get(String(requested.id)) || currentRecords.get(String(requested.id));
+      if (!actual || !sameJson(actual.value, before.value)) {
+        denied.push(systemSettingConflict(String(requested.id), actual, { id: String(requested.id), value: requested, baseValue: before }));
+        return;
+      }
+      nextRecords.set(String(requested.id), committedSystemSettingRecord(actual, requested, actor));
+      changed += 1;
+    });
+  });
+  next.systemSettings = [...nextRecords.values()];
+  return changed;
+}
+
+function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): { state: JsonRecord; denied: DeniedMutation[]; changed: number; serverNotificationIds: string[]; serverGeneratedTaskIds: string[]; serverUpdatedGpmbWorkflowIds: string[]; serverUpdatedGpmbCaseIds: string[]; serverDeletedGpmbCaseIds: string[]; serverDeletedTaskIds: string[]; serverDeletedNotificationIds: string[]; serverCleanupActivityIds: string[] } {
   const next = clone(current);
-  next.moduleSettings = normalizeModuleSettings(next.moduleSettings);
+  ensureSystemSettings(next);
   const denied: DeniedMutation[] = [];
   const serverNotificationIds: string[] = [];
   const calendarAuditEvents: Array<{ action: string; event: JsonRecord }> = [];
@@ -3286,6 +3906,29 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       let previous = values.get(id);
       if (!id || !isRecord(value) || recordId(value) !== id) {
         denied.push({ scope: collection, id: id || "unknown", reason: "Invalid record." });
+        return;
+      }
+      if (collection === "systemSettings") {
+        const candidate = normalizeSystemSettingCandidate(operation);
+        if (!candidate) {
+          denied.push({ scope: collection, id, reason: "Invalid system setting." });
+          return;
+        }
+        const baseValue = isRecord(operation.baseValue) ? operation.baseValue : null;
+        if (previous && (!baseValue || !sameJson(baseValue, previous))) {
+          denied.push(systemSettingConflict(id, previous, operation));
+          return;
+        }
+        if (!previous && baseValue) {
+          denied.push(systemSettingConflict(id, previous, operation));
+          return;
+        }
+        if (!canUpsert(next, actor, collection, previous, candidate)) {
+          denied.push({ scope: collection, id, reason: "Permission denied." });
+          return;
+        }
+        values.set(id, committedSystemSettingRecord(previous, candidate, actor, String(operation.deviceId || value.updatedDeviceId || "")));
+        changed += 1;
         return;
       }
       const serverValue = collection === "accounts" && previous ? sanitizedAccount(previous) : previous;
@@ -3332,6 +3975,22 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         const normalized = normalizeGpmbWorkflow(next, actor, previous, candidate);
         if (!normalized) {
           denied.push({ scope: collection, id, reason: "Invalid GPMB workflow." });
+          return;
+        }
+        candidate = normalized;
+      }
+      if (collection === "gpmbCases") {
+        const normalized = normalizeGpmbCase(next, actor, previous, candidate);
+        if (!normalized) {
+          denied.push({ scope: collection, id, reason: "Invalid GPMB case record." });
+          return;
+        }
+        candidate = normalized;
+      }
+      if (collection === "publicInvestmentAppraisals") {
+        const normalized = normalizePublicInvestmentAppraisal(next, actor, previous, candidate);
+        if (!normalized) {
+          denied.push({ scope: collection, id, reason: "Invalid public investment appraisal record." });
           return;
         }
         candidate = normalized;
@@ -3404,6 +4063,10 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       const id = String(operation?.id || "").trim();
       const previous = values.get(id);
       if (!id || !previous) return;
+      if (collection === "systemSettings") {
+        denied.push({ scope: collection, id, reason: "System settings cannot be deleted." });
+        return;
+      }
       if (!sameJson(operation.baseValue, collection === "accounts" ? sanitizedAccount(previous) : previous)) {
         denied.push({ scope: collection, id, reason: "Record changed by another user." });
         return;
@@ -3426,6 +4089,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       denied.push({ scope: "field", id: String(key || "unknown"), reason: "Invalid field." });
       return;
     }
+    if (key === "moduleSettings" || key === "systemCustomization") return;
     let candidate = field.value;
     if (!sameJson(next[key], field.baseValue)) {
       const rebased = rebaseScalarFieldChange(key, field.baseValue, candidate, next[key]);
@@ -3443,8 +4107,17 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
     changed += 1;
   });
 
+  // Legacy clients may still submit the aggregate settings fields. Convert
+  // them into per-key records so an old tab cannot lock the whole settings
+  // object or overwrite unrelated changes.
+  changed += applyLegacySystemSettingFields(next, current, actor, patch.fields || [], denied);
+  applySystemSettingsToState(next, next.systemSettings);
+
   const gpmbTaskLinks = synchronizeGpmbWorkflowTaskLinks(next, actor);
   changed += gpmbTaskLinks.updatedTaskIds.length + gpmbTaskLinks.deletedTaskIds.length;
+
+  const gpmbCaseLinks = synchronizeGpmbCaseWorkflowLinks(next, actor);
+  changed += gpmbCaseLinks.updatedCaseIds.length + gpmbCaseLinks.deletedCaseIds.length;
 
   // GPMB is a server-owned state machine. A task is generated only when the
   // preceding task has both been completed and passed its completion review.
@@ -3452,15 +4125,25 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
   changed += gpmbAdvance.taskIds.length + gpmbAdvance.workflowIds.length + gpmbAdvance.notificationIds.length;
   serverNotificationIds.push(...gpmbAdvance.notificationIds);
 
-  calendarAuditEvents.forEach((audit) => addCalendarEventActivity(next, actor, audit.action, audit.event));
-  if (changed > calendarAuditEvents.length) addServerActivity(next, actor, changed);
+  const recurrenceCleanup = cleanupStoppedRecurringTaskInstances(next);
+  changed += recurrenceCleanup.deletedTaskIds.length + recurrenceCleanup.deletedNotificationIds.length;
+  changed += recurrenceCleanup.activityIds.length;
+  const finalState = recurrenceCleanup.state;
+
+  calendarAuditEvents.forEach((audit) => addCalendarEventActivity(finalState, actor, audit.action, audit.event));
+  if (changed > calendarAuditEvents.length) addServerActivity(finalState, actor, changed);
   return {
-    state: next,
+    state: finalState,
     denied,
     changed,
     serverNotificationIds,
     serverGeneratedTaskIds: gpmbAdvance.taskIds,
     serverUpdatedGpmbWorkflowIds: gpmbAdvance.workflowIds,
+    serverUpdatedGpmbCaseIds: gpmbCaseLinks.updatedCaseIds,
+    serverDeletedGpmbCaseIds: gpmbCaseLinks.deletedCaseIds,
+    serverDeletedTaskIds: recurrenceCleanup.deletedTaskIds,
+    serverDeletedNotificationIds: recurrenceCleanup.deletedNotificationIds,
+    serverCleanupActivityIds: recurrenceCleanup.activityIds,
   };
 }
 
@@ -3925,7 +4608,7 @@ async function updateRecordProjectionMarker(revision: number): Promise<void> {
 
 async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch, revision: number): Promise<void> {
   const changedCollections = patch.collections || {};
-  for (const collection of ["people", "tasks", "gpmbWorkflows", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
+  for (const collection of ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
     const changes = changedCollections[collection];
     if (!changes) continue;
     const table = projectionTableByCollection[collection];
@@ -4001,10 +4684,51 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
   await updateRecordProjectionMarker(revision);
 }
 
+async function cleanupStoppedRecurringTasksWithRetry(): Promise<StateSnapshot> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const current = await snapshot();
+    if (current.revision <= 0) return current;
+    const cleanup = cleanupStoppedRecurringTaskInstances(current.state);
+    if (!cleanup.deletedTaskIds.length) return current;
+    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+      expected_revision: current.revision,
+      next_state: cleanup.state,
+    });
+    if (error) throw error;
+    if (Array.isArray(data) && data.length) {
+      const updated = data[0] as { next_revision: number; next_updated_at: string };
+      const saved: StateSnapshot = {
+        revision: Number(updated.next_revision),
+        updatedAt: String(updated.next_updated_at || ""),
+        state: cleanup.state,
+      };
+      try {
+        await syncRecordProjectionForPatch(saved.state, {
+          collections: {
+            tasks: { deletes: cleanup.deletedTaskIds.map((id) => ({ id })) },
+            notifications: { deletes: cleanup.deletedNotificationIds.map((id) => ({ id })) },
+            activityLog: { upserts: cleanup.activityIds.map((id) => ({ id })) },
+          },
+        }, saved.revision);
+      } catch (projectionError) {
+        console.error("Unable to mirror recurring-task cleanup.", projectionError);
+      }
+      return saved;
+    }
+    if (attempt < 7) {
+      const delay = Math.min(900, 60 * 2 ** attempt) + Math.round(Math.random() * 120);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Concurrent recurring-task cleanup limit reached.");
+}
+
 async function syncAllRecordProjections(state: JsonRecord, revision: number): Promise<void> {
   await upsertProjectionRows("people", projectionRecordRows(records(state, "people"), revision));
   await upsertProjectionRows("tasks", projectionRecordRows(records(state, "tasks"), revision));
   await upsertProjectionRows("gpmb_workflows", projectionRecordRows(records(state, "gpmbWorkflows"), revision));
+  await upsertProjectionRows("gpmb_cases", projectionRecordRows(records(state, "gpmbCases"), revision));
+  await upsertProjectionRows("public_investment_appraisals", projectionRecordRows(records(state, "publicInvestmentAppraisals"), revision));
   await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
   await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
   await upsertProjectionRows("notifications", projectionRecordRows(records(state, "notifications"), revision));
@@ -4055,29 +4779,36 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
           ...patch,
           collections: {
             ...patch.collections,
-            ...(result.serverNotificationIds.length ? {
+            ...(result.serverNotificationIds.length || result.serverDeletedNotificationIds.length ? {
               notifications: {
                 upserts: [
                   ...(patch.collections?.notifications?.upserts || []),
                   ...result.serverNotificationIds.map((id) => ({ id })),
                 ],
-                deletes: patch.collections?.notifications?.deletes || [],
+                deletes: [
+                  ...(patch.collections?.notifications?.deletes || []),
+                  ...result.serverDeletedNotificationIds.map((id) => ({ id })),
+                ],
               },
             } : {}),
-            ...(result.serverGeneratedTaskIds.length || departmentStopEffects.taskIds.length ? {
+            ...(result.serverGeneratedTaskIds.length || departmentStopEffects.taskIds.length || result.serverDeletedTaskIds.length ? {
               tasks: {
                 upserts: [
                   ...(patch.collections?.tasks?.upserts || []),
                   ...[...new Set([...result.serverGeneratedTaskIds, ...departmentStopEffects.taskIds])].map((id) => ({ id })),
                 ],
-                deletes: patch.collections?.tasks?.deletes || [],
+                deletes: [
+                  ...(patch.collections?.tasks?.deletes || []),
+                  ...result.serverDeletedTaskIds.map((id) => ({ id })),
+                ],
               },
             } : {}),
-            ...(departmentStopEffects.activityIds.length ? {
+            ...(departmentStopEffects.activityIds.length || result.serverCleanupActivityIds.length ? {
               activityLog: {
                 upserts: [
                   ...(patch.collections?.activityLog?.upserts || []),
                   ...departmentStopEffects.activityIds.map((id) => ({ id })),
+                  ...result.serverCleanupActivityIds.map((id) => ({ id })),
                 ],
                 deletes: patch.collections?.activityLog?.deletes || [],
               },
@@ -4089,6 +4820,18 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
                   ...result.serverUpdatedGpmbWorkflowIds.map((id) => ({ id })),
                 ],
                 deletes: patch.collections?.gpmbWorkflows?.deletes || [],
+              },
+            } : {}),
+            ...(result.serverUpdatedGpmbCaseIds.length || result.serverDeletedGpmbCaseIds.length ? {
+              gpmbCases: {
+                upserts: [
+                  ...(patch.collections?.gpmbCases?.upserts || []),
+                  ...result.serverUpdatedGpmbCaseIds.map((id) => ({ id })),
+                ],
+                deletes: [
+                  ...(patch.collections?.gpmbCases?.deletes || []),
+                  ...result.serverDeletedGpmbCaseIds.map((id) => ({ id })),
+                ],
               },
             } : {}),
           },
@@ -4320,6 +5063,110 @@ function taskRecurrenceSeriesKey(task: JsonRecord): string {
   return String(task.recurrenceSeriesId || task.recurrenceSourceId || recordId(task) || "").trim();
 }
 
+function taskAuditTimestamp(value: unknown): number | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}(?:T|$)/.test(raw)) {
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const local = raw.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (local) {
+    const [, day, month, year, hour = "0", minute = "0", second = "0"] = local;
+    return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)) - 7 * 60 * 60 * 1000;
+  }
+  return null;
+}
+
+function taskStopTimestamp(value: unknown): number | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return taskAuditTimestamp(`${raw}T23:59:59.999+07:00`);
+  if (/^\d{1,2}[/\.\-]\d{1,2}[/\.\-]\d{4}$/.test(raw)) return taskAuditTimestamp(`${raw} 23:59:59`);
+  return taskAuditTimestamp(raw);
+}
+
+function cleanupStoppedRecurringTaskInstances(state: JsonRecord): {
+  state: JsonRecord;
+  deletedTaskIds: string[];
+  deletedNotificationIds: string[];
+  activityIds: string[];
+} {
+  const tasks = records(state, "tasks");
+  const sourcesById = new Map<string, JsonRecord>();
+  const sourcesBySeries = new Map<string, JsonRecord>();
+  tasks.forEach((task) => {
+    if (String(task.recurrenceSourceId || "") || assignedTask(task) || !recurringValueIsEnabled(task) || !String(task.recurrenceStoppedAt || task.recurrenceStopDate || "")) return;
+    const id = recordId(task);
+    const series = taskRecurrenceSeriesKey(task);
+    if (id) sourcesById.set(id, task);
+    if (series) sourcesBySeries.set(series, task);
+  });
+  if (!sourcesById.size && !sourcesBySeries.size) {
+    return { state, deletedTaskIds: [], deletedNotificationIds: [], activityIds: [] };
+  }
+
+  const generationLogs = new Map<string, number>();
+  records(state, "activityLog").forEach((entry) => {
+    if (String(entry.action || "") !== "Tự tạo định kỳ" || !String(entry.targetId || "")) return;
+    const timestamp = taskAuditTimestamp(entry.createdAt || entry.timestamp);
+    if (timestamp !== null) {
+      const targetId = String(entry.targetId);
+      generationLogs.set(targetId, Math.max(generationLogs.get(targetId) ?? Number.MIN_SAFE_INTEGER, timestamp));
+    }
+  });
+  const deletedBySeries = new Map<string, { source: JsonRecord; ids: string[] }>();
+  tasks.forEach((task) => {
+    const sourceId = String(task.recurrenceSourceId || "").trim();
+    if (!sourceId) return;
+    const source = sourcesById.get(sourceId) || sourcesBySeries.get(taskRecurrenceSeriesKey(task));
+    if (!source) return;
+    const stoppedAt = taskStopTimestamp(source.recurrenceStoppedAt) ?? taskStopTimestamp(source.recurrenceStopDate);
+    const createdAt = taskAuditTimestamp(task.createdAt) ?? generationLogs.get(recordId(task)) ?? null;
+    if (stoppedAt === null || createdAt === null || createdAt <= stoppedAt) return;
+    const seriesKey = taskRecurrenceSeriesKey(source);
+    const group = deletedBySeries.get(seriesKey) || { source, ids: [] };
+    group.ids.push(recordId(task));
+    deletedBySeries.set(seriesKey, group);
+  });
+
+  const deletedTaskIds = [...new Set([...deletedBySeries.values()].flatMap((group) => group.ids).filter(Boolean))];
+  if (!deletedTaskIds.length) {
+    return { state, deletedTaskIds: [], deletedNotificationIds: [], activityIds: [] };
+  }
+  const deletedTaskSet = new Set(deletedTaskIds);
+  const next = clone(state);
+  next.tasks = records(next, "tasks").filter((task) => !deletedTaskSet.has(recordId(task)));
+  const previousNotifications = records(next, "notifications");
+  const removedNotifications = previousNotifications.filter((item) => deletedTaskSet.has(String(item.targetId || item.taskId || "")));
+  const deletedNotificationIds = removedNotifications.map(recordId).filter(Boolean);
+  if (deletedNotificationIds.length) {
+    next.notifications = previousNotifications.filter((item) => !deletedTaskSet.has(String(item.targetId || item.taskId || "")));
+  }
+  const deletedIds = Array.isArray(next.deletedIds) ? next.deletedIds.map(String) : [];
+  next.deletedIds = [...new Set([...deletedIds, ...deletedTaskIds])].slice(-2000);
+  const activityLog = records(next, "activityLog");
+  const activityIds: string[] = [];
+  for (const [seriesKey, group] of deletedBySeries) {
+    const id = `server-sync-${crypto.randomUUID()}`;
+    activityLog.push({
+      id,
+      action: "Dọn kỳ định kỳ phát sinh sau khi dừng",
+      module: "Công việc",
+      targetType: "task-recurrence",
+      targetId: seriesKey,
+      title: String(group.source.title || "Chuỗi công việc định kỳ"),
+      details: `Đã xóa ${group.ids.length} công việc tự sinh sau thời điểm dừng định kỳ.`,
+      createdAt: new Date().toISOString(),
+      createdBy: "Hệ thống",
+      createdById: "system",
+    });
+    activityIds.push(id);
+  }
+  next.activityLog = activityLog.slice(-5000);
+  return { state: next, deletedTaskIds, deletedNotificationIds, activityIds };
+}
+
 function preserveStoppedRecurringTask(state: JsonRecord, candidate: JsonRecord, previous: JsonRecord | undefined): JsonRecord | null {
   const seriesKey = taskRecurrenceSeriesKey(candidate);
   if (!seriesKey) return candidate;
@@ -4492,7 +5339,7 @@ function stopRecurringTasksForDepartmentChanges(previousState: JsonRecord, nextS
 
 async function stopRecurringTaskWithRetry(actorId: string, taskId: string): Promise<{ snapshot: StateSnapshot; stoppedOccurrences: number }> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const current = await snapshot();
+    const current = await cleanupStoppedRecurringTasksWithRetry();
     if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
     const actor = accountForId(current.state, actorId);
     if (!actor || Boolean(actor.disabled)) throw new Error("Authentication required.");
@@ -4810,6 +5657,7 @@ Deno.serve(async (request) => {
         releaseUpdates: false,
         calendarEvents: true,
         notifications: true,
+        recurringTaskCleanup: true,
         lunaBroadcast: true,
         gpmbWorkflows: true,
         originRestricted: configuredOrigins.length > 0 && !configuredOrigins.includes("*"),
@@ -4901,14 +5749,14 @@ Deno.serve(async (request) => {
 
     if (action === "state" && request.method === "GET") {
       const requestedRevision = url.searchParams.get("revision");
-      const [accountId, metadata] = await Promise.all([activeSessionAccountId(request), snapshotMetadata()]);
+      const accountId = await activeSessionAccountId(request);
       if (!accountId) return json(request, { error: "Authentication required." }, 401);
-      if (requestedRevision !== null && Number(requestedRevision) === metadata.revision) {
-        return json(request, { revision: metadata.revision, updatedAt: metadata.updatedAt, unchanged: true });
-      }
-      const current = await snapshot();
+      const current = await cleanupStoppedRecurringTasksWithRetry();
       const account = accountForId(current.state, accountId);
       if (!account || Boolean(account.disabled)) return json(request, { error: "Authentication required." }, 401);
+      if (requestedRevision !== null && Number(requestedRevision) === current.revision) {
+        return json(request, { revision: current.revision, updatedAt: current.updatedAt, unchanged: true });
+      }
       return json(request, { revision: current.revision, updatedAt: current.updatedAt, state: visibleState(current.state, account) });
     }
 

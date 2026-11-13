@@ -5,7 +5,7 @@ const PASSWORD_HASH_ALGORITHM = 'pbkdf2-sha256-v1';
 const PASSWORD_HASH_ITERATIONS = 310000;
 const PASSWORD_SALT_BYTES = 16;
 const PASSWORD_HASH_BYTES = 32;
-const SYNC_DEPLOYMENT_VERSION = '2026.11.03.1';
+const SYNC_DEPLOYMENT_VERSION = '2026.11.11.3';
 
 /*
  * Shared state API for the Phuc Thinh workforce application.
@@ -56,6 +56,7 @@ if ($action === 'status') {
         'revision' => $snapshot['revision'],
         'updatedAt' => $snapshot['updatedAt'],
         'deploymentVersion' => SYNC_DEPLOYMENT_VERSION,
+        'recurringTaskCleanup' => true,
     ]);
 }
 
@@ -163,6 +164,30 @@ if ($action === 'logout' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($action === 'state' && $_SERVER['REQUEST_METHOD'] === 'GET') {
     requireSessionAccount($stateFile);
     $snapshot = readSnapshot($stateFile);
+    $cleanup = phpCleanupStoppedRecurringTaskInstances($snapshot['state']);
+    if ($cleanup['deletedTaskIds']) {
+        $lock = fopen($lockFile, 'c+');
+        if ($lock === false || !flock($lock, LOCK_EX)) {
+            if (is_resource($lock)) fclose($lock);
+            respond(['error' => 'Cannot lock shared state.'], 503);
+        }
+        try {
+            $snapshot = readSnapshot($stateFile);
+            requireSessionAccountFromState($snapshot['state']);
+            $cleanup = phpCleanupStoppedRecurringTaskInstances($snapshot['state']);
+            if ($cleanup['deletedTaskIds']) {
+                $snapshot = [
+                    'revision' => $snapshot['revision'] + 1,
+                    'updatedAt' => gmdate('c'),
+                    'state' => $cleanup['state'],
+                ];
+                writeSnapshot($stateFile, $snapshot);
+            }
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
     respond([
         'revision' => $snapshot['revision'],
         'updatedAt' => $snapshot['updatedAt'],
@@ -208,7 +233,8 @@ if ($action === 'state' && in_array($_SERVER['REQUEST_METHOD'], ['PUT', 'POST'],
             $responseStatus = 409;
         } else {
             $departmentStopEffects = phpStopRecurringTasksForDepartmentChanges($current['state'], $nextState, $actor);
-            $nextState = $departmentStopEffects['state'];
+            $cleanup = phpCleanupStoppedRecurringTaskInstances($departmentStopEffects['state']);
+            $nextState = $cleanup['state'];
             $nextSnapshot = [
                 'revision' => $current['revision'] + 1,
                 'updatedAt' => gmdate('c'),
@@ -251,10 +277,11 @@ if ($action === 'stop-recurring-task' && $_SERVER['REQUEST_METHOD'] === 'POST') 
             $responsePayload = ['error' => $result['error']];
             $responseStatus = (int) ($result['status'] ?? 403);
         } else {
+            $cleanup = phpCleanupStoppedRecurringTaskInstances($result['state']);
             $nextSnapshot = [
                 'revision' => $current['revision'] + 1,
                 'updatedAt' => gmdate('c'),
-                'state' => $result['state'],
+                'state' => $cleanup['state'],
             ];
             writeSnapshot($stateFile, $nextSnapshot);
             $responsePayload = [
@@ -262,6 +289,7 @@ if ($action === 'stop-recurring-task' && $_SERVER['REQUEST_METHOD'] === 'POST') 
                 'updatedAt' => $nextSnapshot['updatedAt'],
                 'state' => sanitizedState($nextSnapshot['state']),
                 'stoppedOccurrences' => $result['stoppedOccurrences'],
+                'removedLateOccurrences' => count($cleanup['deletedTaskIds']),
             ];
         }
     } finally {
@@ -425,6 +453,134 @@ function phpTaskRecurrenceSeriesKey(array $task): string
         ?: trim((string) ($task['id'] ?? ''));
 }
 
+function phpTaskAuditTimestamp(mixed $value): ?int
+{
+    $raw = trim((string) ($value ?? ''));
+    if ($raw === '') return null;
+    try {
+        if (preg_match('/^\d{4}-\d{2}-\d{2}(?:T|$)/', $raw)) {
+            return (new DateTimeImmutable($raw, new DateTimeZone('UTC')))->getTimestamp();
+        }
+        if (preg_match('/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/', $raw, $match)) {
+            $day = (int) $match[1];
+            $month = (int) $match[2];
+            $year = (int) $match[3];
+            $hour = (int) ($match[4] ?? 0);
+            $minute = (int) ($match[5] ?? 0);
+            $second = (int) ($match[6] ?? 0);
+            if (!checkdate($month, $day, $year) || $hour > 23 || $minute > 59 || $second > 59) return null;
+            return (new DateTimeImmutable(
+                sprintf('%04d-%02d-%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second),
+                new DateTimeZone('Asia/Ho_Chi_Minh'),
+            ))->getTimestamp();
+        }
+    } catch (Throwable) {
+        return null;
+    }
+    return null;
+}
+
+function phpTaskStopTimestamp(mixed $value): ?int
+{
+    $raw = trim((string) ($value ?? ''));
+    if ($raw === '') return null;
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) return phpTaskAuditTimestamp($raw . 'T23:59:59.999+07:00');
+    if (preg_match('/^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{4}$/', $raw)) return phpTaskAuditTimestamp($raw . ' 23:59:59');
+    return phpTaskAuditTimestamp($raw);
+}
+
+function phpCleanupStoppedRecurringTaskInstances(array $state): array
+{
+    $tasks = is_array($state['tasks'] ?? null) ? $state['tasks'] : [];
+    $sourcesById = [];
+    $sourcesBySeries = [];
+    foreach ($tasks as $task) {
+        if (!is_array($task) || !empty($task['recurrenceSourceId']) || phpTaskIsAssigned($task) || !phpTaskHasRecurrence($task) || empty($task['recurrenceStoppedAt'] ?? $task['recurrenceStopDate'] ?? '')) continue;
+        $id = (string) ($task['id'] ?? '');
+        $series = phpTaskRecurrenceSeriesKey($task);
+        if ($id !== '') $sourcesById[$id] = $task;
+        if ($series !== '') $sourcesBySeries[$series] = $task;
+    }
+    if (!$sourcesById && !$sourcesBySeries) {
+        return ['state' => $state, 'deletedTaskIds' => [], 'deletedNotificationIds' => [], 'activityIds' => []];
+    }
+
+    $generationTimes = [];
+    foreach (($state['activityLog'] ?? []) as $entry) {
+        if (!is_array($entry) || (string) ($entry['action'] ?? '') !== 'Tự tạo định kỳ' || empty($entry['targetId'])) continue;
+        $createdAt = phpTaskAuditTimestamp($entry['createdAt'] ?? $entry['timestamp'] ?? '');
+        if ($createdAt !== null) {
+            $targetId = (string) $entry['targetId'];
+            $generationTimes[$targetId] = max($generationTimes[$targetId] ?? PHP_INT_MIN, $createdAt);
+        }
+    }
+
+    $deletedBySeries = [];
+    foreach ($tasks as $task) {
+        if (!is_array($task)) continue;
+        $sourceId = trim((string) ($task['recurrenceSourceId'] ?? ''));
+        if ($sourceId === '') continue;
+        $source = $sourcesById[$sourceId] ?? $sourcesBySeries[phpTaskRecurrenceSeriesKey($task)] ?? null;
+        if (!is_array($source)) continue;
+        $stoppedAt = phpTaskStopTimestamp($source['recurrenceStoppedAt'] ?? '')
+            ?? phpTaskStopTimestamp($source['recurrenceStopDate'] ?? '');
+        $taskId = (string) ($task['id'] ?? '');
+        $createdAt = phpTaskAuditTimestamp($task['createdAt'] ?? '') ?? ($generationTimes[$taskId] ?? null);
+        if ($stoppedAt === null || $createdAt === null || $createdAt <= $stoppedAt || $taskId === '') continue;
+        $series = phpTaskRecurrenceSeriesKey($source);
+        if (!isset($deletedBySeries[$series])) $deletedBySeries[$series] = ['source' => $source, 'ids' => []];
+        $deletedBySeries[$series]['ids'][] = $taskId;
+    }
+
+    $deletedTaskIds = [];
+    foreach ($deletedBySeries as $group) {
+        $deletedTaskIds = array_merge($deletedTaskIds, $group['ids']);
+    }
+    $deletedTaskIds = array_values(array_unique($deletedTaskIds));
+    if (!$deletedTaskIds) {
+        return ['state' => $state, 'deletedTaskIds' => [], 'deletedNotificationIds' => [], 'activityIds' => []];
+    }
+    $deletedSet = array_fill_keys($deletedTaskIds, true);
+    $next = $state;
+    $next['tasks'] = array_values(array_filter($tasks, static fn ($task): bool => !is_array($task) || !isset($deletedSet[(string) ($task['id'] ?? '')])));
+    $notifications = is_array($next['notifications'] ?? null) ? $next['notifications'] : [];
+    $deletedNotificationIds = [];
+    $next['notifications'] = array_values(array_filter($notifications, static function ($notification) use ($deletedSet, &$deletedNotificationIds): bool {
+        if (!is_array($notification)) return true;
+        $targetId = (string) (($notification['targetId'] ?? '') ?: ($notification['taskId'] ?? ''));
+        if ($targetId === '' || !isset($deletedSet[$targetId])) return true;
+        if (!empty($notification['id'])) $deletedNotificationIds[] = (string) $notification['id'];
+        return false;
+    }));
+    $deletedIds = is_array($next['deletedIds'] ?? null) ? array_map('strval', $next['deletedIds']) : [];
+    $next['deletedIds'] = array_slice(array_values(array_unique(array_merge($deletedIds, $deletedTaskIds))), -2000);
+    $activityLog = is_array($next['activityLog'] ?? null) ? $next['activityLog'] : [];
+    $activityIds = [];
+    foreach ($deletedBySeries as $series => $group) {
+        $id = 'server-sync-' . bin2hex(random_bytes(12));
+        $activityLog[] = [
+            'id' => $id,
+            'action' => 'Dọn kỳ định kỳ phát sinh sau khi dừng',
+            'module' => 'Công việc',
+            'targetType' => 'task-recurrence',
+            'targetId' => (string) $series,
+            'title' => (string) ($group['source']['title'] ?? 'Chuỗi công việc định kỳ'),
+            'details' => 'Đã xóa ' . count($group['ids']) . ' công việc tự sinh sau thời điểm dừng định kỳ.',
+            'createdAt' => gmdate('c'),
+            'createdBy' => 'Hệ thống',
+            'createdById' => 'system',
+        ];
+        $activityIds[] = $id;
+    }
+    $next['activityLog'] = array_slice($activityLog, -5000);
+    return [
+        'state' => $next,
+        'deletedTaskIds' => $deletedTaskIds,
+        'deletedNotificationIds' => array_values(array_unique($deletedNotificationIds)),
+        'activityIds' => $activityIds,
+    ];
+}
+
 function preserveStoppedRecurringTasks(array $currentState, array $nextState): array
 {
     $currentById = [];
@@ -484,6 +640,13 @@ function phpTaskHasRecurrence(array $task): bool
     if (strtolower(trim((string) ($task['kind'] ?? 'regular'))) !== 'regular') return false;
     $recurrence = strtolower(trim((string) ($task['recurrence'] ?? $task['periodicity'] ?? '')));
     return in_array($recurrence, ['daily', 'weekly', 'monthly', 'quarterly', 'hàng ngày', 'hàng tuần', 'hàng tháng', 'hàng quý', 'hang ngay', 'hang tuan', 'hang thang', 'hang quy'], true);
+}
+
+function phpTaskIsAssigned(array $task): bool
+{
+    $kind = strtolower(trim((string) ($task['kind'] ?? $task['taskKind'] ?? '')));
+    return in_array($kind, ['assigned', 'giao việc', 'giao viec'], true)
+        || ($kind === '' && (!empty($task['assignedById']) || !empty($task['assignedAt']) || !empty($task['responseStatus']) || !empty($task['responseAt'])));
 }
 
 function phpTaskPersonForReference(array $state, string $reference): ?array
@@ -645,6 +808,9 @@ function defaultState(): array
         'activePeriod' => gmdate('Y-m'),
         'people' => [],
         'tasks' => [],
+        'gpmbWorkflows' => [],
+        'gpmbCases' => [],
+        'publicInvestmentAppraisals' => [],
         'calendarEvents' => [],
         'projectCatalog' => [],
         'bulletins' => [],
@@ -755,7 +921,7 @@ function isViableInitialState(array $state): bool
 
 function stateReplacementRemovesUnsafeAmountOfData(array $current, array $next): bool
 {
-    $protected = ['people', 'tasks', 'bulletins', 'archiveRecords', 'evaluations', 'departmentEvaluations', 'accounts'];
+    $protected = ['people', 'tasks', 'gpmbWorkflows', 'gpmbCases', 'publicInvestmentAppraisals', 'bulletins', 'archiveRecords', 'evaluations', 'departmentEvaluations', 'accounts'];
     $critical = ['people', 'tasks', 'accounts'];
     $currentTotal = 0;
     $nextTotal = 0;
