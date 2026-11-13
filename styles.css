@@ -9377,6 +9377,21 @@ td:last-child {
   gap: 7px;
 }
 
+.task-related-gpmb-cases { display: grid; gap: 9px; margin-top: 3px; }
+.task-related-gpmb-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 9px 10px; border-left: 3px solid #1f8091; background: #edf6f6; }
+.task-related-gpmb-head > div { display: grid; gap: 2px; }
+.task-related-gpmb-head strong { color: #174756; font-size: 0.88rem; }
+.task-related-gpmb-head span { color: #5d747c; font-size: 0.74rem; }
+.task-related-gpmb-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.task-related-gpmb-item { display: grid; gap: 4px; min-width: 0; padding: 10px; border: 1px solid #d8e3e5; border-radius: 6px; background: #fff; color: #587079; font-size: 0.76rem; line-height: 1.4; }
+.task-related-gpmb-item.is-current-step { border-color: #66aeb8; box-shadow: inset 3px 0 0 #1f8091; }
+.task-related-gpmb-item > strong { color: #173c49; font-size: 0.84rem; overflow-wrap: anywhere; }
+.task-related-gpmb-item > span, .task-related-gpmb-item > small { overflow-wrap: anywhere; }
+.task-related-gpmb-item > p { margin: 3px 0 0; padding: 6px 7px; border-left: 2px solid #bfd9dd; background: #f6f9f9; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-related-gpmb-item > small { color: #70848a; font-size: 0.69rem; }
+.task-related-gpmb-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.task-related-gpmb-more { margin: 0; }
+
 .task-attachments {
   gap: 6px;
 }
@@ -14167,7 +14182,7 @@ html.is-authenticated #loginScreen,
   max-width: 100%;
   max-height: none !important;
   justify-self: center;
-  overflow: visible !important;
+  overflow: hidden !important;
   padding: 9px;
   background: #f7fafc;
 }
@@ -14781,21 +14796,13 @@ html.is-authenticated #loginScreen,
   }
 }
 
-/* Full-bleed theme artwork with a soft wash under the brand text. */
+/* Theme artwork sized to sit inside the header with a soft wash under brand text. */
 .topbar {
-  height: 86px !important;
-  min-height: 86px !important;
-  max-height: 86px !important;
+  height: 76px !important;
+  min-height: 76px !important;
+  max-height: 76px !important;
   isolation: isolate;
-  overflow: visible !important;
-}
-
-@media (max-width: 1320px) and (min-width: 769px) {
-  .topbar {
-    height: auto !important;
-    min-height: 86px !important;
-    max-height: none !important;
-  }
+  overflow: hidden !important;
 }
 
 .topbar::before {
@@ -14817,8 +14824,8 @@ html.is-authenticated #loginScreen,
   inset: 0;
   z-index: 0;
   display: block;
-  width: 100%;
-  height: 100%;
+  width: auto;
+  height: auto;
   pointer-events: none;
 }
 
@@ -14826,9 +14833,9 @@ html.is-authenticated #loginScreen,
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: fill;
+  object-fit: cover;
   object-position: center;
-  filter: saturate(1.12) contrast(1.04);
+  filter: saturate(0.92) brightness(1.02);
 }
 
 .topbar-visual-scene.is-theme-changing {
@@ -14901,7 +14908,9 @@ html.is-authenticated #loginScreen,
 
 @media (max-width: 1320px) and (min-width: 769px) {
   .topbar {
+    height: 76px !important;
     min-height: 76px !important;
+    max-height: 76px !important;
   }
 }
 
@@ -14942,8 +14951,12 @@ html.is-authenticated #loginScreen,
     background: linear-gradient(90deg, rgba(255, 255, 255, 0.94) 0%, rgba(255, 255, 255, 0.9) 38%, rgba(255, 255, 255, 0.7) 72%, rgba(255, 255, 255, 0.24) 100%);
   }
 
+  .topbar-visual {
+    inset: 0;
+  }
+
   .topbar-visual-scene {
-    object-fit: cover;
+    object-fit: contain;
   }
 
   .mobile-bottom-nav .bottom-nav-item .nav-icon {
@@ -15447,6 +15460,39 @@ html.is-authenticated #loginScreen,
 .gpmb-workflow-card-current span { color: #607984; font-size: 0.76rem; }
 .gpmb-workflow-card-actions { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
 .gpmb-workflow-card-actions button { min-height: 31px; padding: 5px 9px; font-size: 0.76rem; }
+.gpmb-case-manager-modal { width: min(1240px, calc(100vw - 28px)); max-height: min(870px, calc(100vh - 26px)); overflow: auto; }
+.gpmb-case-toolbar { display: grid; grid-template-columns: minmax(240px, 1.1fr) minmax(180px, 0.7fr) minmax(240px, 1fr); gap: 10px; align-items: end; padding: 10px; border: 1px solid #d9e5e7; border-radius: 6px; background: #f7faf9; }
+.gpmb-case-toolbar label { display: grid; gap: 5px; min-width: 0; color: #476772; font-size: 0.76rem; font-weight: 700; }
+.gpmb-case-toolbar select, .gpmb-case-toolbar input { min-width: 0; min-height: 35px; padding: 6px 8px; font-size: 0.8rem; }
+.gpmb-case-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.gpmb-case-summary span { display: grid; gap: 2px; min-height: 58px; align-content: center; padding: 8px 10px; color: #5d747c; border: 1px solid #dce6e7; border-radius: 6px; background: #fff; font-size: 0.71rem; }
+.gpmb-case-summary strong { color: #174756; font-size: 1.08rem; line-height: 1; }
+.gpmb-case-list { display: grid; gap: 9px; }
+.gpmb-case-card { display: grid; gap: 9px; padding: 12px; border: 1px solid #d8e3e5; border-radius: 6px; background: #fff; }
+.gpmb-case-card-head { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; }
+.gpmb-case-card h3 { margin: 3px 0 2px; color: #173c49; font-size: 0.93rem; }
+.gpmb-case-card p { margin: 0; color: #647c84; font-size: 0.75rem; line-height: 1.4; }
+.gpmb-case-code { display: inline-flex; align-items: center; min-height: 21px; padding: 2px 7px; color: #216070; border-radius: 4px; background: #eaf4f5; font-size: 0.69rem; font-weight: 700; }
+.gpmb-case-status { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 999px; color: #34555d; background: #edf2f3; font-size: 0.71rem; font-weight: 700; }
+.gpmb-case-status.is-processing { color: #0d6279; background: #e8f4f7; }
+.gpmb-case-status.is-blocked { color: #a04416; background: #fff0e6; }
+.gpmb-case-status.is-completed { color: #187052; background: #e9f7ef; }
+.gpmb-case-card-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 9px 10px; border-left: 3px solid #2c8698; background: #f3f8f8; }
+.gpmb-case-card-grid span { display: grid; gap: 3px; min-width: 0; color: #3e626d; font-size: 0.73rem; line-height: 1.35; overflow-wrap: anywhere; }
+.gpmb-case-card-grid b { color: #607a82; font-size: 0.66rem; text-transform: uppercase; }
+.gpmb-case-card-note { padding: 7px 9px; color: #5f747c; background: #fafcfc; border-left: 2px solid #c5dce1; }
+.gpmb-case-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.gpmb-case-card-actions button { min-height: 31px; padding: 5px 10px; font-size: 0.76rem; }
+.gpmb-case-form-modal { width: min(900px, calc(100vw - 28px)); max-height: min(90vh, 900px); overflow-y: auto; }
+.gpmb-case-form { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+.gpmb-case-note-history { display: grid; gap: 8px; padding: 10px; border: 1px solid #d8e3e5; border-radius: 6px; background: #f7faf9; }
+.gpmb-case-note-history-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; color: #174756; }
+.gpmb-case-note-history-head span { color: #6a8087; font-size: 0.72rem; font-weight: 600; }
+.gpmb-case-note-history-list { display: grid; gap: 7px; max-height: 250px; overflow: auto; padding-right: 3px; }
+.gpmb-case-note-history-item { display: grid; gap: 5px; padding: 8px 9px; border-left: 3px solid #2c8698; background: #fff; }
+.gpmb-case-note-history-item > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px 12px; color: #315b66; font-size: 0.73rem; }
+.gpmb-case-note-history-item time { color: #71858b; }
+.gpmb-case-note-history-item p { margin: 0; color: #405f68; font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .gpmb-workflow-create-modal { width: min(820px, calc(100vw - 28px)); max-height: min(90vh, 900px); overflow-y: auto; }
 .gpmb-workflow-create-form { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
 .gpmb-create-step-deadline-field { display: grid; gap: 8px; min-width: 0; padding: 11px 13px; border: 1px solid #d7e1e3; border-radius: 6px; }
@@ -15516,6 +15562,7 @@ html.is-authenticated #loginScreen,
 }
 
 @media (max-width: 700px) {
+  .task-related-gpmb-list { grid-template-columns: 1fr; }
   .gpmb-workflow-policy { grid-template-columns: 1fr; }
   .gpmb-workflow-policy span + span { border-top: 1px solid #d7e4e6; border-left: 0; }
   .gpmb-workflow-manager-head-actions { width: 100%; }
@@ -15527,11 +15574,15 @@ html.is-authenticated #loginScreen,
   .gpmb-workflow-card-main { gap: 8px; }
   .gpmb-workflow-card-main .badge { flex: 0 0 auto; }
   .gpmb-workflow-collaborator-list { grid-template-columns: 1fr; }
+  .gpmb-case-toolbar { grid-template-columns: 1fr; }
+  .gpmb-case-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gpmb-case-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 560px) {
   .gpmb-workflow-create-form { grid-template-columns: 1fr; }
   .gpmb-workflow-edit-form { grid-template-columns: 1fr; }
+  .gpmb-case-form { grid-template-columns: 1fr; }
   .gpmb-create-step-deadline-row { grid-template-columns: 34px minmax(0, 1fr) 88px; gap: 6px; padding-inline: 6px; }
   .gpmb-create-step-deadline-title strong { font-size: 0.72rem; }
 }
@@ -15578,4 +15629,295 @@ html.is-authenticated #loginScreen,
   .dashboard-daily-report-button {
     flex: 1 1 215px;
   }
+}
+/* Public investment appraisal - phase 1 */
+.appraisal-page-head {
+  align-items: flex-end;
+}
+
+.appraisal-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.appraisal-metric {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--primary);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.appraisal-metric span,
+.appraisal-metric small {
+  display: block;
+  color: var(--muted);
+}
+
+.appraisal-metric strong {
+  display: block;
+  margin: 3px 0;
+  color: var(--text);
+  font-size: 1.35rem;
+}
+
+.appraisal-toolbar {
+  grid-template-columns: minmax(280px, 1fr) minmax(190px, 0.34fr) minmax(180px, 0.3fr);
+  margin-bottom: 12px;
+}
+
+.appraisal-list {
+  display: grid;
+  gap: 10px;
+}
+
+.appraisal-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.appraisal-record-main {
+  min-width: 0;
+}
+
+.appraisal-record-kicker,
+.appraisal-record-meta,
+.appraisal-record-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.appraisal-record h3 {
+  margin: 5px 0 7px;
+  font-size: 1.06rem;
+}
+
+.appraisal-record-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.appraisal-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #edf4f6;
+  color: var(--primary-dark);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.appraisal-status[data-status="supplement"] { background: #fff4d9; color: #8a5700; }
+.appraisal-status[data-status="completed"] { background: #e3f7ed; color: #08734a; }
+.appraisal-status[data-status="rejected"] { background: #fee9e7; color: #a72820; }
+
+.appraisal-progress-bar {
+  width: min(360px, 100%);
+  height: 6px;
+  margin-top: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe8ed;
+}
+
+.appraisal-progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.appraisal-form-modal {
+  box-sizing: border-box;
+  width: min(1180px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.appraisal-dialog-head {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  margin: -20px -20px 0;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.appraisal-form {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.appraisal-form-section {
+  min-width: 0;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.appraisal-form-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.appraisal-form-section-head > span {
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.appraisal-form-section-head h3,
+.appraisal-form-section-head p {
+  margin: 0;
+}
+
+.appraisal-form-section-head p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.appraisal-overview-grid,
+.appraisal-assignment-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.appraisal-construction-field {
+  justify-content: space-between;
+}
+
+.appraisal-construction-field .inline-check {
+  min-height: 42px;
+}
+
+.appraisal-checklist {
+  display: grid;
+  gap: 8px;
+}
+
+.appraisal-checklist-group {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.appraisal-checklist-group > h4 {
+  margin: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f2f7f8;
+  color: var(--primary-dark);
+  font-size: 0.94rem;
+}
+
+.appraisal-checklist-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 170px minmax(260px, 0.9fr);
+  gap: 10px;
+  align-items: center;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.appraisal-checklist-row:last-child { border-bottom: 0; }
+.appraisal-checklist-title strong,
+.appraisal-checklist-title small { display: block; }
+.appraisal-checklist-title small { margin-top: 2px; color: var(--muted); }
+.appraisal-checklist-row input,
+.appraisal-checklist-row select { width: 100%; }
+
+.appraisal-opinion-composer {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) 170px auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.appraisal-opinion-list,
+.appraisal-history {
+  display: grid;
+  gap: 7px;
+}
+
+.appraisal-opinion-item,
+.appraisal-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--primary);
+  background: #f4f8fa;
+}
+
+.appraisal-opinion-item p,
+.appraisal-history-item p { margin: 2px 0 0; color: var(--muted); }
+
+.appraisal-opinion-response {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.appraisal-form-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin: 0 -20px -20px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+@media (max-width: 900px) {
+  .appraisal-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .appraisal-toolbar,
+  .appraisal-overview-grid,
+  .appraisal-assignment-grid,
+  .appraisal-opinion-composer { grid-template-columns: 1fr 1fr; }
+  .appraisal-checklist-row { grid-template-columns: 1fr 150px; }
+  .appraisal-checklist-row > input { grid-column: 1 / -1; }
+}
+
+@media (max-width: 600px) {
+  .appraisal-page-head { align-items: stretch; }
+  .appraisal-page-head > button { width: 100%; }
+  .appraisal-metrics,
+  .appraisal-toolbar,
+  .appraisal-overview-grid,
+  .appraisal-assignment-grid,
+  .appraisal-opinion-composer,
+  .appraisal-checklist-row,
+  .appraisal-opinion-response { grid-template-columns: 1fr; }
+  .appraisal-record { grid-template-columns: 1fr; }
+  .appraisal-record-actions { justify-content: flex-start; }
+  .appraisal-checklist-row > input { grid-column: auto; }
+  .appraisal-form-modal { width: 100vw; max-height: 100dvh; border-radius: 0; }
 }
