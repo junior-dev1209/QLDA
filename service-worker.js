@@ -1,4 +1,4 @@
-const RELEASE_VERSION = "3.4.140";
+const RELEASE_VERSION = "3.4.147";
 const CACHE_NAME = `phuc-thinh-kpi-v${RELEASE_VERSION.replace(/\D/g, "")}`;
 const APP_SHELL = [
   "index.html",
@@ -9,6 +9,8 @@ const APP_SHELL = [
   "virtual-assistant.js",
   "document-templates.css",
   "document-templates.js",
+  "public-investment-projects.css",
+  "public-investment-projects.js",
   "auth-bootstrap.js",
   "people-data.js",
   "gpmb-workflow-data.js",

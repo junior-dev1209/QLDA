@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.140";
+const APP_VERSION = "3.4.147";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -29,6 +29,13 @@ const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
 const SETTINGS_CONFLICT_FREE_DEPLOYMENT_VERSION = "2026.11.05.1";
 const GPMB_CASES_DEPLOYMENT_VERSION = "2026.11.11.1";
 const PUBLIC_INVESTMENT_APPRAISAL_DEPLOYMENT_VERSION = "2026.11.11.2";
+const PUBLIC_INVESTMENT_PROJECT_DEPLOYMENT_VERSION = "2026.11.13.2";
+const TASK_MUTATION_DEPLOYMENT_VERSION = "2026.11.17.2";
+const PUBLIC_INVESTMENT_HUB_VIEW = "public-investment-projects";
+const PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW = "public-investment-appraisal";
+const PUBLIC_INVESTMENT_WORKSPACE_KEY = "kpi_public_investment_workspace";
+const PUBLIC_INVESTMENT_WORKSPACES = new Set(["projects", "appraisal"]);
+let activePublicInvestmentWorkspace = "projects";
 const ACCOUNT_USAGE_REQUEST_TIMEOUT_MS = 45000;
 const ACCOUNT_USAGE_AUTO_REFRESH_MS = 60000;
 const MAX_DELETED_ID_HISTORY = 2000;
@@ -36,8 +43,8 @@ const ACCOUNT_PRESENCE_HEARTBEAT_MS = 60000;
 const PERSON_EMPLOYMENT_ACTIVE = "active";
 const PERSON_EMPLOYMENT_SUSPENDED = "suspended";
 const PERSON_EMPLOYMENT_LEFT = "left";
-const SHARED_SYNC_COLLECTIONS = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"];
-const SHARED_PROTECTED_COLLECTIONS = ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
+const SHARED_SYNC_COLLECTIONS = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"];
+const SHARED_PROTECTED_COLLECTIONS = ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
 const SHARED_SYNC_SCALAR_FIELDS = [
   "moduleSettings",
   "systemCustomization",
@@ -52,6 +59,39 @@ const SHARED_SYNC_SCALAR_FIELDS = [
   "kpiPeriodLocks",
   "deletedIds",
 ];
+const SHARED_SYNC_SCOPE_LABELS = Object.freeze({
+  people: "Nhân sự",
+  calendarEvents: "Lịch công việc",
+  tasks: "Công việc",
+  gpmbWorkflows: "Quy trình GPMB",
+  gpmbCases: "Hồ sơ GPMB theo hộ/thửa",
+  publicInvestmentAppraisals: "Thẩm định dự án đầu tư công",
+  publicInvestmentProjects: "Quản lý dự án đầu tư công",
+  projectCatalog: "Danh mục dự án",
+  bulletins: "Bảng tin",
+  archiveRecords: "Lưu trữ",
+  evaluations: "KPI cá nhân",
+  departmentEvaluations: "KPI phòng",
+  accounts: "Tài khoản",
+  supportRequests: "Yêu cầu hỗ trợ",
+  notifications: "Trung tâm thông báo",
+  activityLog: "Lịch sử hoạt động",
+  systemSettings: "Cấu hình hệ thống",
+});
+const SHARED_SYNC_FIELD_LABELS = Object.freeze({
+  moduleSettings: "Phân quyền chức năng",
+  systemCustomization: "Tùy biến giao diện",
+  departments: "Danh mục phòng ban",
+  roles: "Danh mục chức vụ/KPI",
+  behaviorRules: "Quy tắc hành vi",
+  importedPeopleVersion: "Phiên bản dữ liệu nhân sự",
+  canBoGpmbKpiCatalogVersion: "Danh mục KPI cán bộ GPMB",
+  nhanVienTongHopGpmbKpiCatalogVersion: "Danh mục KPI tổng hợp GPMB",
+  sectionHeadKpiCatalogVersion: "Danh mục KPI trưởng nhóm",
+  personalKpiClassificationVersion: "Quy tắc xếp loại KPI cá nhân",
+  kpiPeriodLocks: "Chốt kỳ KPI",
+  deletedIds: "Nhật ký dữ liệu đã xóa",
+});
 function debounce(fn, delay = 200) {
   let timer;
   return function (...args) {
@@ -1075,7 +1115,7 @@ const printableSections = [
   { id: "archive", label: "Lưu Trữ" },
   { id: "people", label: "Nhân sự" },
   { id: "tasks", label: "Công việc" },
-  { id: "public-investment-appraisal", label: "Thẩm định dự án đầu tư công" },
+  { id: "public-investment-projects", label: "Dự án đầu tư công" },
   { id: "department-evaluations", label: "KPI phòng" },
   { id: "evaluations", label: "KPI cá nhân" },
   { id: "history", label: "Lịch sử" },
@@ -1089,7 +1129,7 @@ const systemModules = [
   { id: "archive", label: "Lưu Trữ", note: "Kho hồ sơ dự án, nhân sự, văn bản và công văn." },
   { id: "people", label: "Nhân sự", note: "Hồ sơ nhân sự toàn Ban và thông tin hợp đồng, lương." },
   { id: "tasks", label: "Công việc", note: "Danh mục công việc, hồ sơ và tiến độ." },
-  { id: "public-investment-appraisal", label: "Thẩm định dự án đầu tư công", note: "Hồ sơ, checklist, lấy ý kiến và kết luận thẩm định dự án đầu tư công." },
+  { id: "public-investment-projects", label: "Dự án đầu tư công", note: "Quản lý thực hiện, hồ sơ số, thẩm định, pháp lý, tiến độ, liên kết và vướng mắc dự án." },
   { id: "calendar", label: "Lịch công việc", note: "Lịch tuần, cuộc họp, kết luận và nhắc lịch." },
   { id: "department-evaluations", label: "KPI phòng", note: "Dữ liệu hoạt động và chấm điểm KPI cấp phòng." },
   { id: "evaluations", label: "KPI cá nhân", note: "Chấm điểm KPI cá nhân và kết quả thi đua tháng." },
@@ -1107,7 +1147,7 @@ const moduleDefaultRoleAccess = {
   archive: [...moduleAccessRoles],
   people: ["director", "manager", "deputy_manager"],
   tasks: [...moduleAccessRoles],
-  "public-investment-appraisal": [...moduleAccessRoles],
+  "public-investment-projects": [...moduleAccessRoles],
   calendar: [...moduleAccessRoles],
   "department-evaluations": ["director", "manager", "deputy_manager"],
   evaluations: [...moduleAccessRoles],
@@ -1116,7 +1156,7 @@ const moduleDefaultRoleAccess = {
   rules: [...moduleAccessRoles],
   help: [...moduleAccessRoles],
 };
-const MODULE_SETTINGS_VERSION = 4;
+const MODULE_SETTINGS_VERSION = 6;
 
 const GPMB_LEGACY_WORKFLOW_TEMPLATE = Object.freeze([
   { id: "plan", title: "Xây dựng kế hoạch thu hồi đất", category: "Điều tra, kiểm đếm đất đai / Trích đo, quy chủ", owner: "Phòng GPMB", documents: "Kế hoạch thu hồi đất", days: 7 },
@@ -1256,6 +1296,10 @@ function createPersonnelAccount(person, accounts) {
 }
 
 function syncPersonnelAccounts() {
+  // Creating or relinking personnel accounts is an administrator operation on
+  // the shared server. Other roles may still edit personnel, but must not add
+  // an account mutation to the same patch and trigger an avoidable rejection.
+  if (sharedSync.session && !isOfflineFileRuntime() && !isAdmin()) return false;
   if (!Array.isArray(state.people) || !state.people.length) return false;
   if (!Array.isArray(state.accounts)) state.accounts = [];
   let changed = false;
@@ -1327,7 +1371,14 @@ function normalizeModuleSettings(settings = {}) {
   const defaults = defaultModuleSettings();
   const migrateLegacyDefaults = Number(settings?.schemaVersion || 0) < MODULE_SETTINGS_VERSION;
   systemModules.forEach((module) => {
-    const saved = settings?.[module.id] || {};
+    let saved = settings?.[module.id] || {};
+    if (migrateLegacyDefaults && module.id === PUBLIC_INVESTMENT_HUB_VIEW && settings?.[PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW]) {
+      const legacy = settings[PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW];
+      saved = {
+        enabled: saved.enabled !== false || legacy.enabled !== false,
+        roles: Object.fromEntries(moduleAccessRoles.map((role) => [role, saved?.roles?.[role] === true || legacy?.roles?.[role] === true])),
+      };
+    }
     const roles = defaultModuleRoleSettings(module.id);
     moduleAccessRoles.forEach((role) => {
       if (migrateLegacyDefaults && saved?.roles?.[role] === false) roles[role] = false;
@@ -1511,8 +1562,16 @@ function systemSettingId(key) {
   return `system-setting:${String(key || "").replace(/[^a-zA-Z0-9_.:-]/g, "-")}`;
 }
 
+function canonicalSystemSettingKey(value) {
+  const key = String(value || "").trim();
+  const legacyPrefix = `module.${PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW}.`;
+  return key.startsWith(legacyPrefix)
+    ? `module.${PUBLIC_INVESTMENT_HUB_VIEW}.${key.slice(legacyPrefix.length)}`
+    : key;
+}
+
 function systemSettingKeyFromRecord(record) {
-  return String(record?.key || "").trim();
+  return canonicalSystemSettingKey(record?.key);
 }
 
 function systemSettingKeys() {
@@ -1545,9 +1604,18 @@ function systemSettingValueMap(source = {}) {
 
 function systemSettingRecordsFromState(source = {}, existingRecords = source.systemSettings) {
   const values = systemSettingValueMap(source);
-  const existing = new Map((Array.isArray(existingRecords) ? existingRecords : [])
+  const existing = new Map();
+  (Array.isArray(existingRecords) ? existingRecords : [])
     .filter((record) => record && typeof record === "object")
-    .map((record) => [systemSettingKeyFromRecord(record), record]));
+    .forEach((record) => {
+      const rawKey = String(record.key || "").trim();
+      const key = canonicalSystemSettingKey(rawKey);
+      if (!key) return;
+      const normalized = { ...record, id: systemSettingId(key), key };
+      const saved = existing.get(key);
+      // The current unified record wins when a snapshot still contains both keys.
+      if (!saved || rawKey === key || String(saved.key || "") !== key) existing.set(key, normalized);
+    });
   return systemSettingKeys().map((key) => {
     const previous = existing.get(key) || {};
     return {
@@ -1565,7 +1633,7 @@ function systemSettingRecordsFromState(source = {}, existingRecords = source.sys
 }
 
 function applySystemSettingRecordToState(target, record) {
-  const key = systemSettingKeyFromRecord(record);
+  const key = canonicalSystemSettingKey(record?.key);
   if (!key || !record || !Object.prototype.hasOwnProperty.call(record, "value")) return;
   const value = cloneStatePayload(record.value);
   const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
@@ -2661,6 +2729,7 @@ function defaultStatePayload() {
     gpmbWorkflows: [],
     gpmbCases: [],
     publicInvestmentAppraisals: [],
+    publicInvestmentProjects: [],
     calendarEvents: [],
     calendarDirectory: [],
     projectCatalog: [],
@@ -3219,6 +3288,7 @@ function normalizeStatePayload(parsed) {
   const gpmbWorkflows = normalizeGpmbWorkflows(parsed.gpmbWorkflows, projectCatalog);
   const gpmbCases = normalizeGpmbCases(parsed.gpmbCases, gpmbWorkflows);
   const publicInvestmentAppraisals = normalizePublicInvestmentAppraisals(parsed.publicInvestmentAppraisals, projectCatalog);
+  const publicInvestmentProjects = window.PublicInvestmentProjects?.normalizeCollection?.(parsed.publicInvestmentProjects, projectCatalog) || [];
   const normalized = {
     activePeriod: parsed.activePeriod || fallback.activePeriod,
     people: Array.isArray(parsed.people) ? parsed.people : [],
@@ -3226,6 +3296,7 @@ function normalizeStatePayload(parsed) {
     gpmbWorkflows,
     gpmbCases,
     publicInvestmentAppraisals,
+    publicInvestmentProjects,
     calendarEvents: Array.isArray(parsed.calendarEvents) ? parsed.calendarEvents.filter((event) => event && typeof event === "object" && event.id) : [],
     calendarDirectory: Array.isArray(parsed.calendarDirectory) ? parsed.calendarDirectory : [],
     projectCatalog,
@@ -3546,7 +3617,10 @@ async function discardUntrustedSharedChanges(reason) {
 }
 
 function isOfflineFileRuntime() {
-  return window.location.protocol === "file:";
+  if (window.location.protocol === "file:") return true;
+  const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+  return loopbackHosts.has(window.location.hostname)
+    && new URLSearchParams(window.location.search).get("offline") === "1";
 }
 
 function sharedSyncSupported() {
@@ -4609,6 +4683,11 @@ function sharedSyncSupportsTaskProgressLifecycle() {
   return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.21.1");
 }
 
+function sharedSyncSupportsTaskMutationContract() {
+  if (!usingSupabaseSync()) return true;
+  return deploymentVersionAtLeast(sharedSync.deploymentVersion, TASK_MUTATION_DEPLOYMENT_VERSION);
+}
+
 function sharedSyncSupportsTaskCompletionRecovery() {
   if (!usingSupabaseSync()) return true;
   return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.10.15.1");
@@ -5279,21 +5358,6 @@ function sharedPatchOperationCount(patch) {
 }
 
 function sharedDeniedChangeMessage(deniedChanges, snapshot) {
-  const labels = {
-    people: "Nhân sự",
-    tasks: "Công việc",
-    projectCatalog: "Danh mục dự án",
-    bulletins: "Bảng tin",
-    archiveRecords: "Lưu trữ",
-    evaluations: "KPI cá nhân",
-    departmentEvaluations: "KPI phòng",
-    accounts: "Tài khoản",
-    supportRequests: "Yêu cầu hỗ trợ",
-    calendarEvents: "Lịch công việc",
-    activityLog: "Lịch sử hoạt động",
-    systemSettings: "Cấu hình hệ thống",
-    field: "Cấu hình hệ thống",
-  };
   const changes = Array.isArray(deniedChanges) ? deniedChanges : [];
   const settingConflicts = changes.filter((change) => change.scope === "systemSettings" && change.settingKey);
   if (settingConflicts.length) {
@@ -5303,7 +5367,10 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
       return new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(date);
     };
     const details = settingConflicts.slice(0, 3).map((change) => {
-      const label = change.settingLabel || change.settingKey;
+      const legacyAppraisalSetting = String(change.settingKey || "").includes(PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW);
+      const label = legacyAppraisalSetting
+        ? (String(change.settingKey || "").includes(".role.") ? "Quyền Dự án đầu tư công" : "Bật mục Dự án đầu tư công")
+        : change.settingLabel || change.settingKey;
       const actor = change.serverUpdatedBy || change.serverUpdatedByUsername || "tài khoản khác";
       const version = Number(change.serverVersion) > 0 ? ` phiên bản ${change.serverVersion}` : "";
       return `“${label}” đã được ${actor} cập nhật lúc ${formatTime(change.serverUpdatedAt)}${version}`;
@@ -5312,7 +5379,11 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
     return `${details.join("; ")}${suffix}. Thay đổi trùng thiết lập trên thiết bị này chưa được lưu; các thiết lập không trùng đã được gộp.`;
   }
   const conflictOnly = changes.length > 0 && changes.every((change) => change.reason === "Record changed by another user." || change.reason === "Field changed by another user.");
-  const targets = [...new Set(changes.map((change) => labels[change.scope] || "Dữ liệu hệ thống"))].slice(0, 3);
+  const deniedTargetLabel = (change) => {
+    if (change?.scope === "field") return SHARED_SYNC_FIELD_LABELS[change.id] || `Cấu hình (${change.id || "không xác định"})`;
+    return SHARED_SYNC_SCOPE_LABELS[change?.scope] || `Dữ liệu (${change?.scope || "không xác định"})`;
+  };
+  const targets = [...new Set(changes.map(deniedTargetLabel))].slice(0, 3);
   const targetText = targets.length ? targets.join(", ") : "một số dữ liệu";
   if (conflictOnly) {
     return `${targetText} đã được cập nhật từ thiết bị khác trước khi lưu. Hệ thống đã tải lại kết quả mới nhất từ máy chủ.`;
@@ -5330,11 +5401,29 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
   if (changes.some((change) => change.scope === "tasks" && change.reason === "Task module is not available to this account.")) {
     return "Tài khoản chưa được bật quyền truy cập mục Công việc. Quản trị viên cần kiểm tra Cấu hình hệ thống > Phân quyền chức năng.";
   }
+  if (changes.some((change) => change.scope === "tasks" && change.reason === "Invalid GPMB task progress update.")) {
+    return "Máy chủ không chấp nhận cập nhật tiến độ GPMB. Hãy tải lại dữ liệu, kiểm tra tài khoản là người thực hiện/người phối hợp hoặc quản lý đúng phòng ban rồi cập nhật lại; thông tin quy trình và thời hạn bước phải chỉnh trong Quản lý GPMB.";
+  }
   if (changes.some((change) => change.scope === "tasks" && change.reason === "Task update is outside account scope.")) {
     return "Máy chủ không nhận diện tài khoản thuộc phạm vi công việc này. Hãy kiểm tra liên kết tài khoản với nhân sự, người thực hiện/phối hợp và phòng ban của công việc.";
   }
   if (changes.some((change) => change.scope === "tasks" && change.reason === "Permission denied.")) {
     return "Máy chủ từ chối thao tác theo quyền hoặc phạm vi công việc của tài khoản. Hãy kiểm tra người thực hiện, người phối hợp, phòng ban và quyền truy cập mục Công việc.";
+  }
+  if (changes.some((change) => change.scope === "notifications" && change.reason === "Invalid notification acknowledgement.")) {
+    return "Máy chủ không chấp nhận trạng thái đã xem/đã ẩn của thông báo vì thông báo nguồn đã thay đổi hoặc không thuộc tài khoản hiện tại. Danh sách thông báo mới nhất đã được tải lại.";
+  }
+  if (changes.some((change) => change.scope === "gpmbWorkflows" && change.reason === "GPMB workflow update is outside account scope.")) {
+    return "Máy chủ không chấp nhận thay đổi Quy trình GPMB vì tài khoản không có quyền điều hành GPMB trong phạm vi này. Dữ liệu mới nhất đã được tải lại.";
+  }
+  if (changes.some((change) => change.scope === "gpmbCases" && change.reason === "GPMB case update is outside account scope.")) {
+    return "Máy chủ không chấp nhận thay đổi Hồ sơ GPMB theo hộ/thửa vì tài khoản không thuộc phạm vi quản lý hoặc phụ trách hồ sơ. Dữ liệu mới nhất đã được tải lại.";
+  }
+  if (changes.some((change) => change.scope === "publicInvestmentAppraisals" && change.reason === "Public investment appraisal update is outside account scope.")) {
+    return "Máy chủ không chấp nhận thay đổi Thẩm định dự án vì tài khoản không được phân công hoặc không có quyền trong phạm vi dự án. Dữ liệu mới nhất đã được tải lại.";
+  }
+  if (changes.some((change) => change.scope === "publicInvestmentProjects" && change.reason === "Public investment project update is outside account scope.")) {
+    return "Máy chủ không chấp nhận thay đổi Quản lý dự án đầu tư công vì tài khoản không được phân công hoặc không có quyền trong phạm vi dự án. Dữ liệu mới nhất đã được tải lại.";
   }
   const rejectedIds = changes
     .filter((change) => change.scope === "tasks")
@@ -5384,6 +5473,7 @@ function showSystemToast(title, message, { tone = "warning", duration = 7000 } =
       id: `system-feedback:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
       title,
       message,
+      category: "system",
       priority: tone,
       recipientAccountId: currentAccount().id,
     }, { duration });
@@ -5910,6 +6000,13 @@ function normalizeDepartmentTermText(value) {
     .replace(/[Cc]án bộ\s+[Hh]ạ\s*tầng/g, "Cán bộ QLHT");
 }
 
+function automaticClientDataMigrationsAllowed() {
+  // A network client must adopt the authoritative server snapshot without
+  // silently rewriting it during page startup. Shared migrations are applied
+  // centrally or by explicit administrator actions after authentication.
+  return isOfflineFileRuntime() || !sharedSyncSupported();
+}
+
 function migrateDepartmentTermLabels(options = {}) {
   const persist = options.persist !== false;
   let changed = false;
@@ -6137,15 +6234,17 @@ function clearMandatoryPasswordChangeFlags() {
   return changed;
 }
 
-migrateDepartmentTermLabels();
-migrateLegacyProjectDepartments();
-mergeImportedPeopleIntoState();
-migrateCanBoGpmbKpiCatalog();
-const nhanVienTongHopGpmbKpiCatalogUpdated = migrateNhanVienTongHopGpmbKpiCatalog();
-const sectionHeadKpiCatalogUpdated = migrateSectionHeadKpiCatalog();
-const passwordPolicyUpdated = clearMandatoryPasswordChangeFlags();
-const sectionHeadManagementUpdated = normalizeSectionHeadManagementLinks();
-if (syncPersonnelAccounts() || nhanVienTongHopGpmbKpiCatalogUpdated || sectionHeadKpiCatalogUpdated || passwordPolicyUpdated || sectionHeadManagementUpdated) saveState();
+if (automaticClientDataMigrationsAllowed()) {
+  migrateDepartmentTermLabels();
+  migrateLegacyProjectDepartments();
+  mergeImportedPeopleIntoState();
+  migrateCanBoGpmbKpiCatalog();
+  const nhanVienTongHopGpmbKpiCatalogUpdated = migrateNhanVienTongHopGpmbKpiCatalog();
+  const sectionHeadKpiCatalogUpdated = migrateSectionHeadKpiCatalog();
+  const passwordPolicyUpdated = clearMandatoryPasswordChangeFlags();
+  const sectionHeadManagementUpdated = normalizeSectionHeadManagementLinks();
+  if (syncPersonnelAccounts() || nhanVienTongHopGpmbKpiCatalogUpdated || sectionHeadKpiCatalogUpdated || passwordPolicyUpdated || sectionHeadManagementUpdated) saveState();
+}
 
 function departmentById(id) {
   return departments.find((item) => item.id === id);
@@ -6580,7 +6679,44 @@ function canDeleteArchive() {
   return isAdmin();
 }
 
+function publicInvestmentRoute(viewId) {
+  if (viewId === PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW) {
+    return { viewId: PUBLIC_INVESTMENT_HUB_VIEW, workspace: "appraisal" };
+  }
+  return { viewId, workspace: viewId === PUBLIC_INVESTMENT_HUB_VIEW ? activePublicInvestmentWorkspace : "" };
+}
+
+function storedPublicInvestmentWorkspace() {
+  try {
+    const saved = localStorage.getItem(PUBLIC_INVESTMENT_WORKSPACE_KEY);
+    return PUBLIC_INVESTMENT_WORKSPACES.has(saved) ? saved : "projects";
+  } catch {
+    return "projects";
+  }
+}
+
+function setPublicInvestmentWorkspace(workspace, { persist = true, render = true } = {}) {
+  const next = PUBLIC_INVESTMENT_WORKSPACES.has(workspace) ? workspace : "projects";
+  activePublicInvestmentWorkspace = next;
+  document.querySelectorAll("[data-public-investment-workspace]").forEach((button) => {
+    const selected = button.dataset.publicInvestmentWorkspace === next;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  document.querySelectorAll("[data-public-investment-workspace-panel]").forEach((panel) => {
+    panel.classList.toggle("is-active", panel.dataset.publicInvestmentWorkspacePanel === next);
+  });
+  if (persist) {
+    try { localStorage.setItem(PUBLIC_INVESTMENT_WORKSPACE_KEY, next); } catch {}
+  }
+  if (!render || activeViewId() !== PUBLIC_INVESTMENT_HUB_VIEW) return;
+  if (next === "appraisal") renderPublicInvestmentAppraisals();
+  else window.PublicInvestmentProjects?.render?.();
+}
+
 function canAccessView(viewId) {
+  viewId = publicInvestmentRoute(viewId).viewId;
   if (!currentAccount()) return false;
   if (!moduleIsAvailableToAccount(viewId)) return false;
   if (viewId === "system-settings") return isAdmin();
@@ -6813,6 +6949,47 @@ async function ensureTaskDeadlineExtensionReviewSupported() {
   if (!versionRefreshed || sharedSyncSupportsTaskDeadlineExtensionReview()) return true;
   alert(`Máy chủ online đang chạy phiên bản ${sharedSync.deploymentVersion || "chưa xác định"}, chưa hỗ trợ duyệt gia hạn. Chưa có thay đổi nào được lưu; vui lòng tải lại hệ thống hoặc liên hệ quản trị viên.`);
   return false;
+}
+
+async function ensureTaskMutationContractSupported() {
+  if (isOfflineFileRuntime() || !sharedSync.session) return true;
+  const versionRefreshed = await refreshSharedDeploymentVersion();
+  if (versionRefreshed && sharedSyncSupportsTaskMutationContract()) return true;
+  const version = sharedSync.deploymentVersion || "chưa xác định";
+  showSystemToast(
+    "Chưa thể cập nhật công việc",
+    versionRefreshed
+      ? `Máy chủ online đang chạy phiên bản ${version}, chưa đồng bộ với quy tắc cập nhật công việc ${TASK_MUTATION_DEPLOYMENT_VERSION}. Không có thay đổi nào được lưu.`
+      : "Chưa thể xác nhận phiên bản máy chủ online. Không có thay đổi nào được lưu để tránh trạng thái hiển thị sai rồi bị khôi phục.",
+    { tone: "warning", duration: 9000 },
+  );
+  return false;
+}
+
+async function confirmTaskMutationOnline(taskId) {
+  if (isOfflineFileRuntime() || !sharedSync.session) return true;
+  let result = await flushSharedStateSync();
+  if (result?.reason === "in-flight") {
+    const deadline = Date.now() + 8000;
+    while (sharedSync.inFlight && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+    }
+    if (!sharedSync.inFlight && (sharedSync.pending || sharedSync.dirty)) result = await flushSharedStateSync();
+  }
+  const taskDenied = Array.isArray(result?.denied)
+    && result.denied.some((change) => change?.scope === "tasks" && String(change?.id || "") === String(taskId || ""));
+  if (taskDenied || result?.conflict) {
+    renderAll();
+    return false;
+  }
+  if (!result?.ok && result?.pending) {
+    showSystemToast(
+      "Đang chờ đồng bộ công việc",
+      "Thay đổi đã được giữ an toàn trên thiết bị và sẽ tự gửi lại khi kết nối máy chủ ổn định.",
+      { tone: "warning", duration: 8000 },
+    );
+  }
+  return true;
 }
 
 function canAssessTaskQualityForPerson(personId, status, task = null) {
@@ -8718,26 +8895,47 @@ function assignedTasksForInbox() {
     });
 }
 
+function assignmentTaskWorkspaceAvailable() {
+  return Boolean(
+    byId("assignmentTaskForm")
+    && byId("taskInboxDialog")
+    && byId("assignmentTaskId")
+    && byId("assignmentTaskStatus")
+    && byId("assignmentTaskResponseNote"),
+  );
+}
+
+function taskUsesAssignmentWorkspace(task) {
+  return isAssignedTask(task) && assignmentTaskWorkspaceAvailable();
+}
+
 function renderTaskInbox() {
+  const badge = byId("taskInboxBadge");
+  const summary = byId("taskInboxSummary");
+  const dialog = byId("taskInboxDialog");
+  if (!badge || !summary || !dialog) return;
   const assignedTasks = assignedTasksForInbox();
   const pendingCount = assignedTasks.filter((task) => !isTaskFinishedStatus(task.computedStatus)).length;
-  byId("taskInboxBadge").textContent = String(pendingCount);
-  byId("taskInboxBadge").classList.toggle("is-hidden", pendingCount === 0);
-  byId("taskInboxSummary").textContent = assignedTasks.length
+  badge.textContent = String(pendingCount);
+  badge.classList.toggle("is-hidden", pendingCount === 0);
+  summary.textContent = assignedTasks.length
     ? `${pendingCount} việc đang cần xử lý, ${assignedTasks.length} việc được giao trong phạm vi tài khoản.`
     : "Chưa có công việc được giao.";
-  if (!byId("taskInboxDialog").classList.contains("is-hidden")) {
+  if (!dialog.classList.contains("is-hidden")) {
     renderTaskInboxDialog();
   }
 }
 
 function renderTaskInboxDialog() {
+  const summary = byId("taskInboxDialogSummary");
+  const list = byId("taskInboxList");
+  if (!summary || !list) return;
   const assignedTasks = assignedTasksForInbox();
   const pendingCount = assignedTasks.filter((task) => !isTaskFinishedStatus(task.computedStatus)).length;
-  byId("taskInboxDialogSummary").textContent = assignedTasks.length
+  summary.textContent = assignedTasks.length
     ? `${pendingCount} việc đang cần xử lý, ${assignedTasks.length} việc được giao.`
     : "Chưa có công việc được giao.";
-  byId("taskInboxList").innerHTML = assignedTasks.length
+  list.innerHTML = assignedTasks.length
     ? assignedTasks
         .map((task) => {
           const collaboratorNames = taskCollaboratorNames(task);
@@ -8780,15 +8978,19 @@ function renderTaskInboxDialog() {
 }
 
 function openTaskInboxDialog() {
+  if (!assignmentTaskWorkspaceAvailable()) return false;
   resetAssignmentTaskForm();
   renderTaskInboxDialog();
   byId("taskInboxDialog").classList.remove("is-hidden");
   byId("taskInboxDialog").setAttribute("aria-hidden", "false");
+  return true;
 }
 
 function closeTaskInboxDialog() {
-  byId("taskInboxDialog").classList.add("is-hidden");
-  byId("taskInboxDialog").setAttribute("aria-hidden", "true");
+  const dialog = byId("taskInboxDialog");
+  if (!dialog) return;
+  dialog.classList.add("is-hidden");
+  dialog.setAttribute("aria-hidden", "true");
 }
 
 function taskBoardSearchText(task) {
@@ -9011,6 +9213,11 @@ function deleteTaskProjectCatalog(projectId) {
   const linkedAppraisalCount = (state.publicInvestmentAppraisals || []).filter((record) => record.projectId === project.id).length;
   if (linkedAppraisalCount) {
     alert(`Không thể xóa dự án đang được liên kết với ${linkedAppraisalCount} hồ sơ thẩm định. Hãy chuyển hoặc xóa hồ sơ thẩm định trước.`);
+    return;
+  }
+  const linkedManagementCount = (state.publicInvestmentProjects || []).filter((record) => record.projectId === project.id).length;
+  if (linkedManagementCount) {
+    alert(`Không thể xóa dự án đang có hồ sơ quản lý thực hiện. Hãy xử lý hồ sơ dự án số trước.`);
     return;
   }
   const linkedTaskCount = state.tasks.filter((task) => projectIdForTask(task) === project.id).length;
@@ -10281,7 +10488,8 @@ function openTaskDetailInlineEditor(taskId, focusId = "", { progressReportOnly =
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) return;
   const assigned = isAssignedTask(task);
-  const form = byId(assigned ? "assignmentTaskForm" : "taskForm");
+  const useAssignmentWorkspace = taskUsesAssignmentWorkspace(task);
+  const form = byId(useAssignmentWorkspace ? "assignmentTaskForm" : "taskForm");
   if (!form) return;
   restoreTaskDetailInlineEditor({ reset: true });
   const anchor = document.createElement("span");
@@ -10289,8 +10497,8 @@ function openTaskDetailInlineEditor(taskId, focusId = "", { progressReportOnly =
   form.parentNode.insertBefore(anchor, form);
   taskDetailInlineEditor = {
     taskId: task.id,
-    kind: assigned ? TASK_KIND_ASSIGNED : TASK_KIND_REGULAR,
-    progressReportOnly: progressReportOnly && !assigned,
+    kind: useAssignmentWorkspace ? TASK_KIND_ASSIGNED : TASK_KIND_REGULAR,
+    progressReportOnly: progressReportOnly && !useAssignmentWorkspace,
     form,
     anchor,
   };
@@ -10307,11 +10515,11 @@ function openTaskDetailInlineEditor(taskId, focusId = "", { progressReportOnly =
   `;
   byId("taskDetailEditorSlot").append(form);
   form.classList.add("task-detail-inline-form");
-  if (assigned) populateAssignmentTaskForm(task);
+  if (useAssignmentWorkspace) populateAssignmentTaskForm(task);
   else populateTaskForm(task);
   if (taskDetailInlineEditor.progressReportOnly) byId("taskNote").value = "";
 
-  const target = byId(focusId) || byId(assigned ? "assignmentTaskTitle" : "taskTitle");
+  const target = byId(focusId) || byId(useAssignmentWorkspace ? "assignmentTaskTitle" : "taskTitle");
   if (target && !target.disabled) {
     target.scrollIntoView({ behavior: "smooth", block: "center" });
     target.focus({ preventScroll: true });
@@ -18456,9 +18664,10 @@ function applyAccessControls() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("is-hidden", !canAccessView(button.dataset.view));
   });
+  const accountChanged = accessControlAccountId !== account.id;
+  if (accountChanged) activePublicInvestmentWorkspace = storedPublicInvestmentWorkspace();
   const currentView = activeViewId();
   const savedView = localStorage.getItem(activeViewStorageKey());
-  const accountChanged = accessControlAccountId !== account.id;
   const targetView =
     !canAccessView(currentView) || accountChanged
       ? savedView && canAccessView(savedView)
@@ -18473,10 +18682,15 @@ function applyAccessControls() {
 
 function setActiveView(viewId, { persist = true } = {}) {
   if (!viewId) return;
+  const route = publicInvestmentRoute(viewId);
+  viewId = route.viewId;
   if (persist) localStorage.setItem(activeViewStorageKey(), viewId);
 
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === viewId));
   document.querySelectorAll(".view").forEach((item) => item.classList.toggle("is-active", item.id === viewId));
+  if (viewId === PUBLIC_INVESTMENT_HUB_VIEW) {
+    setPublicInvestmentWorkspace(route.workspace || activePublicInvestmentWorkspace, { persist: true, render: false });
+  }
   syncMobileNavigationAccess(viewId);
 }
 
@@ -18498,8 +18712,10 @@ function renderActiveView(viewId = activeViewId(), { animateDashboard = false } 
     updateTaskFormLock();
     renderGpmbWorkflows();
     renderTaskBoard({ applyCustomization: false });
-  } else if (viewId === "public-investment-appraisal") {
-    renderPublicInvestmentAppraisals();
+  } else if (viewId === "public-investment-projects") {
+    setPublicInvestmentWorkspace(activePublicInvestmentWorkspace, { persist: false, render: false });
+    if (activePublicInvestmentWorkspace === "appraisal") renderPublicInvestmentAppraisals();
+    else window.PublicInvestmentProjects?.render?.();
   } else if (viewId === "calendar") {
     renderCalendarView();
   } else if (viewId === "department-evaluations") {
@@ -18547,13 +18763,16 @@ function scheduleActiveViewRender(viewId, { animateDashboard = false } = {}) {
 }
 
 function switchView(viewId) {
-  if (!canAccessView(viewId)) return;
+  const route = publicInvestmentRoute(viewId);
+  if (!canAccessView(route.viewId)) return;
+  viewId = route.viewId;
   const currentView = activeViewId();
   if (currentView === viewId) {
+    if (viewId === PUBLIC_INVESTMENT_HUB_VIEW) setPublicInvestmentWorkspace(route.workspace || activePublicInvestmentWorkspace);
     syncMobileNavigationAccess(viewId);
     return;
   }
-  setActiveView(viewId);
+  setActiveView(route.workspace === "appraisal" ? PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW : viewId);
   scheduleActiveViewRender(viewId, { animateDashboard: viewId === "dashboard" });
 }
 
@@ -18821,12 +19040,12 @@ function publicInvestmentAppraisalPersonId(account = currentAccount()) {
 }
 
 function canCreatePublicInvestmentAppraisal(account = currentAccount()) {
-  if (!account || !moduleIsAvailableToAccount("public-investment-appraisal", account)) return false;
+  if (!account || !moduleIsAvailableToAccount(PUBLIC_INVESTMENT_HUB_VIEW, account)) return false;
   return ["admin", "director", "manager", "deputy_manager", "section_head"].includes(account.role);
 }
 
 function canViewPublicInvestmentAppraisal(record, account = currentAccount()) {
-  if (!account || !record || !moduleIsAvailableToAccount("public-investment-appraisal", account)) return false;
+  if (!account || !record || !moduleIsAvailableToAccount(PUBLIC_INVESTMENT_HUB_VIEW, account)) return false;
   if (["admin", "director"].includes(account.role)) return true;
   const personId = publicInvestmentAppraisalPersonId(account);
   const assigned = String(record.leadAppraiserId || "") === personId || (record.assigneeIds || []).includes(personId);
@@ -20230,9 +20449,10 @@ window.virtualAssistantOpenProgressForm = (draft = {}) => {
   if (!reportButton) return false;
   reportButton.click();
   const assigned = isAssignedTask(task);
-  const form = byId(assigned ? "assignmentTaskForm" : "taskForm");
+  const useAssignmentWorkspace = taskUsesAssignmentWorkspace(task);
+  const form = byId(useAssignmentWorkspace ? "assignmentTaskForm" : "taskForm");
   if (!form || form.classList.contains("is-hidden")) return false;
-  const reportNote = byId(assigned ? "assignmentTaskResponseNote" : "taskNote");
+  const reportNote = byId(useAssignmentWorkspace ? "assignmentTaskResponseNote" : "taskNote");
   if (reportNote && !reportNote.disabled) {
     reportNote.value = "";
     reportNote.dispatchEvent(new Event("input", { bubbles: true }));
@@ -20240,7 +20460,7 @@ window.virtualAssistantOpenProgressForm = (draft = {}) => {
   return {
     taskId: String(task.id),
     kind: assigned ? TASK_KIND_ASSIGNED : TASK_KIND_REGULAR,
-    formId: assigned ? "assignmentTaskForm" : "taskForm",
+    formId: useAssignmentWorkspace ? "assignmentTaskForm" : "taskForm",
     title: String(task.title || "Công việc"),
     currentStatus: normalizeTaskStatus(task.status),
     currentProgress: Math.max(0, Math.min(100, Number(task.progress) || 0)),
@@ -20530,7 +20750,7 @@ function updateTaskDeadlineExtensionNotice(task = null) {
 function updateTaskFormLock(task = null) {
   const existingTask = task || state.tasks.find((item) => item.id === byId("taskId").value);
   const adminOverride = isAdmin();
-  const kind = TASK_KIND_REGULAR;
+  const kind = existingTask ? normalizeTaskKind(existingTask) : TASK_KIND_REGULAR;
   const ownerId = byId("taskOwner").value;
   const canEditDetails = existingTask
     ? canEditTaskDetails(existingTask)
@@ -20791,7 +21011,7 @@ function copyAssignmentTaskToForm(task) {
 
 function copyTaskToForm(task) {
   if (!task || !canCopyTask(task)) return;
-  if (isAssignedTask(task)) {
+  if (taskUsesAssignmentWorkspace(task)) {
     copyAssignmentTaskToForm(task);
     return;
   }
@@ -20941,7 +21161,7 @@ function openHistoryTimelineTarget(target) {
     clearTaskTimeFilter();
     renderTaskBoard();
     switchView("tasks");
-    if (task && isAssignedTask(task)) {
+    if (task && taskUsesAssignmentWorkspace(task)) {
       renderTaskInboxDialog();
       byId("taskInboxDialog").classList.remove("is-hidden");
       byId("taskInboxDialog").setAttribute("aria-hidden", "false");
@@ -21762,6 +21982,12 @@ byId("dashboard").addEventListener("click", (event) => {
 
 document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
+});
+
+document.querySelector(".public-investment-hub-tabs")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-public-investment-workspace]");
+  if (!button) return;
+  setPublicInvestmentWorkspace(button.dataset.publicInvestmentWorkspace);
 });
 
 runWhenDocumentReady(() => {
@@ -23364,6 +23590,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
   const index = state.tasks.findIndex((item) => item.id === record.id);
   const existingTask = index >= 0 ? state.tasks[index] : null;
   const adminOverride = isAdmin();
+  if (existingTask && !await ensureTaskMutationContractSupported()) return false;
   let uploadedAttachments = [];
   try {
     uploadedAttachments = await readTaskAttachmentFiles(fileInput.files);
@@ -23803,6 +24030,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     alert("Không thể lưu hồ sơ đính kèm vì dung lượng dữ liệu trình duyệt đã đầy. Vui lòng giảm số lượng hoặc dung lượng tệp.");
     return false;
   }
+  if (!await confirmTaskMutationOnline(auditedRecord.id)) return false;
   resetCallback();
   renderAll();
   return true;
@@ -23813,6 +24041,7 @@ byId("taskForm").addEventListener("submit", async (event) => {
   const taskId = byId("taskId").value || uid("task");
   const existingTask = state.tasks.find((task) => task.id === taskId);
   const progressReportOnly = taskDetailInlineEditor?.taskId === taskId && taskDetailInlineEditor.progressReportOnly;
+  const assignedCompatibilityMode = !!existingTask && isAssignedTask(existingTask) && !assignmentTaskWorkspaceAvailable();
   const taskNote = byId("taskNote").value.trim();
   const preserveExistingOwner = !!existingTask && !canEditTaskDetails(existingTask);
   const ownerId = preserveExistingOwner ? String(existingTask.ownerId || "") : byId("taskOwner").value;
@@ -23848,8 +24077,8 @@ byId("taskForm").addEventListener("submit", async (event) => {
     },
     byId("taskAttachments"),
     taskAttachmentDraft,
-    "",
-    "",
+    assignedCompatibilityMode ? String(existingTask.responseStatus || "") : "",
+    assignedCompatibilityMode ? String(existingTask.responseNote || "") : "",
     existingTask && (progressReportOnly || taskNote !== String(existingTask.note || "").trim()) ? taskNote : "",
     resetTaskForm,
     progressReportOnly,
@@ -24155,8 +24384,8 @@ byId("taskDetailActions").addEventListener("click", (event) => {
     if (window.virtualAssistantSelectProgressTask?.(taskId) === true) return;
     openTaskDetailInlineEditor(
       taskId,
-      isAssignedTask(task) ? "assignmentTaskResponseNote" : "taskNote",
-      { progressReportOnly: !isAssignedTask(task) },
+      taskUsesAssignmentWorkspace(task) ? "assignmentTaskResponseNote" : "taskNote",
+      { progressReportOnly: !taskUsesAssignmentWorkspace(task) },
     );
     return;
   }
@@ -24249,7 +24478,7 @@ byId("taskBoard").addEventListener("click", (event) => {
   if (editId) {
     const task = state.tasks.find((item) => item.id === editId);
     if (!task || !canEditTaskDetails(task)) return;
-    if (isAssignedTask(task)) {
+    if (taskUsesAssignmentWorkspace(task)) {
       renderTaskInboxDialog();
       byId("taskInboxDialog").classList.remove("is-hidden");
       byId("taskInboxDialog").setAttribute("aria-hidden", "false");
@@ -24269,7 +24498,7 @@ byId("taskBoard").addEventListener("click", (event) => {
     const task = state.tasks.find((item) => item.id === respondId);
     if (!task || !canUpdateTaskProgress(task)) return;
     if (window.virtualAssistantSelectProgressTask?.(respondId) === true) return;
-    if (isAssignedTask(task)) {
+    if (taskUsesAssignmentWorkspace(task)) {
       renderTaskInboxDialog();
       byId("taskInboxDialog").classList.remove("is-hidden");
       byId("taskInboxDialog").setAttribute("aria-hidden", "false");
@@ -24279,7 +24508,7 @@ byId("taskBoard").addEventListener("click", (event) => {
       return;
     }
     populateTaskForm(task);
-    focusEditForm("taskForm", isAssignedTask(task) ? "taskResponseStatus" : "taskNote");
+    focusEditForm("taskForm", "taskNote");
   }
   if (reviewId) {
     openTaskCompletionReviewDialog(reviewId);
@@ -24716,6 +24945,10 @@ function splitStateForExport(exported) {
         tasks: exported.tasks || [],
         calendarEvents: exported.calendarEvents || [],
         projectCatalog: exported.projectCatalog || [],
+        gpmbWorkflows: exported.gpmbWorkflows || [],
+        gpmbCases: exported.gpmbCases || [],
+        publicInvestmentAppraisals: exported.publicInvestmentAppraisals || [],
+        publicInvestmentProjects: exported.publicInvestmentProjects || [],
         evaluations: exported.evaluations || [],
         departmentEvaluations: exported.departmentEvaluations || [],
         moduleSettings: exported.moduleSettings || {},
@@ -24873,6 +25106,10 @@ function mergeOperations(target, data, timestamp, allowMissing = false) {
   if (tasks) target.tasks = mergeImportedRecords(target.tasks, tasks, timestamp);
   if (Array.isArray(data.calendarEvents)) target.calendarEvents = mergeImportedRecords(target.calendarEvents, data.calendarEvents, timestamp);
   if (projectCatalog) target.projectCatalog = mergeImportedRecords(target.projectCatalog, projectCatalog, timestamp);
+  if (Array.isArray(data.gpmbWorkflows)) target.gpmbWorkflows = mergeImportedRecords(target.gpmbWorkflows, data.gpmbWorkflows, timestamp);
+  if (Array.isArray(data.gpmbCases)) target.gpmbCases = mergeImportedRecords(target.gpmbCases, data.gpmbCases, timestamp);
+  if (Array.isArray(data.publicInvestmentAppraisals)) target.publicInvestmentAppraisals = mergeImportedRecords(target.publicInvestmentAppraisals, data.publicInvestmentAppraisals, timestamp);
+  if (Array.isArray(data.publicInvestmentProjects)) target.publicInvestmentProjects = mergeImportedRecords(target.publicInvestmentProjects, data.publicInvestmentProjects, timestamp);
   if (evaluations) target.evaluations = mergeImportedRecords(target.evaluations, evaluations, timestamp);
   if (departmentEvaluations) target.departmentEvaluations = mergeImportedRecords(target.departmentEvaluations, departmentEvaluations, timestamp);
   if (data.activePeriod) target.activePeriod = data.activePeriod;

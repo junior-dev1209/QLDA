@@ -395,6 +395,7 @@ function saveCalendarEvent(event) {
   try { saveState(); } catch { state.calendarEvents = previous; state.activityLog = previousLog; error.textContent = "Chưa lưu được dữ liệu trên thiết bị. Nội dung đang nhập được giữ lại."; return; }
   calendarUi.week = WorkCalendar.weekStart(record.date);
   closeCalendarDialog(); renderCalendarView(); checkCalendarReminders();
+  window.virtualAssistantCalendarWizardSaved?.(record.id);
 }
 
 function deleteCalendarEvent() {
@@ -489,6 +490,18 @@ function checkCalendarReminders() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  window.virtualAssistantCanManageCalendar = (accountId) => Boolean(
+    String(currentAccount()?.id || "") === String(accountId || "")
+    && canManageCalendarEvent()
+  );
+  window.virtualAssistantOpenCalendarForm = (accountId) => {
+    if (!window.virtualAssistantCanManageCalendar?.(accountId)) return null;
+    if (typeof switchView === "function") switchView("calendar");
+    else document.querySelector('.nav-item[data-view="calendar"]')?.click();
+    openCalendarDialog();
+    const dialog = byId("calendarDialog");
+    return !dialog.classList.contains("is-hidden") ? byId("calendarForm") : null;
+  };
   byId("taskStatusChoices").addEventListener("change", (event) => {
     const input = event.target.closest("input");
     if (!input || byId("taskStatus").disabled) return;
