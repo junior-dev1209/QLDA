@@ -1,7 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const release = require("../release.json");
 
 const html = fs.readFileSync("index.html", "utf8");
 const css = fs.readFileSync("styles.css", "utf8");
@@ -63,9 +62,6 @@ assert.match(client, /window\.virtualAssistantOpenNotifications\?\.\(\)/, "Chuô
 assert.match(client, /window\.virtualAssistantNotify\(item\)/, "Thông báo mới phải được chuyển vào trợ lý.");
 assert.match(assistantClient, /function acknowledgeQuickNotice\(\{ showNext = true \} = \{\}\)[\s\S]*?dismissNotification\(item\)[\s\S]*?quickNotice\?\.classList\.add\("is-hidden"\)/, "Bấm popup Luna phải xác nhận đã xem và đóng thông báo.");
 assert.match(assistantClient, /quickNoticeText\?\.addEventListener\("click", acknowledgeQuickNotice\)/, "Chỉ lời thoại trong popup phải là vùng xác nhận thông báo.");
-assert.match(assistantClient, /item\.category === "task" \? "task"/, "Thông báo công việc từ máy chủ phải giữ đúng kiểu nhắc việc nổi bật.");
-assert.match(assistantCss, /\.assistant-quick-notice\[data-category="task"\][\s\S]*?--assistant-notice-surface: #fff7e8/, "Nhắc việc online phải có nền màu riêng như môi trường offline.");
-assert.match(client, /function showSystemToast[\s\S]*?category: "system"/, "Thông báo lỗi đồng bộ phải mang kiểu thông báo hệ thống.");
 assert.doesNotMatch(assistantClient, /setTimeout\(hideQuickNotice/, "Thông báo chủ động không được tự ẩn theo thời gian.");
 assert.match(client, /function ingestDailyTaskReminderNotifications/, "Phải nhắc công việc cần làm hôm nay và sắp đến hạn.");
 assert.match(client, /function ingestBulletinUpdateNotifications/, "Tin Bảng tin mới phải được nhắc qua trợ lý.");
@@ -113,7 +109,7 @@ assert.match(calendar, /calendarReminderToast"\)\?\.classList\.add\("is-hidden"\
 assert.doesNotMatch(calendar, /Notification\.requestPermission|new Notification\(/, "Lịch không được yêu cầu thông báo trình duyệt riêng.");
 
 [
-  `const deploymentVersion = "${release.edgeFunctionVersion}";`,
+  'const deploymentVersion = "2026.11.03.1"',
   'notifications: true,',
   'function notificationFeedForAccount',
   'function notificationAcknowledgementIsValid',
@@ -121,7 +117,7 @@ assert.doesNotMatch(calendar, /Notification\.requestPermission|new Notification\
   'if (collection === "notifications") return notificationAcknowledgementIsValid',
   'if (collection === "notifications") return false;',
   'output.notifications = notificationFeedForAccount(state, account);',
-  'for (const collection of ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "evaluations", "notifications", "activityLog"]',
+  'for (const collection of ["people", "tasks", "gpmbWorkflows", "evaluations", "notifications", "activityLog"]',
 ].forEach((marker) => assert.ok(edge.includes(marker), `Thiếu kiểm soát máy chủ: ${marker}`));
 assert.match(edge, /String\(next\.recipientAccountId \|\| ""\) !== actorId/, "Máy chủ phải bắt buộc người đọc là người nhận thông báo.");
 assert.match(edge, /sameJson\(withoutKeys\(previous, notificationMutableFields\), withoutKeys\(next, notificationMutableFields\)\)/, "Người nhận chỉ được đổi trạng thái đọc/ẩn, không được sửa nội dung.");

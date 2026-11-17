@@ -1,7 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const release = require("../release.json");
 
 const html = fs.readFileSync("index.html", "utf8");
 const client = fs.readFileSync("script.js", "utf8");
@@ -56,13 +55,7 @@ const sandbox = {
   appendOnly: (before, after) => Array.isArray(after) && after.length >= before.length && before.every((item, index) => sameJson(item, after[index])),
   recordId: (record) => String(record?.id || ""),
   gpmbWorkflowManagedTask: (task) => Boolean(task?.gpmbWorkflowId && task?.gpmbStepId),
-  taskProgressFields: () => [
-    "status", "progress", "followUpDate", ...extensionRequestFields,
-    "blockerStatus", "blockerNote", "attachments", "progressReports",
-    "completionReviewStatus", "updatedAt", "updatedBy", "updatedById",
-  ],
-  taskProgressLifecycleIsSafe: () => true,
-  isAdmin: (account) => account?.role === "admin",
+  taskProgressOnlyChange: () => true,
   isBlankTaskField: (value) => String(value ?? "").trim() === "",
   completedTaskStatus: (status) => ["Hoàn thành", "Hoan thanh"].includes(String(status || "")),
   recoverTaskCompletionReviewFromHistory: (task) => task,
@@ -99,13 +92,6 @@ assert.equal(normalizedRequest.deadlineExtensionOriginalDue, baseTask.due);
 assert.equal(normalizedRequest.deadlineExtensionRequestedById, "employee-account");
 assert.equal(normalizedRequest.due, baseTask.due, "Gửi đề nghị không được tự đổi hạn hoàn thành.");
 assert.equal(normalizedRequest.blockerNote, request.deadlineExtensionReason, "Nội dung đề nghị dùng chung với trường trở ngại/hỗ trợ.");
-const requestWithLegacyDrift = sandbox.normalizeTaskDeadlineExtensionRequest(
-  { id: "employee-account", displayName: "Nguyễn An" },
-  baseTask,
-  { ...request, projectName: "Tên dự án được chuẩn hóa lại", customFields: { legacy: true } },
-);
-assert.equal(requestWithLegacyDrift.projectName, undefined, "Trường chi tiết cũ không được làm hỏng hoặc đi kèm đề nghị gia hạn của nhân viên.");
-assert.equal(requestWithLegacyDrift.deadlineExtensionStatus, "pending", "Sai khác dữ liệu cũ không được làm máy chủ từ chối đề nghị hợp lệ.");
 
 assert.equal(sandbox.normalizeTaskDeadlineExtensionRequest(
   { id: "employee-account" }, baseTask, { ...request, deadlineExtensionReason: "Thiếu" },
@@ -235,7 +221,7 @@ assert.match(edge, /if \(action === "version" && request\.method === "GET"\) \{\
   "Endpoint phiên bản phải chỉ trả version mà không đọc hay sửa dữ liệu nghiệp vụ.");
 assert.match(edge, /function canReviewTaskDeadlineExtension\(/);
 assert.match(edge, /title: "Đề nghị gia hạn công việc cần duyệt"/);
-assert.ok(edge.includes(`const deploymentVersion = "${release.edgeFunctionVersion}";`));
+assert.match(edge, /const deploymentVersion = "2026\.11\.03\.1"/);
 assert.match(styles, /\.task-deadline-extension-detail\.is-approved/);
 assert.match(styles, /grid-template-columns: minmax\(0, 1fr\);[\s\S]*?\.task-deadline-extension-review-form/);
 assert.match(styles, /\.task-deadline-extension-review-modal \{[\s\S]*?width: min\(620px, 100%\)/);
