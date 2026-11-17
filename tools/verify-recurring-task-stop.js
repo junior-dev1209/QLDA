@@ -1,7 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const release = require("../release.json");
 
 const client = fs.readFileSync("script.js", "utf8");
 const edge = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
@@ -71,7 +70,7 @@ assert.equal(sandbox.state.activityLog[0].action, "Dừng định kỳ", "Thao t
 assert.match(client, /if \(recurrence === TASK_RECURRENCE_NONE \|\| sourceTask\.recurrenceStoppedAt \|\| !sourceTask\.due\) return;/, "Bộ sinh định kỳ phải bỏ qua chuỗi đã dừng.");
 assert.match(client, /task-stop-recurrence-button/, "Chi tiết công việc phải có nút Dừng định kỳ.");
 assert.match(edge, /action === "stop-recurring-task" && request\.method === "POST"/, "Edge Function phải có endpoint dừng chuỗi.");
-assert.ok(edge.includes(`const deploymentVersion = "${release.edgeFunctionVersion}";`), "Edge Function phải công bố phiên bản có bảo vệ chuỗi định kỳ đã dừng.");
+assert.match(edge, /const deploymentVersion = "2026\.11\.03\.1"/, "Edge Function phải công bố phiên bản có bảo vệ chuỗi định kỳ đã dừng.");
 assert.match(edge, /function canStopRecurringSeries\(/, "Máy chủ phải kiểm tra quyền dừng định kỳ.");
 assert.match(edge, /function preserveStoppedRecurringTask\(/, "Máy chủ phải chặn kỳ mới và bảo toàn dấu dừng của chuỗi.");
 assert.match(edge, /preserveStoppedRecurringTask\(next, candidate, previous\)/, "Bất biến dừng phải được áp dụng trước khi ghi công việc.");
@@ -98,8 +97,8 @@ assert.equal(permissionSandbox.canStopRecurringSeries({}, { role: "employee", pe
 assert.equal(permissionSandbox.canStopRecurringSeries({}, { role: "director" }, {}), true, "Ban giám đốc được dừng chuỗi khi cần.");
 assert.match(edge, /function migrateTaskCategoriesForCatalogChange\(/, "Máy chủ phải ánh xạ nhiệm vụ sang mục danh mục được chỉnh sửa.");
 assert.match(php, /if \(\$action === 'stop-recurring-task' && \$_SERVER\['REQUEST_METHOD'\] === 'POST'\)/, "PHP shared-sync cũng phải hỗ trợ dừng chuỗi định kỳ.");
-assert.ok(php.includes(`const SYNC_DEPLOYMENT_VERSION = '${release.edgeFunctionVersion}';`), "PHP API phải công bố phiên bản có chặn sinh kỳ sau khi dừng.");
-assert.ok(deploy.includes("$expectedDeploymentVersion = [string]$releaseManifest.edgeFunctionVersion"), "Kịch bản triển khai phải lấy phiên bản Edge từ release.json.");
+assert.match(php, /const SYNC_DEPLOYMENT_VERSION = '2026\.11\.03\.1'/, "PHP API phải công bố phiên bản có chặn sinh kỳ sau khi dừng.");
+assert.match(deploy, /\$expectedDeploymentVersion = "2026\.11\.03\.1"/, "Kịch bản triển khai phải xác minh đúng phiên bản Edge mới.");
 assert.match(php, /phpStopRecurringTasksForDepartmentChanges\(\$current\['state'\], \$nextState, \$actor\)/, "PHP phải dừng chuỗi trong cùng lần lưu chuyển phòng.");
 assert.match(php, /function phpStopRecurringTasksForDepartmentChanges\(/, "PHP API phải có bộ xử lý chuỗi của nhân sự chuyển phòng.");
 assert.match(php, /function preserveStoppedRecurringTasks\(/, "PHP API phải chặn kỳ mới thuộc chuỗi đã dừng.");

@@ -67,7 +67,6 @@ const sandbox = {
   departmentById: (id) => departments[id] || null,
   projectNameForTask: (task) => ({ "du-an-1": "Dự án 1", "du-an-2": "Dự án 2" })[task.projectId] || "",
   canViewTaskRecord: () => true,
-  dashboardTaskMatchesAccountScope: () => true,
   clamp: (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0)),
   currentAccount: () => ({ displayName: "Admin tổng hợp" }),
   isRecurrenceStoppedTask: (task) => task?.status === "Đã ngừng",
