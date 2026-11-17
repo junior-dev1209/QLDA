@@ -17,7 +17,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.11.17.2";
+const deploymentVersion = "2026.11.11.3";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -26,17 +26,17 @@ const passwordHashIterations = 310_000;
 const passwordSaltBytes = 16;
 const passwordHashBytes = 32;
 
-const collections = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"] as const;
+const collections = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "nhanVienTongHopGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "kpiPeriodLocks", "deletedIds"] as const;
 const moduleAccessRoles = ["director", "manager", "deputy_manager", "section_head", "employee"] as const;
-const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "public-investment-projects", "calendar", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
+const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "public-investment-appraisal", "calendar", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
 const moduleDefaultRoleAccess: Record<string, string[]> = {
   dashboard: ["director"],
   bulletin: [...moduleAccessRoles],
   archive: [...moduleAccessRoles],
   people: ["director", "manager", "deputy_manager"],
   tasks: [...moduleAccessRoles],
-  "public-investment-projects": [...moduleAccessRoles],
+  "public-investment-appraisal": [...moduleAccessRoles],
   calendar: [...moduleAccessRoles],
   "department-evaluations": ["director", "manager", "deputy_manager"],
   evaluations: [...moduleAccessRoles],
@@ -45,11 +45,11 @@ const moduleDefaultRoleAccess: Record<string, string[]> = {
   rules: [...moduleAccessRoles],
   help: [...moduleAccessRoles],
 };
-const moduleSettingsVersion = 6;
+const moduleSettingsVersion = 4;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals" | "public_investment_projects";
+type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -135,7 +135,6 @@ const projectionTableByCollection: Partial<Record<CollectionName, RecordProjecti
   gpmbWorkflows: "gpmb_workflows",
   gpmbCases: "gpmb_cases",
   publicInvestmentAppraisals: "public_investment_appraisals",
-  publicInvestmentProjects: "public_investment_projects",
   evaluations: "evaluations",
   notifications: "notifications",
   activityLog: "activity_log",
@@ -242,16 +241,7 @@ function normalizeModuleSettings(value: unknown): JsonRecord {
   const source = isRecord(value) ? value : {};
   const migrateLegacyDefaults = Number(source.schemaVersion || 0) < moduleSettingsVersion;
   const modules = Object.fromEntries(configurableModules.map((moduleId) => {
-    let saved = isRecord(source[moduleId]) ? source[moduleId] : {};
-    const legacyAppraisal = isRecord(source["public-investment-appraisal"]) ? source["public-investment-appraisal"] : null;
-    if (migrateLegacyDefaults && moduleId === "public-investment-projects" && legacyAppraisal) {
-      const currentRoles = isRecord(saved.roles) ? saved.roles : {};
-      const legacyRoles = isRecord(legacyAppraisal.roles) ? legacyAppraisal.roles : {};
-      saved = {
-        enabled: saved.enabled !== false || legacyAppraisal.enabled !== false,
-        roles: Object.fromEntries(moduleAccessRoles.map((role) => [role, currentRoles[role] === true || legacyRoles[role] === true])),
-      };
-    }
+    const saved = isRecord(source[moduleId]) ? source[moduleId] : {};
     const savedRoles = isRecord(saved.roles) ? saved.roles : {};
     const roles = defaultModuleRoleSettings(moduleId);
     moduleAccessRoles.forEach((role) => {
@@ -265,28 +255,12 @@ function normalizeModuleSettings(value: unknown): JsonRecord {
 
 const systemSettingCustomizationKeys = ["layout", "kpiFormulas", "kpiParameters", "fieldOverrides", "popupSizes", "customFields"] as const;
 const systemSettingThemeKeys = ["preset", "customName", "primary", "primaryDark", "accent", "background"] as const;
-const legacyPublicInvestmentAppraisalModuleId = "public-investment-appraisal";
-const publicInvestmentProjectModuleId = "public-investment-projects";
 
 function systemSettingId(key: string): string {
   return `system-setting:${key.replace(/[^a-zA-Z0-9_.:-]/g, "-")}`;
 }
 
-function canonicalSystemSettingKey(value: unknown): string {
-  const key = String(value || "").trim();
-  const legacyPrefix = `module.${legacyPublicInvestmentAppraisalModuleId}.`;
-  return key.startsWith(legacyPrefix)
-    ? `module.${publicInvestmentProjectModuleId}.${key.slice(legacyPrefix.length)}`
-    : key;
-}
-
-function canonicalSystemSettingRecord(value: JsonRecord): JsonRecord {
-  const key = canonicalSystemSettingKey(value.key);
-  return { ...value, id: systemSettingId(key), key };
-}
-
 function systemSettingLabel(key: string): string {
-  key = canonicalSystemSettingKey(key);
   if (key === "luna.enabled") return "Hiển thị trợ lý Luna";
   const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
   if (moduleMatch) {
@@ -296,7 +270,6 @@ function systemSettingLabel(key: string): string {
       archive: "Lưu trữ",
       people: "Nhân sự",
       tasks: "Công việc",
-      "public-investment-projects": "Dự án đầu tư công",
       calendar: "Lịch công việc",
       "department-evaluations": "KPI phòng",
       evaluations: "KPI cá nhân",
@@ -361,17 +334,11 @@ function systemSettingValueMap(state: JsonRecord): Map<string, unknown> {
 
 function systemSettingRecordsFromState(state: JsonRecord, existingValue: unknown = state.systemSettings): JsonRecord[] {
   const values = systemSettingValueMap(state);
-  const existing = new Map<string, JsonRecord>();
-  (Array.isArray(existingValue) ? existingValue : []).filter(isRecord).forEach((record) => {
-    const rawKey = String(record.key || "").trim();
-    const key = canonicalSystemSettingKey(rawKey);
-    if (!key) return;
-    const normalized = canonicalSystemSettingRecord(record);
-    const saved = existing.get(key);
-    // Prefer the current unified record over the retired appraisal key.
-    if (!saved || rawKey === key || String(saved.key || "") !== key) existing.set(key, normalized);
-  });
-  const keys = [...new Set([...systemSettingKeys(), ...values.keys()])];
+  const existing = new Map((Array.isArray(existingValue) ? existingValue : [])
+    .filter(isRecord)
+    .map((record) => [String(record.key || "").trim(), record]));
+  const keys = [...new Set([...systemSettingKeys(), ...values.keys(), ...existing.keys()])]
+    .filter((key) => values.has(key) || existing.has(key));
   return keys.map((key) => {
     const previous = existing.get(key);
     const value = values.has(key) ? values.get(key) : previous?.value;
@@ -390,7 +357,7 @@ function systemSettingRecordsFromState(state: JsonRecord, existingValue: unknown
 }
 
 function applySystemSettingRecordToState(state: JsonRecord, record: JsonRecord): void {
-  const key = canonicalSystemSettingKey(record.key);
+  const key = String(record.key || "").trim();
   if (!key || !Object.prototype.hasOwnProperty.call(record, "value")) return;
   const value = clone(record.value);
   const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
@@ -967,7 +934,6 @@ function defaultState(): JsonRecord {
     gpmbWorkflows: [],
     gpmbCases: [],
     publicInvestmentAppraisals: [],
-    publicInvestmentProjects: [],
     calendarEvents: [],
     projectCatalog: [],
     bulletins: [],
@@ -998,7 +964,7 @@ function validState(state: unknown): state is JsonRecord {
   // projectCatalog and supportRequests were added after the first production
   // snapshots. Keep older central data readable until their next update.
   return isRecord(state) && collections
-    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents" && key !== "notifications" && key !== "gpmbWorkflows" && key !== "gpmbCases" && key !== "publicInvestmentAppraisals" && key !== "publicInvestmentProjects" && key !== "systemSettings")
+    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents" && key !== "notifications" && key !== "gpmbWorkflows" && key !== "gpmbCases" && key !== "publicInvestmentAppraisals" && key !== "systemSettings")
     .every((key) => Array.isArray(state[key]));
 }
 
@@ -1019,7 +985,6 @@ async function prepareInitialState(incoming: JsonRecord, actor: JsonRecord): Pro
   if (!Array.isArray(next.gpmbWorkflows)) next.gpmbWorkflows = [];
   if (!Array.isArray(next.gpmbCases)) next.gpmbCases = [];
   if (!Array.isArray(next.publicInvestmentAppraisals)) next.publicInvestmentAppraisals = [];
-  if (!Array.isArray(next.publicInvestmentProjects)) next.publicInvestmentProjects = [];
   if (!Array.isArray(next.systemSettings)) next.systemSettings = [];
   ensureSystemSettings(next);
   if (!Array.isArray(next.deletedIds)) next.deletedIds = [];
@@ -1118,10 +1083,6 @@ async function snapshot(): Promise<StateSnapshot> {
   if (!Array.isArray(state.supportRequests)) state.supportRequests = [];
   if (!Array.isArray(state.calendarEvents)) state.calendarEvents = [];
   if (!Array.isArray(state.notifications)) state.notifications = [];
-  if (!Array.isArray(state.gpmbWorkflows)) state.gpmbWorkflows = [];
-  if (!Array.isArray(state.gpmbCases)) state.gpmbCases = [];
-  if (!Array.isArray(state.publicInvestmentAppraisals)) state.publicInvestmentAppraisals = [];
-  if (!Array.isArray(state.publicInvestmentProjects)) state.publicInvestmentProjects = [];
   if (!Array.isArray(state.systemSettings)) state.systemSettings = [];
   const current = {
     revision: Number(data.revision) || 0,
@@ -1855,13 +1816,6 @@ function normalizeTaskCompletionLifecycle(next: JsonRecord): JsonRecord {
 }
 
 function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
-  const allowedStatuses = new Set([
-    "Chuẩn bị thực hiện", "Chuan bi thuc hien",
-    "Chưa bắt đầu", "Chua bat dau",
-    "Đang thực hiện", "Dang thuc hien",
-    "Hoàn thành", "Hoan thanh",
-  ]);
-  if (!allowedStatuses.has(String(next.status || "").trim())) return false;
   const completionFields = [
     "completionReviewedAt",
     "completionReviewedById",
@@ -1936,19 +1890,12 @@ function normalizeTaskDeadlineExtensionRequest(
     || requestedDue <= String(previous.due || "")
     || String(candidate.due || "") !== String(previous.due || "")
     || reason.length < 10
-    || !appendOnly(previous.progressReports || [], candidate.progressReports || [])
-    || !taskProgressLifecycleIsSafe(candidate)
+    || !taskProgressOnlyChange(previous, candidate, true)
   ) return null;
 
-  const normalized = isAdmin(actor) ? clone(candidate) : clone(previous);
-  if (!isAdmin(actor)) {
-    taskProgressFields(true).forEach((field) => {
-      if (Object.prototype.hasOwnProperty.call(candidate, field)) normalized[field] = clone(candidate[field]);
-    });
-  }
   const requester = String(actor.displayName || actor.username || "Tài khoản").trim();
   return {
-    ...normalized,
+    ...candidate,
     blockerNote: reason.slice(0, 1200),
     deadlineExtensionStatus: "pending",
     deadlineExtensionRequestedDue: requestedDue,
@@ -2826,56 +2773,6 @@ function gpmbWorkflowTaskChangeAllowed(state: JsonRecord, actor: JsonRecord, pre
     || (canAssessTaskQuality(state, actor, previous) && taskQualityOnlyChange(previous, next));
 }
 
-function gpmbWorkflowTaskProgressMutationIntent(base: JsonRecord, candidate: JsonRecord): boolean {
-  if (
-    taskDeadlineExtensionReviewIntent(base, candidate)
-    || taskDeadlineExtensionRequestChanged(base, candidate)
-    || taskCompletionReviewChange(base, candidate)
-    || taskCompletionRecoveryChange(base, candidate)
-    || taskQualityOnlyChange(base, candidate)
-  ) return false;
-  return appendOnly(base.progressReports || [], candidate.progressReports || [])
-    && taskProgressFields(true).some((field) => !sameJson(base[field], candidate[field]));
-}
-
-function normalizeGpmbWorkflowTaskProgressMutation(
-  state: JsonRecord,
-  actor: JsonRecord,
-  previous: JsonRecord,
-  base: JsonRecord,
-  candidate: JsonRecord,
-): { baseValue: JsonRecord; candidate: JsonRecord } | null {
-  if (
-    !gpmbWorkflowManagedTask(previous)
-    || !gpmbWorkflowManagedTask(base)
-    || !gpmbWorkflowManagedTask(candidate)
-    || String(previous.gpmbWorkflowId || "") !== String(base.gpmbWorkflowId || "")
-    || String(previous.gpmbWorkflowId || "") !== String(candidate.gpmbWorkflowId || "")
-    || String(previous.gpmbStepId || "") !== String(base.gpmbStepId || "")
-    || String(previous.gpmbStepId || "") !== String(candidate.gpmbStepId || "")
-    || !canUpdateTaskProgress(state, actor, previous)
-    || taskProgressIsLocked(previous)
-  ) return null;
-
-  const changedFields = taskProgressFields(true).filter((field) => !sameJson(base[field], candidate[field]));
-  if (!changedFields.length || !appendOnly(base.progressReports || [], candidate.progressReports || [])) return null;
-
-  // Workflow metadata belongs to the server. Rebase only the fields a progress
-  // reporter is allowed to submit so harmless client-side normalization cannot
-  // make a valid status update look like a task-detail edit.
-  const canonicalBase = clone(previous);
-  taskProgressFields(true).forEach((field) => {
-    if (Object.prototype.hasOwnProperty.call(base, field)) canonicalBase[field] = clone(base[field]);
-    else delete canonicalBase[field];
-  });
-  const canonicalCandidate = clone(canonicalBase);
-  changedFields.forEach((field) => {
-    if (Object.prototype.hasOwnProperty.call(candidate, field)) canonicalCandidate[field] = clone(candidate[field]);
-    else delete canonicalCandidate[field];
-  });
-  return { baseValue: canonicalBase, candidate: normalizeTaskProgressLifecycle(canonicalCandidate) };
-}
-
 function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord | null {
   const workflowId = recordId(candidate);
   const canAdjustCore = !previous || isAdmin(actor) || isDirector(actor);
@@ -3144,7 +3041,7 @@ function publicInvestmentAppraisalAssignedPersonIds(record: JsonRecord): string[
 }
 
 function canManagePublicInvestmentAppraisalRecord(state: JsonRecord, actor: JsonRecord, record?: JsonRecord): boolean {
-  if (!moduleIsAvailableToAccount(state, actor, "public-investment-projects")) return false;
+  if (!moduleIsAvailableToAccount(state, actor, "public-investment-appraisal")) return false;
   if (isAdmin(actor) || isDirector(actor)) return true;
   if (!hasDepartmentTaskAccess(actor)) return false;
   if (!record) return true;
@@ -3152,7 +3049,7 @@ function canManagePublicInvestmentAppraisalRecord(state: JsonRecord, actor: Json
 }
 
 function canViewPublicInvestmentAppraisalRecord(state: JsonRecord, actor: JsonRecord, record: JsonRecord): boolean {
-  if (!moduleIsAvailableToAccount(state, actor, "public-investment-projects")) return false;
+  if (!moduleIsAvailableToAccount(state, actor, "public-investment-appraisal")) return false;
   if (canManagePublicInvestmentAppraisalRecord(state, actor, record)) return true;
   return publicInvestmentAppraisalAssignedPersonIds(record).includes(accountPersonId(state, actor));
 }
@@ -3246,211 +3143,6 @@ function normalizePublicInvestmentAppraisal(state: JsonRecord, actor: JsonRecord
     opinions,
     conclusion,
     history: history.slice(-200),
-    createdAt: previous?.createdAt || timestamp,
-    createdBy: previous?.createdBy || actor.displayName || actor.username || "",
-    createdById: previous?.createdById || actor.id || "",
-    updatedAt: timestamp,
-    updatedBy: actor.displayName || actor.username || "",
-    updatedById: actor.id || "",
-  };
-}
-
-const publicInvestmentProjectTemplateVersion = 1;
-const publicInvestmentProjectStatuses = new Set(["draft", "active", "on-hold", "completed"]);
-const publicInvestmentProjectStageStatuses = new Set(["pending", "in-progress", "completed", "blocked"]);
-const publicInvestmentProjectCheckStatuses = new Set(["pending", "pass", "missing", "na"]);
-const publicInvestmentProjectMilestoneStatuses = new Set(["pending", "in-progress", "completed", "delayed"]);
-const publicInvestmentProjectRiskLevels = new Set(["low", "medium", "high", "critical"]);
-const publicInvestmentProjectRiskStatuses = new Set(["open", "monitoring", "resolved"]);
-const publicInvestmentProjectStageIds = ["preparation", "appraisal", "implementation-preparation", "implementation", "handover", "settlement"] as const;
-const publicInvestmentProjectChecks = [
-  ["policy", "preparation"], ["planning", "preparation"], ["survey", "preparation"],
-  ["appraisal-result", "appraisal"], ["investment-decision", "appraisal"], ["capital-plan", "appraisal"],
-  ["land-gpmb", "implementation-preparation"], ["design", "implementation-preparation"], ["environment-permits", "implementation-preparation"], ["procurement", "implementation-preparation"],
-  ["contracts", "implementation"], ["quality", "implementation"], ["disbursement", "implementation"],
-  ["acceptance", "handover"], ["asset-handover", "handover"],
-  ["settlement-file", "settlement"], ["settlement-approval", "settlement"], ["post-evaluation", "settlement"],
-] as const;
-
-function publicInvestmentProjectIds(value: unknown, limit = 200): string[] {
-  return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, limit);
-}
-
-function normalizePublicInvestmentProjectStages(value: unknown): JsonRecord[] {
-  const saved = new Map((Array.isArray(value) ? value : []).filter(isRecord).map((item) => [String(item.id || ""), item]));
-  return publicInvestmentProjectStageIds.map((id, index) => {
-    const item = saved.get(id) || {};
-    return {
-      id,
-      status: publicInvestmentProjectStageStatuses.has(String(item.status || "")) ? String(item.status) : index === 0 ? "in-progress" : "pending",
-      plannedStart: gpmbIsoDate(item.plannedStart),
-      plannedEnd: gpmbIsoDate(item.plannedEnd),
-      actualEnd: gpmbIsoDate(item.actualEnd),
-      note: publicInvestmentAppraisalText(item.note, 3000, true),
-    };
-  });
-}
-
-function normalizePublicInvestmentProjectChecklist(value: unknown): JsonRecord[] {
-  const saved = new Map((Array.isArray(value) ? value : []).filter(isRecord).map((item) => [String(item.id || ""), item]));
-  return publicInvestmentProjectChecks.map(([id]) => {
-    const item = saved.get(id) || {};
-    return {
-      id,
-      status: publicInvestmentProjectCheckStatuses.has(String(item.status || "")) ? String(item.status) : "pending",
-      note: publicInvestmentAppraisalText(item.note, 3000, true),
-      archiveRecordId: String(item.archiveRecordId || ""),
-    };
-  });
-}
-
-function normalizePublicInvestmentProjectMilestones(state: JsonRecord, value: unknown): JsonRecord[] | null {
-  const rows = (Array.isArray(value) ? value : []).filter(isRecord).map((item) => ({
-    id: String(item.id || `project-milestone-${crypto.randomUUID()}`),
-    title: publicInvestmentAppraisalText(item.title, 240),
-    stageId: publicInvestmentProjectStageIds.includes(String(item.stageId || "") as typeof publicInvestmentProjectStageIds[number]) ? String(item.stageId) : "preparation",
-    ownerId: String(item.ownerId || ""),
-    dueDate: gpmbIsoDate(item.dueDate),
-    completedDate: gpmbIsoDate(item.completedDate),
-    status: publicInvestmentProjectMilestoneStatuses.has(String(item.status || "")) ? String(item.status) : "pending",
-    note: publicInvestmentAppraisalText(item.note, 3000, true),
-  })).filter((item) => item.title).slice(-300);
-  if (rows.some((item) => item.ownerId && !personIsActive(personForId(state, item.ownerId)))) return null;
-  return rows;
-}
-
-function normalizePublicInvestmentProjectRisks(state: JsonRecord, value: unknown): JsonRecord[] | null {
-  const rows = (Array.isArray(value) ? value : []).filter(isRecord).map((item) => ({
-    id: String(item.id || `project-risk-${crypto.randomUUID()}`),
-    title: publicInvestmentAppraisalText(item.title, 300),
-    level: publicInvestmentProjectRiskLevels.has(String(item.level || "")) ? String(item.level) : "medium",
-    status: publicInvestmentProjectRiskStatuses.has(String(item.status || "")) ? String(item.status) : "open",
-    ownerId: String(item.ownerId || ""),
-    dueDate: gpmbIsoDate(item.dueDate),
-    resolution: publicInvestmentAppraisalText(item.resolution, 4000, true),
-  })).filter((item) => item.title).slice(-200);
-  if (rows.some((item) => item.ownerId && !personIsActive(personForId(state, item.ownerId)))) return null;
-  return rows;
-}
-
-function normalizePublicInvestmentProjectHistory(value: unknown): JsonRecord[] {
-  return (Array.isArray(value) ? value : []).filter(isRecord).map((item) => ({
-    id: String(item.id || `project-history-${crypto.randomUUID()}`),
-    action: publicInvestmentAppraisalText(item.action, 180),
-    details: publicInvestmentAppraisalText(item.details, 1200, true),
-    createdAt: String(item.createdAt || ""),
-    createdBy: publicInvestmentAppraisalText(item.createdBy, 160),
-    createdById: String(item.createdById || ""),
-  })).filter((item) => item.action || item.createdAt).slice(-300);
-}
-
-function publicInvestmentProjectAssignedPersonIds(record: JsonRecord): string[] {
-  return [...new Set([String(record.managerId || ""), ...publicInvestmentProjectIds(record.participantIds)].filter(Boolean))];
-}
-
-function canManagePublicInvestmentProjectRecord(state: JsonRecord, actor: JsonRecord, record?: JsonRecord): boolean {
-  if (!moduleIsAvailableToAccount(state, actor, "public-investment-projects")) return false;
-  if (isAdmin(actor) || isDirector(actor)) return true;
-  if (!["manager", "deputy_manager", "section_head"].includes(accountRole(actor))) return false;
-  return !record || String(record.departmentId || "") === accountDepartmentId(state, actor);
-}
-
-function canViewPublicInvestmentProjectRecord(state: JsonRecord, actor: JsonRecord, record: JsonRecord): boolean {
-  if (!moduleIsAvailableToAccount(state, actor, "public-investment-projects")) return false;
-  return canManagePublicInvestmentProjectRecord(state, actor, record)
-    || publicInvestmentProjectAssignedPersonIds(record).includes(accountPersonId(state, actor));
-}
-
-function canUpdatePublicInvestmentProjectRecord(state: JsonRecord, actor: JsonRecord, previous?: JsonRecord): boolean {
-  if (!previous) return canManagePublicInvestmentProjectRecord(state, actor);
-  return canManagePublicInvestmentProjectRecord(state, actor, previous)
-    || publicInvestmentProjectAssignedPersonIds(previous).includes(accountPersonId(state, actor));
-}
-
-function validPublicInvestmentProjectGates(stages: JsonRecord[], checklist: JsonRecord[]): boolean {
-  for (let index = 0; index < stages.length; index += 1) {
-    const stage = stages[index];
-    if (String(stage.plannedStart || "") && String(stage.plannedEnd || "") && String(stage.plannedEnd) < String(stage.plannedStart)) return false;
-    if (index > 0 && ["in-progress", "completed", "blocked"].includes(String(stage.status || "")) && String(stages[index - 1].status || "") !== "completed") return false;
-    if (String(stage.status || "") === "completed") {
-      const requiredIds = publicInvestmentProjectChecks.filter(([, stageId]) => stageId === stage.id).map(([id]) => id);
-      if (checklist.filter((item) => requiredIds.includes(String(item.id) as typeof publicInvestmentProjectChecks[number][0])).some((item) => !["pass", "na"].includes(String(item.status || "")))) return false;
-    }
-  }
-  return true;
-}
-
-function normalizePublicInvestmentProject(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord | null {
-  if (!canUpdatePublicInvestmentProjectRecord(state, actor, previous)) return null;
-  const managerCanEdit = canManagePublicInvestmentProjectRecord(state, actor, previous || candidate);
-  const core = managerCanEdit ? candidate : previous || candidate;
-  const id = recordId(candidate);
-  const projectId = String(core.projectId || "");
-  const project = records(state, "projectCatalog").find((item) => recordId(item) === projectId);
-  const code = publicInvestmentAppraisalText(core.code, 80).toUpperCase();
-  const managerId = String(core.managerId || "");
-  const manager = personForId(state, managerId);
-  if (!id || !project || !code || !personIsActive(manager)) return null;
-  const departmentId = String(manager?.departmentId || previous?.departmentId || accountDepartmentId(state, actor));
-  if (!isAdmin(actor) && !isDirector(actor) && departmentId !== accountDepartmentId(state, actor)) return null;
-  if (records(state, "publicInvestmentProjects").some((item) => recordId(item) !== id && (String(item.projectId || "") === projectId || publicInvestmentAppraisalText(item.code, 80).toLocaleLowerCase("vi") === code.toLocaleLowerCase("vi")))) return null;
-  const participantIds = publicInvestmentProjectIds(core.participantIds).filter((personId) => personId !== managerId);
-  if (!participantIds.every((personId) => personIsActive(personForId(state, personId)))) return null;
-  const archiveRecordIds = publicInvestmentProjectIds(core.archiveRecordIds);
-  const archiveIds = new Set(records(state, "archiveRecords").map(recordId));
-  if (!archiveRecordIds.every((archiveId) => archiveIds.has(archiveId))) return null;
-  const candidateStages = managerCanEdit ? candidate.stages : previous?.stages;
-  const stages = normalizePublicInvestmentProjectStages(candidateStages);
-  const checklist = normalizePublicInvestmentProjectChecklist(candidate.checklist);
-  if (!validPublicInvestmentProjectGates(stages, checklist)) return null;
-  const milestones = normalizePublicInvestmentProjectMilestones(state, candidate.milestones);
-  const risks = normalizePublicInvestmentProjectRisks(state, candidate.risks);
-  if (!milestones || !risks) return null;
-  const requestedStatus = publicInvestmentProjectStatuses.has(String(core.status || "")) ? String(core.status) : "draft";
-  if (requestedStatus === "completed" && stages.some((stage) => stage.status !== "completed")) return null;
-  const plannedStart = gpmbIsoDate(core.plannedStart);
-  const plannedEnd = gpmbIsoDate(core.plannedEnd);
-  if (plannedStart && plannedEnd && plannedEnd < plannedStart) return null;
-  const timestamp = new Date().toISOString();
-  const history = normalizePublicInvestmentProjectHistory(previous?.history);
-  const phase = String(stages.find((stage) => stage.status !== "completed")?.id || "settlement");
-  history.push({
-    id: `project-history-${crypto.randomUUID()}`,
-    action: previous ? "Cập nhật hồ sơ dự án" : "Khởi tạo hồ sơ dự án",
-    details: `${code} · ${phase}`,
-    createdAt: timestamp,
-    createdBy: String(actor.displayName || actor.username || ""),
-    createdById: String(actor.id || ""),
-  });
-  return {
-    ...(previous ? clone(previous) : {}),
-    id,
-    projectId,
-    projectName: String(project.name || ""),
-    code,
-    status: requestedStatus,
-    phase,
-    projectGroup: ["A", "B", "C", "other"].includes(String(core.projectGroup || "")) ? String(core.projectGroup) : "C",
-    sector: publicInvestmentAppraisalText(core.sector, 160),
-    investor: publicInvestmentAppraisalText(core.investor, 240),
-    authority: publicInvestmentAppraisalText(core.authority, 200),
-    capitalSource: publicInvestmentAppraisalText(core.capitalSource, 240),
-    totalInvestment: Math.max(0, Math.round(Number(core.totalInvestment) || 0)),
-    decisionNo: publicInvestmentAppraisalText(core.decisionNo, 120),
-    decisionDate: gpmbIsoDate(core.decisionDate),
-    plannedStart,
-    plannedEnd,
-    objective: publicInvestmentAppraisalText(core.objective, 6000, true),
-    departmentId,
-    managerId,
-    participantIds,
-    archiveRecordIds,
-    templateVersion: publicInvestmentProjectTemplateVersion,
-    stages,
-    checklist,
-    milestones,
-    risks,
-    history: history.slice(-300),
     createdAt: previous?.createdAt || timestamp,
     createdBy: previous?.createdBy || actor.displayName || actor.username || "",
     createdById: previous?.createdById || actor.id || "",
@@ -3635,7 +3327,6 @@ function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   if (collection === "gpmbWorkflows") return canManageGpmbWorkflow(state, actor);
   if (collection === "gpmbCases") return canManageGpmbWorkflow(state, actor);
   if (collection === "publicInvestmentAppraisals") return canUpdatePublicInvestmentAppraisalRecord(state, actor, previous);
-  if (collection === "publicInvestmentProjects") return canUpdatePublicInvestmentProjectRecord(state, actor, previous);
   if (collection === "tasks" && typeof gpmbWorkflowManagedTask === "function" && (gpmbWorkflowManagedTask(previous) || gpmbWorkflowManagedTask(next))) {
     return Boolean(previous) && gpmbWorkflowTaskChangeAllowed(state, actor, previous, next);
   }
@@ -3668,26 +3359,6 @@ function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   return false;
 }
 
-function collectionPermissionDeniedReason(collection: CollectionName): string {
-  if (collection === "notifications") return "Invalid notification acknowledgement.";
-  if (collection === "gpmbWorkflows") return "GPMB workflow update is outside account scope.";
-  if (collection === "gpmbCases") return "GPMB case update is outside account scope.";
-  if (collection === "publicInvestmentAppraisals") return "Public investment appraisal update is outside account scope.";
-  if (collection === "publicInvestmentProjects") return "Public investment project update is outside account scope.";
-  if (collection === "people") return "Personnel update is outside account scope.";
-  if (collection === "accounts") return "Account update is outside account scope.";
-  if (collection === "calendarEvents") return "Calendar update is outside account scope.";
-  if (collection === "projectCatalog") return "Project catalog update is outside account scope.";
-  if (collection === "bulletins") return "Bulletin update is outside account scope.";
-  if (collection === "archiveRecords") return "Archive update is outside account scope.";
-  if (collection === "evaluations") return "Personal KPI update is outside account scope.";
-  if (collection === "departmentEvaluations") return "Department KPI update is outside account scope.";
-  if (collection === "supportRequests") return "Support request update is outside account scope.";
-  if (collection === "activityLog") return "Activity log update is outside account scope.";
-  if (collection === "systemSettings") return "System setting update requires administrator access.";
-  return "Permission denied.";
-}
-
 function personHasRetainedReferences(state: JsonRecord, personId: string): boolean {
   if (!personId) return false;
   if (records(state, "tasks").some((task) => taskParticipantValues(task).includes(personId))) return true;
@@ -3695,7 +3366,6 @@ function personHasRetainedReferences(state: JsonRecord, personId: string): boole
   if (records(state, "accounts").some((account) => String(account.personId || "") === personId)) return true;
   if (records(state, "activityLog").some((entry) => String(entry.personId || "") === personId)) return true;
   if (records(state, "publicInvestmentAppraisals").some((record) => publicInvestmentAppraisalAssignedPersonIds(record).includes(personId))) return true;
-  if (records(state, "publicInvestmentProjects").some((record) => publicInvestmentProjectAssignedPersonIds(record).includes(personId))) return true;
   return records(state, "calendarEvents").some((event) => [
     ...calendarIds(event.leaderIds),
     ...calendarIds(event.participantIds),
@@ -3708,18 +3378,13 @@ function canDelete(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   if (collection === "gpmbWorkflows") return isAdmin(actor);
   if (collection === "gpmbCases") return isAdmin(actor);
   if (collection === "publicInvestmentAppraisals") return isAdmin(actor);
-  if (collection === "publicInvestmentProjects") return isAdmin(actor);
   if (collection === "calendarEvents") return canManageCalendarEvent(state, actor)
     && !records(state, "tasks").some((task) => task.sourceCalendarEventId === previous.id);
   if (collection === "people") return canManagePeople(state, actor) && !personHasRetainedReferences(state, recordId(previous));
-  if (collection === "archiveRecords" && (
-    records(state, "publicInvestmentAppraisals").some((record) => publicInvestmentAppraisalIds(record.archiveRecordIds).includes(recordId(previous)))
-    || records(state, "publicInvestmentProjects").some((record) => publicInvestmentProjectIds(record.archiveRecordIds).includes(recordId(previous)))
-  )) return false;
+  if (collection === "archiveRecords" && records(state, "publicInvestmentAppraisals").some((record) => publicInvestmentAppraisalIds(record.archiveRecordIds).includes(recordId(previous)))) return false;
   if (collection === "projectCatalog") return moduleIsAvailableToAccount(state, actor, "tasks")
     && (isAdmin(actor) || hasDepartmentManagement(actor) || accountRole(actor) === "section_head")
-    && !records(state, "publicInvestmentAppraisals").some((record) => String(record.projectId || "") === recordId(previous))
-    && !records(state, "publicInvestmentProjects").some((record) => String(record.projectId || "") === recordId(previous));
+    && !records(state, "publicInvestmentAppraisals").some((record) => String(record.projectId || "") === recordId(previous));
   if (isAdmin(actor)) return true;
   if (collection === "activityLog") return false;
   if (collection === "accounts") return false;
@@ -3773,11 +3438,8 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
       output.gpmbWorkflows = [];
       output.gpmbCases = [];
     }
-    output.publicInvestmentAppraisals = moduleIsAvailableToAccount(state, account, "public-investment-projects")
+    output.publicInvestmentAppraisals = moduleIsAvailableToAccount(state, account, "public-investment-appraisal")
       ? records(state, "publicInvestmentAppraisals").filter((record) => canViewPublicInvestmentAppraisalRecord(state, account, record))
-      : [];
-    output.publicInvestmentProjects = moduleIsAvailableToAccount(state, account, "public-investment-projects")
-      ? records(state, "publicInvestmentProjects").filter((record) => canViewPublicInvestmentProjectRecord(state, account, record))
       : [];
     output.notifications = notificationFeedForAccount(state, account);
     // Support conversations are private to the reporter and Admin, even when
@@ -3811,11 +3473,8 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
     tasks: visibleTasks,
     gpmbWorkflows: gpmbWorkflowAllowed ? records(state, "gpmbWorkflows") : [],
     gpmbCases: gpmbWorkflowAllowed ? records(state, "gpmbCases") : [],
-    publicInvestmentAppraisals: moduleIsAvailableToAccount(state, account, "public-investment-projects")
+    publicInvestmentAppraisals: moduleIsAvailableToAccount(state, account, "public-investment-appraisal")
       ? records(state, "publicInvestmentAppraisals").filter((record) => canViewPublicInvestmentAppraisalRecord(state, account, record))
-      : [],
-    publicInvestmentProjects: moduleIsAvailableToAccount(state, account, "public-investment-projects")
-      ? records(state, "publicInvestmentProjects").filter((record) => canViewPublicInvestmentProjectRecord(state, account, record))
       : [],
     evaluations: records(state, "evaluations").filter((evaluation) =>
       departmentScoped
@@ -4173,11 +3832,9 @@ function systemSettingConflict(id: string, previous: JsonRecord | undefined, ope
 
 function normalizeSystemSettingCandidate(operation: MutationEntry): JsonRecord | null {
   if (!isRecord(operation.value)) return null;
-  const rawId = String(operation.id || "").trim();
-  const rawKey = String(operation.value.key || "").trim();
-  const key = canonicalSystemSettingKey(rawKey);
-  const id = systemSettingId(key);
-  if (!rawId || !key || ![systemSettingId(rawKey), id].includes(rawId) || !systemSettingKeys().includes(key)) return null;
+  const id = String(operation.id || "").trim();
+  const key = String(operation.value.key || "").trim();
+  if (!id || !key || id !== systemSettingId(key) || !systemSettingKeys().includes(key)) return null;
   if (!Object.prototype.hasOwnProperty.call(operation.value, "value")) return null;
   return { id, key, value: clone(operation.value.value) };
 }
@@ -4257,9 +3914,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
           denied.push({ scope: collection, id, reason: "Invalid system setting." });
           return;
         }
-        id = String(candidate.id || id);
-        previous = values.get(id);
-        const baseValue = isRecord(operation.baseValue) ? canonicalSystemSettingRecord(operation.baseValue) : null;
+        const baseValue = isRecord(operation.baseValue) ? operation.baseValue : null;
         if (previous && (!baseValue || !sameJson(baseValue, previous))) {
           denied.push(systemSettingConflict(id, previous, operation));
           return;
@@ -4340,29 +3995,6 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         }
         candidate = normalized;
       }
-      if (collection === "publicInvestmentProjects") {
-        const normalized = normalizePublicInvestmentProject(next, actor, previous, candidate);
-        if (!normalized) {
-          denied.push({ scope: collection, id, reason: "Invalid public investment project record." });
-          return;
-        }
-        candidate = normalized;
-      }
-      if (
-        collection === "tasks"
-        && previous
-        && taskBaseValue
-        && gpmbWorkflowManagedTask(previous)
-        && gpmbWorkflowTaskProgressMutationIntent(taskBaseValue, candidate)
-      ) {
-        const normalized = normalizeGpmbWorkflowTaskProgressMutation(next, actor, previous, taskBaseValue, candidate);
-        if (!normalized) {
-          denied.push({ scope: collection, id, reason: "Invalid GPMB task progress update." });
-          return;
-        }
-        taskBaseValue = normalized.baseValue;
-        candidate = normalized.candidate;
-      }
       if (
         collection === "tasks"
         && previous
@@ -4399,10 +4031,8 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         const reason = collection === "tasks"
           ? !moduleIsAvailableToAccount(next, actor, "tasks")
             ? "Task module is not available to this account."
-            : gpmbWorkflowManagedTask(previous) || gpmbWorkflowManagedTask(candidate)
-              ? "Invalid GPMB task progress update."
-              : "Task update is outside account scope."
-          : collectionPermissionDeniedReason(collection);
+            : "Task update is outside account scope."
+          : "Permission denied.";
         denied.push({ scope: collection, id, reason });
         return;
       }
@@ -4442,7 +4072,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         return;
       }
       if (!canDelete(next, actor, collection, previous)) {
-        denied.push({ scope: collection, id, reason: collectionPermissionDeniedReason(collection) });
+        denied.push({ scope: collection, id, reason: "Permission denied." });
         return;
       }
       values.delete(id);
@@ -4978,7 +4608,7 @@ async function updateRecordProjectionMarker(revision: number): Promise<void> {
 
 async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch, revision: number): Promise<void> {
   const changedCollections = patch.collections || {};
-  for (const collection of ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
+  for (const collection of ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
     const changes = changedCollections[collection];
     if (!changes) continue;
     const table = projectionTableByCollection[collection];
@@ -5099,7 +4729,6 @@ async function syncAllRecordProjections(state: JsonRecord, revision: number): Pr
   await upsertProjectionRows("gpmb_workflows", projectionRecordRows(records(state, "gpmbWorkflows"), revision));
   await upsertProjectionRows("gpmb_cases", projectionRecordRows(records(state, "gpmbCases"), revision));
   await upsertProjectionRows("public_investment_appraisals", projectionRecordRows(records(state, "publicInvestmentAppraisals"), revision));
-  await upsertProjectionRows("public_investment_projects", projectionRecordRows(records(state, "publicInvestmentProjects"), revision));
   await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
   await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
   await upsertProjectionRows("notifications", projectionRecordRows(records(state, "notifications"), revision));
