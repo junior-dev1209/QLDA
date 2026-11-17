@@ -17,7 +17,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.11.11.3";
+const deploymentVersion = "2026.11.11.3-status-hotfix1";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -5629,17 +5629,12 @@ Deno.serve(async (request) => {
     if (action === "status") {
       const current = await snapshot();
       let recordProjection = await recordProjectionHealth(current.revision);
-      // A previous interrupted deploy or write can leave the record tables one
-      // revision behind. Repair from the authoritative shared state before a
-      // client relies on the projection health result.
-      if (recordProjection.available === true && recordProjection.synchronized !== true && current.revision > 0) {
-        try {
-          await syncAllRecordProjections(current.state, current.revision);
-          recordProjection = await recordProjectionHealth(current.revision);
-        } catch (projectionError) {
-          console.error("Unable to repair record projections.", projectionError);
-        }
-      }
+      // Do not repair all projection tables inside the frequently polled status
+      // endpoint. Production tables can have a different schema from the legacy
+      // {id, version, data, updated_at} projection model. Repeated full writes
+      // here cause PGRST204 errors and can exhaust Edge Function CPU limits.
+      // Keep reporting the actual projection health without claiming it synced.
+      // A separately reviewed schema-aware migration is needed to repair it.
       const configuredOrigins = (Deno.env.get("KPI_ALLOWED_ORIGIN") || "")
         .split(",")
         .map((value) => value.trim())
