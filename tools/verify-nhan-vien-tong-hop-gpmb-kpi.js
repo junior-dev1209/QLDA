@@ -1,6 +1,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const vm = require("vm");
+const release = require("../release.json");
 
 const source = fs.readFileSync("script.js", "utf8");
 const edgeSource = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
@@ -58,7 +59,7 @@ assert.ok(
   "Máy chủ phải đồng bộ mốc migration của Nhân viên tổng hợp GPMB.",
 );
 assert.ok(
-  edgeSource.includes("const deploymentVersion = \"2026.11.03.1\""),
+  edgeSource.includes(`const deploymentVersion = "${release.edgeFunctionVersion}";`),
   "Máy chủ phải dùng phiên bản triển khai hỗ trợ migration danh mục KPI mới.",
 );
 

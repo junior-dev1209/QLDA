@@ -24,7 +24,7 @@ for (const view of ["dashboard", "bulletin", "tasks", "people"]) {
 }
 
 const menuItems = [...html.matchAll(/<button type="button" class="mobile-menu-item" data-view="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)];
-assert.equal(menuItems.length, 9, "Menu mobile phải giữ đủ chín mục điều hướng hiện có.");
+assert.equal(menuItems.length, 10, "Menu mobile phải giữ đủ mười mục sau khi gộp Thẩm định vào Dự án đầu tư công.");
 menuItems.forEach((match) => {
   const icon = useId(match[2]);
   assert.ok(iconIds.has(icon), `Mục ${match[1]} phải tham chiếu một biểu tượng SVG dùng chung.`);

@@ -51,7 +51,8 @@ assert.match(client, /function showLoginGreeting\(account\)[\s\S]*?loginGreeting
 assert.match(client, /phuc-thinh-luna-greeted-account-v1/, "Lời chào đăng nhập phải được chống lặp khi tải lại cùng phiên.");
 assert.match(client, /quickNoticeText\?\.addEventListener\("click", acknowledgeQuickNotice\)/, "Thông báo phải đóng khi người dùng bấm phần lời thoại.");
 assert.match(client, /launcher\.addEventListener\("click",[\s\S]*?acknowledgeQuickNotice\(\{ showNext: false \}\)[\s\S]*?setPanelOpen\(true\)/, "Bấm Luna phải xác nhận và ẩn lời thoại đang hiện trước khi mở hội thoại.");
-assert.match(client, /function loginGreetingMessage\(account\)[\s\S]*?window\.canViewTasks\(\)[\s\S]*?dailyStatusSummary\(currentSummaryTasks\(\), todayKey\)/, "Lời chào phải kèm tổng hợp theo đúng phạm vi công việc được xem.");
+assert.match(client, /function currentPersonalSummaryTasks\(\)[\s\S]*?currentPerson\(\)[\s\S]*?taskParticipantIds\(task\)\.includes\(person\.id\)[\s\S]*?currentSummaryTasks\(\)/, "Lời chào phải ưu tiên phần việc người dùng trực tiếp tham gia, nhưng vẫn có phương án dự phòng theo quyền xem.");
+assert.match(client, /function loginGreetingMessage\(account\)[\s\S]*?window\.canViewTasks\(\)[\s\S]*?currentPersonalSummaryTasks\(\)[\s\S]*?dailyStatusSummary\(focus\.tasks, todayKey\)/, "Lời chào phải tổng hợp theo đúng phạm vi cá nhân hoặc phạm vi được xem khi không liên kết hồ sơ.");
 assert.match(client, /function currentTasks\(\)[\s\S]*?canViewTaskRecord\(task\)/, "Nguồn công việc của Luna phải lọc từng bản ghi theo quyền xem.");
 assert.match(client, /function currentSummaryTasks\(\)[\s\S]*?taskMatchesDisplayScope\(task\)[\s\S]*?isRecurrenceStoppedTask\(task\)/, "Tổng hợp phải khớp kỳ hiển thị và loại mẫu định kỳ đã dừng.");
 assert.match(client, /async function handleCommand\(rawText, sequence = requestSequence, reportWindow = null\)[\s\S]*?taskSummaryHtml\(currentSummaryTasks\(\)\)/, "Mục Tình hình phải dùng cùng tập công việc với lời chào nhanh.");

@@ -44,6 +44,7 @@ const sandbox = {
   projectIdForTask: (task) => task.projectId || "",
   projectNameForTask: (task) => task.projectName || "",
   taskParticipantIds: (task) => task.people || [],
+  dashboardPersonIsInScope: () => true,
   personById: (id) => people[id] || null,
   departmentById: (id) => departments[id] || null,
   dashboardDepartmentFilterOptions: (rows) => [...new Set(rows.map((person) => person.departmentId))].map((id) => ({ value: id, label: departments[id].name })),

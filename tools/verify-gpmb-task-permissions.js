@@ -1,5 +1,7 @@
 const fs = require("fs");
 const assert = require("assert");
+const vm = require("vm");
+const release = require("../release.json");
 
 const source = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
 const clientSource = fs.readFileSync("script.js", "utf8");
@@ -121,6 +123,11 @@ assert.equal(canUpdateTask(state, byId("account-other"), task), false, "Other de
   "function taskParticipantForAccount(state: JsonRecord, task: JsonRecord, account: JsonRecord): boolean",
   "accounts: [resolvedPersonnelAccount(state, account)],",
   "taskParticipantDepartmentId(state, personId) === departmentId",
+  "function gpmbWorkflowTaskProgressMutationIntent(base: JsonRecord, candidate: JsonRecord): boolean",
+  "function normalizeGpmbWorkflowTaskProgressMutation(",
+  "const canonicalBase = clone(previous);",
+  "candidate: normalizeTaskProgressLifecycle(canonicalCandidate)",
+  'reason: "Invalid GPMB task progress update."',
 ].forEach((marker) => assert.ok(source.includes(marker), `Missing server permission safeguard: ${marker}`));
 [
   "function taskParticipantPersonId(value)",
@@ -128,8 +135,56 @@ assert.equal(canUpdateTask(state, byId("account-other"), task), false, "Other de
   "taskParticipantPersonId(task.ownerId) === person.id",
   "return uniquePersonIds([taskParticipantPersonId(task?.ownerId), ...taskCollaboratorIds(task)]);",
 ].forEach((marker) => assert.ok(clientSource.includes(marker), `Missing client permission safeguard: ${marker}`));
+assert.ok(clientSource.includes('change.reason === "Invalid GPMB task progress update."'), "Frontend phải giải thích riêng lỗi cập nhật tiến độ GPMB.");
 
-assert.match(source, /const deploymentVersion = "2026\.11\.03\.1";/, "Máy chủ phải dùng bản triển khai mới cho quy tắc người phối hợp.");
+const normalizerStart = source.indexOf("function normalizeGpmbWorkflowTaskProgressMutation(");
+const normalizerEnd = source.indexOf("\nfunction normalizeGpmbWorkflow(", normalizerStart);
+assert.ok(normalizerStart >= 0 && normalizerEnd > normalizerStart, "Không trích xuất được bộ chuẩn hóa tiến độ GPMB.");
+const normalizerSource = source.slice(normalizerStart, normalizerEnd).replace(
+  /function normalizeGpmbWorkflowTaskProgressMutation\([\s\S]*?\): \{ baseValue: JsonRecord; candidate: JsonRecord \} \| null \{/,
+  "function normalizeGpmbWorkflowTaskProgressMutation(state, actor, previous, base, candidate) {",
+);
+const progressFields = [
+  "status", "progress", "followUpDate", "blockerStatus", "blockerNote", "attachments", "progressReports",
+  "completedAt", "completedById", "completedByName", "completionReviewStatus", "completionReviewedAt",
+  "completionReviewedById", "completionReviewedByName", "completionReviewNote", "lateCompletion", "qualityPercent",
+  "qualityAssessedAt", "qualityAssessedById", "qualityAssessedByName", "updatedAt", "updatedBy", "updatedById",
+  "collaboratorIds", "collaboratorId",
+];
+const normalizerSandbox = {
+  clone: (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value)),
+  sameJson: (left, right) => JSON.stringify(left) === JSON.stringify(right),
+  appendOnly: (before, after) => Array.isArray(before) && Array.isArray(after)
+    && after.length >= before.length && before.every((item, index) => JSON.stringify(item) === JSON.stringify(after[index])),
+  gpmbWorkflowManagedTask: (item) => Boolean(item?.gpmbWorkflowId && item?.gpmbStepId),
+  canUpdateTaskProgress: (_state, actor) => actor.allowed === true,
+  taskProgressIsLocked: (item) => item.completionReviewStatus === "passed",
+  taskProgressFields: () => progressFields,
+  normalizeTaskProgressLifecycle: (item) => ({ ...item, completionReviewStatus: item.status === "Hoàn thành" ? "pending" : "" }),
+};
+vm.createContext(normalizerSandbox);
+vm.runInContext(normalizerSource, normalizerSandbox);
+const liveGpmbTask = {
+  id: "gpmb-task-1", gpmbWorkflowId: "workflow-1", gpmbStepId: "p1-01", title: "Tên chuẩn từ máy chủ",
+  projectName: "Dự án đã đồng bộ", ownerId: "gpmb-employee", status: "Chuẩn bị thực hiện", progress: 0,
+  completionReviewStatus: "", progressReports: [], collaboratorIds: [],
+};
+const staleBase = { ...liveGpmbTask, title: "Tên cũ trên thiết bị", projectName: "Dự án cũ" };
+const staleCandidate = {
+  ...staleBase,
+  status: "Đang thực hiện",
+  progress: 30,
+  progressReports: [{ id: "report-1", progress: 30 }],
+};
+const normalizedProgress = normalizerSandbox.normalizeGpmbWorkflowTaskProgressMutation({}, { allowed: true }, liveGpmbTask, staleBase, staleCandidate);
+assert.equal(normalizedProgress.candidate.title, liveGpmbTask.title, "Tiến độ hợp lệ phải giữ tiêu đề mới nhất từ máy chủ.");
+assert.equal(normalizedProgress.candidate.projectName, liveGpmbTask.projectName, "Tiến độ hợp lệ phải giữ dự án mới nhất từ máy chủ.");
+assert.equal(normalizedProgress.candidate.status, "Đang thực hiện", "Trạng thái người dùng chọn phải được giữ lại.");
+assert.equal(normalizedProgress.candidate.progress, 30, "Tiến độ người dùng nhập phải được giữ lại.");
+assert.equal(normalizerSandbox.normalizeGpmbWorkflowTaskProgressMutation({}, { allowed: false }, liveGpmbTask, staleBase, staleCandidate), null, "Tài khoản ngoài phạm vi vẫn phải bị chặn.");
+assert.equal(normalizerSandbox.normalizeGpmbWorkflowTaskProgressMutation({}, { allowed: true }, liveGpmbTask, staleBase, { ...staleCandidate, gpmbStepId: "p1-02" }), null, "Không được đổi mã bước GPMB qua cập nhật tiến độ.");
+
+assert.ok(source.includes(`const deploymentVersion = "${release.edgeFunctionVersion}";`), "Máy chủ phải dùng bản triển khai mới cho quy tắc người phối hợp.");
 assert.match(clientSource, /deploymentVersionAtLeast\(sharedSync\.deploymentVersion, "2026\.08\.21\.1"\)/, "Ứng dụng phải nhận diện đúng phiên bản máy chủ xử lý tiến độ.");
 
 console.log("gpmb_task_permissions=passed");

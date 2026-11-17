@@ -20,7 +20,7 @@ assert.match(assistant, /"language-not-supported"[\s\S]*?"no-speech"/, "Lỗi nh
 assert.match(assistant, /const isSafari = \/Safari\/i[\s\S]*?Siri\/Đọc chính tả/, "Safari phải nhận được hướng dẫn đúng khi thiếu dịch vụ nhận dạng.");
 assert.match(html, /id="lunaSpeechEnabled" type="checkbox" checked/);
 assert.match(html, /id="lunaAnnouncementSpeechEnabled" type="checkbox" checked/, "Đọc thông báo phải bật mặc định và có công tắc tắt riêng trong Luna.");
-assert.match(html, /id="lunaWakeWordEnabled" type="checkbox" disabled/, "Chế độ nghe nền phải tắt để không giữ micro thường trực.");
+assert.match(html, /id="lunaWakeWordEnabled" type="checkbox"(?! disabled)/, "Chế độ nghe nền phải cho phép người dùng chủ động bật.");
 const settingsStart = html.indexOf('<details id="assistantSettings"');
 const settingsEnd = html.indexOf("</details>", settingsStart);
 assert.ok(settingsStart >= 0 && settingsEnd > settingsStart, "Thiết lập Luna phải nằm trong menu bánh răng thu gọn.");
@@ -31,9 +31,9 @@ for (const controlId of ["lunaWakeWordEnabled", "lunaAnnouncementSpeechEnabled",
 assert.match(html, /summary aria-label="Thiết lập Luna"[\s\S]*?assistant-settings-icon[\s\S]*?icon-settings/, "Nút thiết lập cần dùng biểu tượng bánh răng và tên truy cập rõ ràng.");
 assert.doesNotMatch(html, /id="assistantCreateTask"|<button[^>]*>Tạo việc<\/button>/, "Lối tắt Tạo việc không còn xuất hiện trong hộp thoại Luna.");
 assert.match(assistant, /function startTaskWizard\(\)[\s\S]*?canCreateRegularTasks\(\)/, "Luồng tạo việc qua yêu cầu hội thoại vẫn phải kiểm tra quyền.");
-assert.match(assistant, /function syncWakePreference[\s\S]*?wakeListeningEnabled = false[\s\S]*?microphoneSecureContext\(\)/, "Chế độ nghe nền phải tắt; quyền micro chỉ dùng khi người dùng bấm Nói.");
-assert.doesNotMatch(assistant, /activeRecognition\.continuous\s*=\s*true/, "Không giữ micro mở để nhận dạng nền liên tục.");
-assert.match(assistant, /function respondToWakePhrase[\s\S]*?const greeting = "Dạ, có em đây ạ"[\s\S]*?Bấm Nói để tiếp tục trao đổi bằng giọng nói/, "Sau lời gọi Luna, người dùng được hướng dẫn bấm Nói để tiếp tục, không giữ micro nền.");
+assert.match(assistant, /function syncWakePreference[\s\S]*?speechRecognitionConstructor\(\)[\s\S]*?microphoneSecureContext\(\)/, "Chế độ nghe nền phải kiểm tra HTTPS và API nhận dạng trước khi bật.");
+assert.match(assistant, /function startWakeListener\(\)[\s\S]*?engine\.continuous = true[\s\S]*?engine\.interimResults = true[\s\S]*?engine\.onresult[\s\S]*?engine\.onerror[\s\S]*?engine\.onend/, "Chế độ chờ Luna ơi phải có phiên nhận dạng nền, tự phục hồi và xử lý lỗi.");
+assert.match(assistant, /function respondToWakePhrase[\s\S]*?const greeting = "Dạ, có em đây ạ"[\s\S]*?startVoiceCapture\(taskWizard\.active \? "task-wizard" : "assistant"\)/, "Sau lời gọi Luna phải đọc lời đáp và tự chuyển sang nghe yêu cầu.");
 assert.match(assistant, /function wakePhraseRemainder[\s\S]*?Luna\(\?:\\s\+ơi\)\?/, "Wake phrase cần nhận dạng Luna ơi và giữ lại phần yêu cầu nói liền sau đó.");
 assert.match(assistant, /function speakLunaText[\s\S]*?speechQueue\.push\(\{ text, kind, onEnd, announcementId \}\)[\s\S]*?playNextLunaSpeech\(\)/, "Thông báo đến khi tab nền phải được xếp hàng để đọc khi người dùng quay lại.");
 assert.match(assistant, /if \(!queuedSpeech\) \{\s*if \(wakePausedForSpeech \|\| wakeListeningEnabled\) \{[\s\S]*?scheduleWakeListener\(180\)/, "Khi đọc xong hoặc dừng tiếng, Luna phải tự quay lại trạng thái chờ từ khóa.");
@@ -71,7 +71,7 @@ assert.match(assistant, /taskWizardReplyForm\.addEventListener\("submit", submit
 assert.match(assistant, /if \(taskWizard\.active\) mode = "task-wizard"/, "Nút nói chung phải chuyển câu trả lời vào bước Luna đang hỏi.");
 assert.match(assistant, /const manual = taskWizard\.index === 0[\s\S]*?step\.question\.includes\("\{manual\}"\)/, "Cách trả lời bằng giọng nói hoặc biểu mẫu chỉ được nhắc lúc bắt đầu.");
 assert.match(assistant, /confirmsCurrentChoice[\s\S]*?taskOwnerChoice[\s\S]*?taskStatusChoice[\s\S]*?advanceTaskWizardStep\(\)/, "Click lại lựa chọn radio mặc định vẫn phải được ghi nhận và chuyển bước.");
-assert.match(assistant, /function presentQuickNotice\(notice\)[\s\S]*?quickNotice\.classList\.remove\("is-hidden"\)[\s\S]*?speakLunaText\(quickNoticeText\?\.textContent/, "Thông báo chủ động phải hiện hội thoại đồng thời được đọc thành tiếng.");
+assert.match(assistant, /function presentQuickNotice\(notice\)[\s\S]*?quickNotice\.classList\.remove\("is-hidden"\)[\s\S]*?speakLunaText\(quickNoticeBody\?\.textContent/, "Thông báo chủ động phải hiện hội thoại đồng thời được đọc thành tiếng.");
 assert.match(app, /const taskStatuses = \[TASK_STATUS_PREPARING, "Đang thực hiện", "Hoàn thành", "Quá hạn"\]/, "Không hiển thị trạng thái Đã ngừng thành một cột riêng trên bảng mặc định.");
 assert.match(app, /filter === TASK_STATUS_RECURRENCE_STOPPED \? \[TASK_STATUS_RECURRENCE_STOPPED\] : taskStatuses/, "Vẫn có thể tra cứu các việc đã ngừng qua bộ lọc chủ động.");
 assert.match(assistant, /function buildTaskWizardSteps\(\)[\s\S]*?key: "title"[\s\S]*?key: "project"[\s\S]*?key: "owner"[\s\S]*?key: "category"[\s\S]*?key: "collaborators"[\s\S]*?key: "workType"[\s\S]*?key: "priority"[\s\S]*?key: "recurrence"[\s\S]*?key: "startDate"[\s\S]*?key: "due"[\s\S]*?key: "status"[\s\S]*?key: "progress"[\s\S]*?key: "attachments"[\s\S]*?key: "note"[\s\S]*?key: "followUp"[\s\S]*?key: "blockerStatus"[\s\S]*?key: "dependencies"[\s\S]*?key: "blockerNote"/, "Luna phải hỏi tuần tự các trường công việc và thông tin điều hành.");
@@ -200,7 +200,9 @@ const recognitionRuntime = {
     clearTimeout() {},
   },
   navigator: { userAgent: "Chrome" },
+  document: { hidden: false },
   stopWakeRecognition() {},
+  scheduleWakeListener() {},
   stopLunaSpeech() {},
   setVoiceButtonMode(mode) { recognitionRuntime.buttonMode = mode; },
   setState(name) { recognitionRuntime.state = name; },
@@ -215,6 +217,7 @@ const recognitionRuntime = {
   wakePhraseRemainder: () => null,
   flushPendingSpeech() {},
   speechActive: false,
+  wakeListeningEnabled: false,
   setAssistantExpression() {},
 };
 vm.createContext(recognitionRuntime);

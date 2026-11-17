@@ -1,6 +1,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const vm = require("vm");
+const release = require("../release.json");
 
 const source = fs.readFileSync("script.js", "utf8");
 const edgeSource = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
@@ -90,7 +91,7 @@ assert.equal(
   "synchronizePersonDetailInlineEditor",
 ].forEach((marker) => assert.ok(source.includes(marker), `Missing client safeguard: ${marker}`));
 [
-  "const deploymentVersion = \"2026.11.03.1\"",
+  `const deploymentVersion = "${release.edgeFunctionVersion}";`,
   "function mergeKpiCriteriaArrayChange",
   "function mergeKpiCatalogRecordChange",
   "function validKpiCatalogUpdate",

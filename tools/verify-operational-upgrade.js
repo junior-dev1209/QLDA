@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const release = require("../release.json");
 
 const client = fs.readFileSync("script.js", "utf8");
 const html = fs.readFileSync("index.html", "utf8");
@@ -40,7 +41,7 @@ assert.ok(!html.includes("Giữ Ctrl hoặc Command"), "Không được yêu c�
   ".kpi-period-lock-panel",
 ].forEach((marker) => assert.ok(css.includes(marker), `Thiếu bố cục nâng cấp: ${marker}`));
 
-assert.match(edge, /const deploymentVersion = "2026\.11\.03\.1";/, "Máy chủ chưa mang phiên bản nâng cấp điều hành.");
+assert.ok(edge.includes(`const deploymentVersion = "${release.edgeFunctionVersion}";`), "Máy chủ chưa mang phiên bản nâng cấp điều hành.");
 assert.match(edge, /"kpiPeriodLocks"/, "Máy chủ chưa đồng bộ dữ liệu chốt kỳ KPI.");
 assert.match(edge, /"followUpDate"/, "Người thực hiện chưa thể đồng bộ mốc cập nhật.");
 assert.match(edge, /function lockedKpiChangeAllowed/, "Máy chủ chưa kiểm tra quyền điều chỉnh sau chốt kỳ.");

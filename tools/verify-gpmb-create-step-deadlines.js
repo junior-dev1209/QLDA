@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const release = require("../release.json");
 
 const html = fs.readFileSync("index.html", "utf8");
 const client = fs.readFileSync("script.js", "utf8");
@@ -112,6 +113,6 @@ assert.match(edge, /const canAdjustStepDurations = previous[\s\S]*?canSetGpmbIni
 assert.match(edge, /function canSetGpmbInitialStepDurations\(actor: JsonRecord\): boolean/);
 assert.match(edge, /gpmbStepDuration\(template, conditions, canAdjustStepDurations \? requested\.days : prior\?\.days\)/);
 assert.match(edge, /if \(!enabled\) return \{ \.\.\.template,[^\n]*days,/);
-assert.equal(fs.readFileSync("manifest.webmanifest", "utf8").includes('"version": "3.4.119"'), true);
+assert.equal(fs.readFileSync("manifest.webmanifest", "utf8").includes(`"version": "${release.frontendVersion}"`), true);
 
 console.log("GPMB create-step deadline checks passed.");

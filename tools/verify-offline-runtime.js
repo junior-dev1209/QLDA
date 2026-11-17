@@ -9,7 +9,11 @@ const serviceWorker = fs.readFileSync(path.join(root, "service-worker.js"), "utf
 const requirements = [
   [
     "file runtime detector",
-    'function isOfflineFileRuntime() {\n  return window.location.protocol === "file:";\n}',
+    'if (window.location.protocol === "file:") return true;',
+  ],
+  [
+    "explicit loopback preview only",
+    'loopbackHosts.has(window.location.hostname)\n    && new URLSearchParams(window.location.search).get("offline") === "1"',
   ],
   [
     "cloud sync disabled for file runtime",

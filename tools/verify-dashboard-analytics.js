@@ -173,6 +173,7 @@ const workloadSandbox = {
   taskCompletionIsApproved: (task) => task.approved === true,
   taskCompletionNeedsReview: (task) => task.pending === true,
   taskParticipantIds: (task) => task.people,
+  dashboardPersonIsInScope: () => true,
   personById: (id) => ({ a: { id: "a", name: "An" }, b: { id: "b", name: "Bình" } })[id] || null,
   getDueStatus: (task) => task.overdue ? "Quá hạn" : "Đang thực hiện",
   taskHasOpenBlocker: (task) => task.blocked === true,

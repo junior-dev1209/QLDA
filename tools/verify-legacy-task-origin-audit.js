@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const release = require("../release.json");
 
 const client = fs.readFileSync("script.js", "utf8");
 const edge = fs.readFileSync("supabase/functions/kpi-sync/index.ts", "utf8");
@@ -61,6 +62,6 @@ assert.match(edge, /taskBaseValue = preserveTaskOriginAudit\(previous, taskBaseV
 assert.match(edge, /\? stampTaskAudit\(next, previous, candidate, actor\)/, "Máy chủ phải ghi audit cập nhật bằng tài khoản phiên hiện tại.");
 assert.match(edge, /saved\.updatedBy = String\(actor\.displayName \|\| actor\.username \|\| "Tai khoan"\);/, "Máy chủ phải ghi người cập nhật theo tài khoản phiên hiện tại.");
 assert.match(edge, /if \(!previous\) \{[\s\S]*?saved\.createdAt = timestamp;/, "Máy chủ chỉ gán nguồn gốc cho công việc mới.");
-assert.match(edge, /const deploymentVersion = "2026\.11\.03\.1";/, "Máy chủ phải công bố phiên bản sửa lỗi công việc cũ.");
+assert.ok(edge.includes(`const deploymentVersion = "${release.edgeFunctionVersion}";`), "Máy chủ phải công bố phiên bản sửa lỗi công việc cũ.");
 
 console.log("legacy_task_origin_audit=passed");
