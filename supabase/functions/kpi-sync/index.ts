@@ -1,5 +1,9 @@
 import { createClient } from "npm:@supabase/supabase-js@2.107.0";
 import { gpmbWorkflowTemplate } from "./gpmb-workflow-template.ts";
+import { createTaskStorageProbe } from "./task-storage.ts";
+import { assertTaskCommandReceipt, taskCommandReceiptResult, TaskCommandConflictError, type TaskCommandCommit } from "./task-command-store.ts";
+import { taskCommandChanges } from "./task-command-response.ts";
+import { nextTaskOccurrence } from "./task-recurrence.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
 const legacyServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -17,7 +21,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.11.11.3-status-hotfix1";
+const deploymentVersion = "2026.11.18.2";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -26,17 +30,17 @@ const passwordHashIterations = 310_000;
 const passwordSaltBytes = 16;
 const passwordHashBytes = 32;
 
-const collections = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"] as const;
+const collections = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"] as const;
 const scalarFields = ["moduleSettings", "systemCustomization", "departments", "roles", "behaviorRules", "importedPeopleVersion", "canBoGpmbKpiCatalogVersion", "nhanVienTongHopGpmbKpiCatalogVersion", "sectionHeadKpiCatalogVersion", "personalKpiClassificationVersion", "kpiPeriodLocks", "deletedIds"] as const;
 const moduleAccessRoles = ["director", "manager", "deputy_manager", "section_head", "employee"] as const;
-const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "public-investment-appraisal", "calendar", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
+const configurableModules = ["dashboard", "bulletin", "archive", "people", "tasks", "public-investment-projects", "calendar", "department-evaluations", "evaluations", "history", "accounts", "rules", "help"] as const;
 const moduleDefaultRoleAccess: Record<string, string[]> = {
   dashboard: ["director"],
   bulletin: [...moduleAccessRoles],
   archive: [...moduleAccessRoles],
   people: ["director", "manager", "deputy_manager"],
   tasks: [...moduleAccessRoles],
-  "public-investment-appraisal": [...moduleAccessRoles],
+  "public-investment-projects": [...moduleAccessRoles],
   calendar: [...moduleAccessRoles],
   "department-evaluations": ["director", "manager", "deputy_manager"],
   evaluations: [...moduleAccessRoles],
@@ -45,11 +49,11 @@ const moduleDefaultRoleAccess: Record<string, string[]> = {
   rules: [...moduleAccessRoles],
   help: [...moduleAccessRoles],
 };
-const moduleSettingsVersion = 4;
+const moduleSettingsVersion = 6;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals";
+type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals" | "public_investment_projects";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -76,6 +80,7 @@ class InvalidJsonPayloadError extends Error {}
 class PayloadTooLargeError extends Error {}
 class SharedStateUninitializedError extends Error {}
 class UnsafeBulkDeletionError extends Error {}
+class AuthenticationRequiredError extends Error {}
 
 if (!supabaseUrl || !serviceRoleKey) {
   throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.");
@@ -84,6 +89,8 @@ if (!supabaseUrl || !serviceRoleKey) {
 const admin = createClient(supabaseUrl, serviceRoleKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
+const transactionalTaskStorage = createTaskStorageProbe(async () => await admin
+  .from("kpi_task_storage_state").select("schema_version, source_mode").eq("id", stateId).maybeSingle());
 
 type StateSnapshot = {
   revision: number;
@@ -103,6 +110,23 @@ type StatePatch = {
   collections?: Partial<Record<CollectionName, { upserts?: MutationEntry[]; deletes?: MutationEntry[] }>>;
   fields?: Array<{ key: ScalarField; value: unknown; baseValue?: unknown }>;
 };
+
+type TaskCommandName =
+  | "save-task"
+  | "update-progress"
+  | "submit-completion"
+  | "review-completion"
+  | "request-extension"
+  | "review-extension";
+
+const taskCommandNames = new Set<TaskCommandName>([
+  "save-task",
+  "update-progress",
+  "submit-completion",
+  "review-completion",
+  "request-extension",
+  "review-extension",
+]);
 
 type KpiCatalogUpdate = {
   departments: JsonRecord[];
@@ -135,6 +159,7 @@ const projectionTableByCollection: Partial<Record<CollectionName, RecordProjecti
   gpmbWorkflows: "gpmb_workflows",
   gpmbCases: "gpmb_cases",
   publicInvestmentAppraisals: "public_investment_appraisals",
+  publicInvestmentProjects: "public_investment_projects",
   evaluations: "evaluations",
   notifications: "notifications",
   activityLog: "activity_log",
@@ -241,7 +266,16 @@ function normalizeModuleSettings(value: unknown): JsonRecord {
   const source = isRecord(value) ? value : {};
   const migrateLegacyDefaults = Number(source.schemaVersion || 0) < moduleSettingsVersion;
   const modules = Object.fromEntries(configurableModules.map((moduleId) => {
-    const saved = isRecord(source[moduleId]) ? source[moduleId] : {};
+    let saved = isRecord(source[moduleId]) ? source[moduleId] : {};
+    const legacyAppraisal = isRecord(source["public-investment-appraisal"]) ? source["public-investment-appraisal"] : null;
+    if (migrateLegacyDefaults && moduleId === "public-investment-projects" && legacyAppraisal) {
+      const currentRoles = isRecord(saved.roles) ? saved.roles : {};
+      const legacyRoles = isRecord(legacyAppraisal.roles) ? legacyAppraisal.roles : {};
+      saved = {
+        enabled: saved.enabled !== false || legacyAppraisal.enabled !== false,
+        roles: Object.fromEntries(moduleAccessRoles.map((role) => [role, currentRoles[role] === true || legacyRoles[role] === true])),
+      };
+    }
     const savedRoles = isRecord(saved.roles) ? saved.roles : {};
     const roles = defaultModuleRoleSettings(moduleId);
     moduleAccessRoles.forEach((role) => {
@@ -255,12 +289,28 @@ function normalizeModuleSettings(value: unknown): JsonRecord {
 
 const systemSettingCustomizationKeys = ["layout", "kpiFormulas", "kpiParameters", "fieldOverrides", "popupSizes", "customFields"] as const;
 const systemSettingThemeKeys = ["preset", "customName", "primary", "primaryDark", "accent", "background"] as const;
+const legacyPublicInvestmentAppraisalModuleId = "public-investment-appraisal";
+const publicInvestmentProjectModuleId = "public-investment-projects";
 
 function systemSettingId(key: string): string {
   return `system-setting:${key.replace(/[^a-zA-Z0-9_.:-]/g, "-")}`;
 }
 
+function canonicalSystemSettingKey(value: unknown): string {
+  const key = String(value || "").trim();
+  const legacyPrefix = `module.${legacyPublicInvestmentAppraisalModuleId}.`;
+  return key.startsWith(legacyPrefix)
+    ? `module.${publicInvestmentProjectModuleId}.${key.slice(legacyPrefix.length)}`
+    : key;
+}
+
+function canonicalSystemSettingRecord(value: JsonRecord): JsonRecord {
+  const key = canonicalSystemSettingKey(value.key);
+  return { ...value, id: systemSettingId(key), key };
+}
+
 function systemSettingLabel(key: string): string {
+  key = canonicalSystemSettingKey(key);
   if (key === "luna.enabled") return "Hiển thị trợ lý Luna";
   const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
   if (moduleMatch) {
@@ -270,6 +320,7 @@ function systemSettingLabel(key: string): string {
       archive: "Lưu trữ",
       people: "Nhân sự",
       tasks: "Công việc",
+      "public-investment-projects": "Dự án đầu tư công",
       calendar: "Lịch công việc",
       "department-evaluations": "KPI phòng",
       evaluations: "KPI cá nhân",
@@ -334,12 +385,18 @@ function systemSettingValueMap(state: JsonRecord): Map<string, unknown> {
 
 function systemSettingRecordsFromState(state: JsonRecord, existingValue: unknown = state.systemSettings): JsonRecord[] {
   const values = systemSettingValueMap(state);
-  const existing = new Map((Array.isArray(existingValue) ? existingValue : [])
-    .filter(isRecord)
-    .map((record) => [String(record.key || "").trim(), record]));
-  const keys = [...new Set([...systemSettingKeys(), ...values.keys(), ...existing.keys()])]
-    .filter((key) => values.has(key) || existing.has(key));
-  return keys.map((key) => {
+  const existing = new Map<string, JsonRecord>();
+  (Array.isArray(existingValue) ? existingValue : []).filter(isRecord).forEach((record) => {
+    const rawKey = String(record.key || "").trim();
+    const key = canonicalSystemSettingKey(rawKey);
+    if (!key) return;
+    const normalized = canonicalSystemSettingRecord(record);
+    const saved = existing.get(key);
+    // Prefer the current unified record over the retired appraisal key.
+    if (!saved || rawKey === key || String(saved.key || "") !== key) existing.set(key, normalized);
+  });
+  const keys = [...new Set([...systemSettingKeys(), ...values.keys()])];
+  return keys.filter((key) => values.has(key) || Object.prototype.hasOwnProperty.call(existing.get(key) || {}, "value")).map((key) => {
     const previous = existing.get(key);
     const value = values.has(key) ? values.get(key) : previous?.value;
     return {
@@ -357,12 +414,13 @@ function systemSettingRecordsFromState(state: JsonRecord, existingValue: unknown
 }
 
 function applySystemSettingRecordToState(state: JsonRecord, record: JsonRecord): void {
-  const key = String(record.key || "").trim();
+  const key = canonicalSystemSettingKey(record.key);
   if (!key || !Object.prototype.hasOwnProperty.call(record, "value")) return;
   const value = clone(record.value);
   const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
   const moduleSettings = isRecord(state.moduleSettings) ? state.moduleSettings : {};
-  const moduleSetting = moduleMatch && isRecord(moduleSettings[moduleMatch[1]]) ? moduleSettings[moduleMatch[1]] : null;
+  const matchedModule = moduleMatch ? moduleSettings[moduleMatch[1]] : null;
+  const moduleSetting = isRecord(matchedModule) ? matchedModule : null;
   if (moduleMatch && moduleSetting) {
     if (moduleMatch[2] === "enabled") moduleSetting.enabled = value !== false;
     else if (isRecord(moduleSetting.roles)) moduleSetting.roles[moduleMatch[3]] = value === true;
@@ -370,20 +428,21 @@ function applySystemSettingRecordToState(state: JsonRecord, record: JsonRecord):
   }
   if (key === "luna.enabled") {
     if (!isRecord(state.systemCustomization)) state.systemCustomization = {};
-    state.systemCustomization.lunaEnabled = value !== false;
+    (state.systemCustomization as JsonRecord).lunaEnabled = value !== false;
     return;
   }
   const themeMatch = key.match(/^theme\.(.+)$/);
   if (themeMatch && systemSettingThemeKeys.includes(themeMatch[1] as (typeof systemSettingThemeKeys)[number])) {
     if (!isRecord(state.systemCustomization)) state.systemCustomization = {};
-    if (!isRecord(state.systemCustomization.theme)) state.systemCustomization.theme = {};
-    state.systemCustomization.theme[themeMatch[1]] = value;
+    const customization = state.systemCustomization as JsonRecord;
+    if (!isRecord(customization.theme)) customization.theme = {};
+    (customization.theme as JsonRecord)[themeMatch[1]] = value;
     return;
   }
   const customizationMatch = key.match(/^customization\.(.+)$/);
   if (customizationMatch && systemSettingCustomizationKeys.includes(customizationMatch[1] as (typeof systemSettingCustomizationKeys)[number])) {
     if (!isRecord(state.systemCustomization)) state.systemCustomization = {};
-    state.systemCustomization[customizationMatch[1]] = value;
+    (state.systemCustomization as JsonRecord)[customizationMatch[1]] = value;
   }
 }
 
@@ -410,6 +469,7 @@ function ensureSystemSettings(state: JsonRecord): boolean {
 }
 
 function clone<T>(value: T): T {
+  if (value === undefined) return value;
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
@@ -417,7 +477,7 @@ function recordId(value: unknown): string {
   return isRecord(value) ? String(value.id || "").trim() : "";
 }
 
-function records(state: JsonRecord, collection: CollectionName): JsonRecord[] {
+function records(state: JsonRecord, collection: CollectionName | "departments" | "roles"): JsonRecord[] {
   return Array.isArray(state[collection]) ? (state[collection] as JsonRecord[]).filter(isRecord) : [];
 }
 
@@ -826,7 +886,7 @@ async function passwordHash(password: string, salt: Uint8Array): Promise<Uint8Ar
   const bits = await crypto.subtle.deriveBits({
     name: "PBKDF2",
     hash: "SHA-256",
-    salt,
+    salt: new Uint8Array(salt),
     iterations: passwordHashIterations,
   }, key, passwordHashBytes * 8);
   return new Uint8Array(bits);
@@ -934,6 +994,7 @@ function defaultState(): JsonRecord {
     gpmbWorkflows: [],
     gpmbCases: [],
     publicInvestmentAppraisals: [],
+    publicInvestmentProjects: [],
     calendarEvents: [],
     projectCatalog: [],
     bulletins: [],
@@ -964,7 +1025,7 @@ function validState(state: unknown): state is JsonRecord {
   // projectCatalog and supportRequests were added after the first production
   // snapshots. Keep older central data readable until their next update.
   return isRecord(state) && collections
-    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents" && key !== "notifications" && key !== "gpmbWorkflows" && key !== "gpmbCases" && key !== "publicInvestmentAppraisals" && key !== "systemSettings")
+    .filter((key) => key !== "projectCatalog" && key !== "supportRequests" && key !== "calendarEvents" && key !== "notifications" && key !== "gpmbWorkflows" && key !== "gpmbCases" && key !== "publicInvestmentAppraisals" && key !== "publicInvestmentProjects" && key !== "systemSettings")
     .every((key) => Array.isArray(state[key]));
 }
 
@@ -985,6 +1046,7 @@ async function prepareInitialState(incoming: JsonRecord, actor: JsonRecord): Pro
   if (!Array.isArray(next.gpmbWorkflows)) next.gpmbWorkflows = [];
   if (!Array.isArray(next.gpmbCases)) next.gpmbCases = [];
   if (!Array.isArray(next.publicInvestmentAppraisals)) next.publicInvestmentAppraisals = [];
+  if (!Array.isArray(next.publicInvestmentProjects)) next.publicInvestmentProjects = [];
   if (!Array.isArray(next.systemSettings)) next.systemSettings = [];
   ensureSystemSettings(next);
   if (!Array.isArray(next.deletedIds)) next.deletedIds = [];
@@ -1070,7 +1132,7 @@ function clearMandatoryPasswordChangeFlags(state: JsonRecord): number {
   return changed;
 }
 
-async function snapshot(): Promise<StateSnapshot> {
+async function snapshot(repair = true): Promise<StateSnapshot> {
   const { data, error } = await admin
     .from("kpi_shared_state")
     .select("revision, state, updated_at")
@@ -1083,17 +1145,22 @@ async function snapshot(): Promise<StateSnapshot> {
   if (!Array.isArray(state.supportRequests)) state.supportRequests = [];
   if (!Array.isArray(state.calendarEvents)) state.calendarEvents = [];
   if (!Array.isArray(state.notifications)) state.notifications = [];
+  if (!Array.isArray(state.gpmbWorkflows)) state.gpmbWorkflows = [];
+  if (!Array.isArray(state.gpmbCases)) state.gpmbCases = [];
+  if (!Array.isArray(state.publicInvestmentAppraisals)) state.publicInvestmentAppraisals = [];
+  if (!Array.isArray(state.publicInvestmentProjects)) state.publicInvestmentProjects = [];
   if (!Array.isArray(state.systemSettings)) state.systemSettings = [];
   const current = {
     revision: Number(data.revision) || 0,
     updatedAt: String(data.updated_at || ""),
     state,
   };
+  if (!repair) return current;
   const repairedRecords = (ensureSystemSettings(current.state) ? 1 : 0)
     + repairPersonnelAccountLinks(current.state)
     + repairTaskParticipantLinks(current.state)
     + clearMandatoryPasswordChangeFlags(current.state);
-  if (!purgeRetiredAssignmentTasks(current.state) && !repairedRecords) return current;
+  if (!purgeRetiredLegacyTasks(current.state) && !repairedRecords) return current;
   const { data: updated, error: updateError } = await admin.rpc("kpi_update_shared_state", {
     expected_revision: current.revision,
     next_state: current.state,
@@ -1289,7 +1356,7 @@ function personForId(state: JsonRecord, id: string): JsonRecord | undefined {
 }
 
 function personIsActive(person: JsonRecord | undefined): boolean {
-  return Boolean(person) && !["left", "suspended"].includes(String(person.employmentStatus || "active"));
+  return !!person && !["left", "suspended"].includes(String(person.employmentStatus || "active"));
 }
 
 function accountRole(account: JsonRecord): string {
@@ -1576,21 +1643,11 @@ function repairTaskParticipantLinks(state: JsonRecord): number {
   return changed;
 }
 
-function taskAssigner(task: JsonRecord, account: JsonRecord): boolean {
-  const accountId = String(account.id || "");
-  return Boolean(accountId && (String(task.assignedById || "") === accountId || String(task.createdById || "") === accountId));
-}
-
-function assignedTask(task: JsonRecord): boolean {
-  const kind = String(task.kind || task.taskKind || "");
-  return kind === "assigned" || kind === "Giao viec" || Boolean(task.assignedById || task.assignedAt || task.responseStatus || task.responseAt);
-}
-
 function canCreateTask(state: JsonRecord, account: JsonRecord, next: JsonRecord): boolean {
+  if (retiredLegacyTask(next)) return false;
   if (isAdmin(account) || isDirector(account)) return true;
   const ownerId = String(next.ownerId || "");
   if (!ownerId) return false;
-  if (assignedTask(next)) return hasDepartmentManagement(account) && personIsInManagedDepartment(state, account, ownerId);
   if (hasDepartmentManagement(account)) return personIsInManagedDepartment(state, account, ownerId);
   return ownerId === accountPersonId(state, account);
 }
@@ -1816,6 +1873,13 @@ function normalizeTaskCompletionLifecycle(next: JsonRecord): JsonRecord {
 }
 
 function taskProgressLifecycleIsSafe(next: JsonRecord): boolean {
+  const allowedStatuses = new Set([
+    "Chuẩn bị thực hiện", "Chuan bi thuc hien",
+    "Chưa bắt đầu", "Chua bat dau",
+    "Đang thực hiện", "Dang thuc hien",
+    "Hoàn thành", "Hoan thanh",
+  ]);
+  if (!allowedStatuses.has(String(next.status || "").trim())) return false;
   const completionFields = [
     "completionReviewedAt",
     "completionReviewedById",
@@ -1890,12 +1954,19 @@ function normalizeTaskDeadlineExtensionRequest(
     || requestedDue <= String(previous.due || "")
     || String(candidate.due || "") !== String(previous.due || "")
     || reason.length < 10
-    || !taskProgressOnlyChange(previous, candidate, true)
+    || !appendOnly(previous.progressReports || [], candidate.progressReports || [])
+    || !taskProgressLifecycleIsSafe(candidate)
   ) return null;
 
+  const normalized = isAdmin(actor) ? clone(candidate) : clone(previous);
+  if (!isAdmin(actor)) {
+    taskProgressFields(true).forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(candidate, field)) normalized[field] = clone(candidate[field]);
+    });
+  }
   const requester = String(actor.displayName || actor.username || "Tài khoản").trim();
   return {
-    ...candidate,
+    ...normalized,
     blockerNote: reason.slice(0, 1200),
     deadlineExtensionStatus: "pending",
     deadlineExtensionRequestedDue: requestedDue,
@@ -2039,6 +2110,9 @@ function rebaseTaskProgressChange(live: JsonRecord, base: JsonRecord, next: Json
   if (deadlineFields.some((field) => !sameJson(live[field], base[field]))) return null;
   const changedFields = taskProgressFields(true).filter((field) => !sameJson(base[field], next[field]));
   if (!changedFields.length) return null;
+  const auditFields = ["updatedAt", "updatedBy", "updatedById", "progressReports"];
+  if (changedFields.some((field) => !auditFields.includes(field)
+    && !sameJson(live[field], base[field]) && !sameJson(live[field], next[field]))) return null;
   const rebased = clone(live);
   changedFields.forEach((field) => {
     rebased[field] = field === "progressReports"
@@ -2168,11 +2242,75 @@ function canUpdateTask(state: JsonRecord, account: JsonRecord, previous: JsonRec
   if (!taskProgressIsLocked(previous) && canManageDepartmentProgress && taskProgressOnlyChange(previous, next, true)) return true;
   if (canReviewTaskCompletion(state, account, previous) && (taskCompletionReviewChange(previous, next) || taskCompletionRecoveryChange(previous, next))) return true;
   if (canAssessTaskQuality(state, account, previous) && taskQualityOnlyChange(previous, next)) return true;
-  if (assignedTask(previous) && taskAssigner(previous, account) && (isDirector(account) || hasDepartmentManagement(account))) {
-    if (isDirector(account)) return true;
-    return personIsInManagedDepartment(state, account, next.ownerId);
-  }
   return false;
+}
+
+function taskProgressReportHasId(task: JsonRecord, reportId: string): boolean {
+  return Boolean(reportId) && (Array.isArray(task.progressReports) ? task.progressReports : [])
+    .some((report) => recordId(report) === reportId);
+}
+
+function classifyTaskCommand(previous: JsonRecord, next: JsonRecord): TaskCommandName {
+  if (taskDeadlineExtensionReviewIntent(previous, next)) return "review-extension";
+  if (String(next.deadlineExtensionStatus || "") === "pending" && taskDeadlineExtensionRequestChanged(previous, next)) {
+    return "request-extension";
+  }
+  if (
+    taskCompletionReviewChange(previous, next)
+    || taskCompletionRecoveryChange(previous, next)
+    || taskQualityOnlyChange(previous, next)
+  ) return "review-completion";
+  if (
+    completedTaskStatus(next.status)
+    && (!completedTaskStatus(previous.status) || String(previous.completionReviewStatus || "") === "failed")
+  ) return "submit-completion";
+  if (taskProgressChangeIntent(previous, next, true)) return "update-progress";
+  return "save-task";
+}
+
+function validTaskCommandPayload(value: unknown): value is {
+  taskId: string;
+  command: TaskCommandName;
+  commandId: string;
+  baseTask: JsonRecord;
+  task: JsonRecord;
+  baseRevision?: number;
+  responseMode?: string;
+} {
+  if (!isRecord(value) || !isRecord(value.baseTask) || !isRecord(value.task)) return false;
+  const taskId = String(value.taskId || "").trim();
+  const commandId = String(value.commandId || "").trim();
+  const command = String(value.command || "") as TaskCommandName;
+  return Boolean(
+    taskId
+    && commandId
+    && commandId.length <= 160
+    && taskCommandNames.has(command)
+    && recordId(value.baseTask) === taskId
+    && recordId(value.task) === taskId
+    && !taskProgressReportHasId(value.baseTask, commandId)
+    && !retiredLegacyTask(value.task)
+    && taskProgressReportHasId(value.task, commandId)
+  );
+}
+
+function taskCommandResponseState(body: { responseMode?: string; baseRevision?: number }, before: StateSnapshot,
+  after: StateSnapshot, account: JsonRecord): JsonRecord {
+  const state = visibleState(after.state, account);
+  if (body.responseMode !== "changes-v1" || body.baseRevision !== before.revision
+    || ![before.revision, before.revision + 1].includes(after.revision)) return { state };
+  const beforeAccount = accountForId(before.state, recordId(account));
+  if (!beforeAccount) return { state };
+  const changes = taskCommandChanges(visibleState(before.state, beforeAccount), state,
+    before.revision, after.revision, collections, [...scalarFields, "activePeriod", "calendarDirectory"]);
+  return changes && JSON.stringify(changes).length < JSON.stringify(state).length ? { changes } : { state };
+}
+
+function taskCommandErrorStatus(reason: string): number {
+  const normalized = reason.toLowerCase();
+  if (normalized.includes("changed by another") || normalized.includes("stopped")) return 409;
+  if (normalized.includes("permission") || normalized.includes("outside account scope") || normalized.includes("not available")) return 403;
+  return 422;
 }
 
 function kpiPeriodIsLocked(state: JsonRecord, period: unknown): boolean {
@@ -2215,15 +2353,15 @@ function accountChangeAllowed(actor: JsonRecord, previous: JsonRecord | undefine
   return unchangedAccountFields && updatedByCurrentAccount;
 }
 
-function retiredAssignmentTask(task: JsonRecord): boolean {
+function retiredLegacyTask(task: JsonRecord): boolean {
   const kind = String(task.kind || task.taskKind || "").trim().toLowerCase();
   return kind === "assigned" || (!kind && Boolean(task.assignedById || task.assignedAt || task.responseStatus || task.responseAt));
 }
 
-function purgeRetiredAssignmentTasks(state: JsonRecord): number {
+function purgeRetiredLegacyTasks(state: JsonRecord): number {
   const tasks = records(state, "tasks");
-  const removedTaskIds = new Set(tasks.filter(retiredAssignmentTask).map(recordId).filter(Boolean));
-  const keptTasks = tasks.filter((task) => !retiredAssignmentTask(task));
+  const removedTaskIds = new Set(tasks.filter(retiredLegacyTask).map(recordId).filter(Boolean));
+  const keptTasks = tasks.filter((task) => !retiredLegacyTask(task));
   const removed = tasks.length - keptTasks.length;
   if (removed) {
     state.tasks = keptTasks;
@@ -2773,6 +2911,56 @@ function gpmbWorkflowTaskChangeAllowed(state: JsonRecord, actor: JsonRecord, pre
     || (canAssessTaskQuality(state, actor, previous) && taskQualityOnlyChange(previous, next));
 }
 
+function gpmbWorkflowTaskProgressMutationIntent(base: JsonRecord, candidate: JsonRecord): boolean {
+  if (
+    taskDeadlineExtensionReviewIntent(base, candidate)
+    || taskDeadlineExtensionRequestChanged(base, candidate)
+    || taskCompletionReviewChange(base, candidate)
+    || taskCompletionRecoveryChange(base, candidate)
+    || taskQualityOnlyChange(base, candidate)
+  ) return false;
+  return appendOnly(base.progressReports || [], candidate.progressReports || [])
+    && taskProgressFields(true).some((field) => !sameJson(base[field], candidate[field]));
+}
+
+function normalizeGpmbWorkflowTaskProgressMutation(
+  state: JsonRecord,
+  actor: JsonRecord,
+  previous: JsonRecord,
+  base: JsonRecord,
+  candidate: JsonRecord,
+): { baseValue: JsonRecord; candidate: JsonRecord } | null {
+  if (
+    !gpmbWorkflowManagedTask(previous)
+    || !gpmbWorkflowManagedTask(base)
+    || !gpmbWorkflowManagedTask(candidate)
+    || String(previous.gpmbWorkflowId || "") !== String(base.gpmbWorkflowId || "")
+    || String(previous.gpmbWorkflowId || "") !== String(candidate.gpmbWorkflowId || "")
+    || String(previous.gpmbStepId || "") !== String(base.gpmbStepId || "")
+    || String(previous.gpmbStepId || "") !== String(candidate.gpmbStepId || "")
+    || !canUpdateTaskProgress(state, actor, previous)
+    || taskProgressIsLocked(previous)
+  ) return null;
+
+  const changedFields = taskProgressFields(true).filter((field) => !sameJson(base[field], candidate[field]));
+  if (!changedFields.length || !appendOnly(base.progressReports || [], candidate.progressReports || [])) return null;
+
+  // Workflow metadata belongs to the server. Rebase only the fields a progress
+  // reporter is allowed to submit so harmless client-side normalization cannot
+  // make a valid status update look like a task-detail edit.
+  const canonicalBase = clone(previous);
+  taskProgressFields(true).forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(base, field)) canonicalBase[field] = clone(base[field]);
+    else delete canonicalBase[field];
+  });
+  const canonicalCandidate = clone(canonicalBase);
+  changedFields.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(candidate, field)) canonicalCandidate[field] = clone(candidate[field]);
+    else delete canonicalCandidate[field];
+  });
+  return { baseValue: canonicalBase, candidate: normalizeTaskProgressLifecycle(canonicalCandidate) };
+}
+
 function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord | null {
   const workflowId = recordId(candidate);
   const canAdjustCore = !previous || isAdmin(actor) || isDirector(actor);
@@ -2792,7 +2980,7 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
     || (Array.isArray(candidate.steps) && candidate.steps.some((step) => isRecord(step) && String(step.id || "").startsWith("p1-")))
     ? 2
     : 1;
-  const templateSteps = workflowVersion >= 2 ? gpmbWorkflowTemplate : gpmbLegacyWorkflowTemplate;
+  const templateSteps: readonly AnyGpmbWorkflowTemplateStep[] = workflowVersion >= 2 ? gpmbWorkflowTemplate : gpmbLegacyWorkflowTemplate;
   const candidateSteps = new Map((Array.isArray(candidate.steps) ? candidate.steps : []).filter(isRecord).map((step) => [String(step.id || ""), step]));
   const priorSteps = new Map((Array.isArray(previous?.steps) ? previous?.steps : []).filter(isRecord).map((step) => [String(step.id || ""), step]));
   if (candidateSteps.size && templateSteps.some((step) => !candidateSteps.has(step.id))) return null;
@@ -2804,13 +2992,13 @@ function normalizeGpmbWorkflow(state: JsonRecord, actor: JsonRecord, previous: J
   let cursor = startDate;
   let activeAssigned = false;
   let invalidParticipant = false;
-  const steps = templateSteps.map((template) => {
-    const requested = candidateSteps.get(template.id) || {};
-    const prior = priorSteps.get(template.id);
+  const steps = templateSteps.map((template): JsonRecord => {
+    const requested = candidateSteps.get(String(template.id)) || {};
+    const prior = priorSteps.get(String(template.id));
     const enabled = gpmbStepEnabled(template, conditions);
     const days = gpmbStepDuration(template, conditions, canAdjustStepDurations ? requested.days : prior?.days);
     if (prior?.taskId) {
-      const preserved = { ...clone(prior), category: template.category };
+      const preserved: JsonRecord = { ...clone(prior), category: template.category };
       const preservedDue = gpmbIsoDate(preserved.due);
       if (preservedDue) cursor = gpmbAddDays(preservedDue, 1);
       if (String(preserved.status || "") === "active") activeAssigned = true;
@@ -3041,7 +3229,7 @@ function publicInvestmentAppraisalAssignedPersonIds(record: JsonRecord): string[
 }
 
 function canManagePublicInvestmentAppraisalRecord(state: JsonRecord, actor: JsonRecord, record?: JsonRecord): boolean {
-  if (!moduleIsAvailableToAccount(state, actor, "public-investment-appraisal")) return false;
+  if (!moduleIsAvailableToAccount(state, actor, "public-investment-projects")) return false;
   if (isAdmin(actor) || isDirector(actor)) return true;
   if (!hasDepartmentTaskAccess(actor)) return false;
   if (!record) return true;
@@ -3049,7 +3237,7 @@ function canManagePublicInvestmentAppraisalRecord(state: JsonRecord, actor: Json
 }
 
 function canViewPublicInvestmentAppraisalRecord(state: JsonRecord, actor: JsonRecord, record: JsonRecord): boolean {
-  if (!moduleIsAvailableToAccount(state, actor, "public-investment-appraisal")) return false;
+  if (!moduleIsAvailableToAccount(state, actor, "public-investment-projects")) return false;
   if (canManagePublicInvestmentAppraisalRecord(state, actor, record)) return true;
   return publicInvestmentAppraisalAssignedPersonIds(record).includes(accountPersonId(state, actor));
 }
@@ -3143,6 +3331,211 @@ function normalizePublicInvestmentAppraisal(state: JsonRecord, actor: JsonRecord
     opinions,
     conclusion,
     history: history.slice(-200),
+    createdAt: previous?.createdAt || timestamp,
+    createdBy: previous?.createdBy || actor.displayName || actor.username || "",
+    createdById: previous?.createdById || actor.id || "",
+    updatedAt: timestamp,
+    updatedBy: actor.displayName || actor.username || "",
+    updatedById: actor.id || "",
+  };
+}
+
+const publicInvestmentProjectTemplateVersion = 1;
+const publicInvestmentProjectStatuses = new Set(["draft", "active", "on-hold", "completed"]);
+const publicInvestmentProjectStageStatuses = new Set(["pending", "in-progress", "completed", "blocked"]);
+const publicInvestmentProjectCheckStatuses = new Set(["pending", "pass", "missing", "na"]);
+const publicInvestmentProjectMilestoneStatuses = new Set(["pending", "in-progress", "completed", "delayed"]);
+const publicInvestmentProjectRiskLevels = new Set(["low", "medium", "high", "critical"]);
+const publicInvestmentProjectRiskStatuses = new Set(["open", "monitoring", "resolved"]);
+const publicInvestmentProjectStageIds = ["preparation", "appraisal", "implementation-preparation", "implementation", "handover", "settlement"] as const;
+const publicInvestmentProjectChecks = [
+  ["policy", "preparation"], ["planning", "preparation"], ["survey", "preparation"],
+  ["appraisal-result", "appraisal"], ["investment-decision", "appraisal"], ["capital-plan", "appraisal"],
+  ["land-gpmb", "implementation-preparation"], ["design", "implementation-preparation"], ["environment-permits", "implementation-preparation"], ["procurement", "implementation-preparation"],
+  ["contracts", "implementation"], ["quality", "implementation"], ["disbursement", "implementation"],
+  ["acceptance", "handover"], ["asset-handover", "handover"],
+  ["settlement-file", "settlement"], ["settlement-approval", "settlement"], ["post-evaluation", "settlement"],
+] as const;
+
+function publicInvestmentProjectIds(value: unknown, limit = 200): string[] {
+  return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, limit);
+}
+
+function normalizePublicInvestmentProjectStages(value: unknown): JsonRecord[] {
+  const saved = new Map((Array.isArray(value) ? value : []).filter(isRecord).map((item) => [String(item.id || ""), item]));
+  return publicInvestmentProjectStageIds.map((id, index) => {
+    const item = saved.get(id) || {};
+    return {
+      id,
+      status: publicInvestmentProjectStageStatuses.has(String(item.status || "")) ? String(item.status) : index === 0 ? "in-progress" : "pending",
+      plannedStart: gpmbIsoDate(item.plannedStart),
+      plannedEnd: gpmbIsoDate(item.plannedEnd),
+      actualEnd: gpmbIsoDate(item.actualEnd),
+      note: publicInvestmentAppraisalText(item.note, 3000, true),
+    };
+  });
+}
+
+function normalizePublicInvestmentProjectChecklist(value: unknown): JsonRecord[] {
+  const saved = new Map((Array.isArray(value) ? value : []).filter(isRecord).map((item) => [String(item.id || ""), item]));
+  return publicInvestmentProjectChecks.map(([id]) => {
+    const item = saved.get(id) || {};
+    return {
+      id,
+      status: publicInvestmentProjectCheckStatuses.has(String(item.status || "")) ? String(item.status) : "pending",
+      note: publicInvestmentAppraisalText(item.note, 3000, true),
+      archiveRecordId: String(item.archiveRecordId || ""),
+    };
+  });
+}
+
+function normalizePublicInvestmentProjectMilestones(state: JsonRecord, value: unknown): JsonRecord[] | null {
+  const rows = (Array.isArray(value) ? value : []).filter(isRecord).map((item) => ({
+    id: String(item.id || `project-milestone-${crypto.randomUUID()}`),
+    title: publicInvestmentAppraisalText(item.title, 240),
+    stageId: publicInvestmentProjectStageIds.includes(String(item.stageId || "") as typeof publicInvestmentProjectStageIds[number]) ? String(item.stageId) : "preparation",
+    ownerId: String(item.ownerId || ""),
+    dueDate: gpmbIsoDate(item.dueDate),
+    completedDate: gpmbIsoDate(item.completedDate),
+    status: publicInvestmentProjectMilestoneStatuses.has(String(item.status || "")) ? String(item.status) : "pending",
+    note: publicInvestmentAppraisalText(item.note, 3000, true),
+  })).filter((item) => item.title).slice(-300);
+  if (rows.some((item) => item.ownerId && !personIsActive(personForId(state, item.ownerId)))) return null;
+  return rows;
+}
+
+function normalizePublicInvestmentProjectRisks(state: JsonRecord, value: unknown): JsonRecord[] | null {
+  const rows = (Array.isArray(value) ? value : []).filter(isRecord).map((item) => ({
+    id: String(item.id || `project-risk-${crypto.randomUUID()}`),
+    title: publicInvestmentAppraisalText(item.title, 300),
+    level: publicInvestmentProjectRiskLevels.has(String(item.level || "")) ? String(item.level) : "medium",
+    status: publicInvestmentProjectRiskStatuses.has(String(item.status || "")) ? String(item.status) : "open",
+    ownerId: String(item.ownerId || ""),
+    dueDate: gpmbIsoDate(item.dueDate),
+    resolution: publicInvestmentAppraisalText(item.resolution, 4000, true),
+  })).filter((item) => item.title).slice(-200);
+  if (rows.some((item) => item.ownerId && !personIsActive(personForId(state, item.ownerId)))) return null;
+  return rows;
+}
+
+function normalizePublicInvestmentProjectHistory(value: unknown): JsonRecord[] {
+  return (Array.isArray(value) ? value : []).filter(isRecord).map((item) => ({
+    id: String(item.id || `project-history-${crypto.randomUUID()}`),
+    action: publicInvestmentAppraisalText(item.action, 180),
+    details: publicInvestmentAppraisalText(item.details, 1200, true),
+    createdAt: String(item.createdAt || ""),
+    createdBy: publicInvestmentAppraisalText(item.createdBy, 160),
+    createdById: String(item.createdById || ""),
+  })).filter((item) => item.action || item.createdAt).slice(-300);
+}
+
+function publicInvestmentProjectAssignedPersonIds(record: JsonRecord): string[] {
+  return [...new Set([String(record.managerId || ""), ...publicInvestmentProjectIds(record.participantIds)].filter(Boolean))];
+}
+
+function canManagePublicInvestmentProjectRecord(state: JsonRecord, actor: JsonRecord, record?: JsonRecord): boolean {
+  if (!moduleIsAvailableToAccount(state, actor, "public-investment-projects")) return false;
+  if (isAdmin(actor) || isDirector(actor)) return true;
+  if (!["manager", "deputy_manager", "section_head"].includes(accountRole(actor))) return false;
+  return !record || String(record.departmentId || "") === accountDepartmentId(state, actor);
+}
+
+function canViewPublicInvestmentProjectRecord(state: JsonRecord, actor: JsonRecord, record: JsonRecord): boolean {
+  if (!moduleIsAvailableToAccount(state, actor, "public-investment-projects")) return false;
+  return canManagePublicInvestmentProjectRecord(state, actor, record)
+    || publicInvestmentProjectAssignedPersonIds(record).includes(accountPersonId(state, actor));
+}
+
+function canUpdatePublicInvestmentProjectRecord(state: JsonRecord, actor: JsonRecord, previous?: JsonRecord): boolean {
+  if (!previous) return canManagePublicInvestmentProjectRecord(state, actor);
+  return canManagePublicInvestmentProjectRecord(state, actor, previous)
+    || publicInvestmentProjectAssignedPersonIds(previous).includes(accountPersonId(state, actor));
+}
+
+function validPublicInvestmentProjectGates(stages: JsonRecord[], checklist: JsonRecord[]): boolean {
+  for (let index = 0; index < stages.length; index += 1) {
+    const stage = stages[index];
+    if (String(stage.plannedStart || "") && String(stage.plannedEnd || "") && String(stage.plannedEnd) < String(stage.plannedStart)) return false;
+    if (index > 0 && ["in-progress", "completed", "blocked"].includes(String(stage.status || "")) && String(stages[index - 1].status || "") !== "completed") return false;
+    if (String(stage.status || "") === "completed") {
+      const requiredIds = publicInvestmentProjectChecks.filter(([, stageId]) => stageId === stage.id).map(([id]) => id);
+      if (checklist.filter((item) => requiredIds.includes(String(item.id) as typeof publicInvestmentProjectChecks[number][0])).some((item) => !["pass", "na"].includes(String(item.status || "")))) return false;
+    }
+  }
+  return true;
+}
+
+function normalizePublicInvestmentProject(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, candidate: JsonRecord): JsonRecord | null {
+  if (!canUpdatePublicInvestmentProjectRecord(state, actor, previous)) return null;
+  const managerCanEdit = canManagePublicInvestmentProjectRecord(state, actor, previous || candidate);
+  const core = managerCanEdit ? candidate : previous || candidate;
+  const id = recordId(candidate);
+  const projectId = String(core.projectId || "");
+  const project = records(state, "projectCatalog").find((item) => recordId(item) === projectId);
+  const code = publicInvestmentAppraisalText(core.code, 80).toUpperCase();
+  const managerId = String(core.managerId || "");
+  const manager = personForId(state, managerId);
+  if (!id || !project || !code || !personIsActive(manager)) return null;
+  const departmentId = String(manager?.departmentId || previous?.departmentId || accountDepartmentId(state, actor));
+  if (!isAdmin(actor) && !isDirector(actor) && departmentId !== accountDepartmentId(state, actor)) return null;
+  if (records(state, "publicInvestmentProjects").some((item) => recordId(item) !== id && (String(item.projectId || "") === projectId || publicInvestmentAppraisalText(item.code, 80).toLocaleLowerCase("vi") === code.toLocaleLowerCase("vi")))) return null;
+  const participantIds = publicInvestmentProjectIds(core.participantIds).filter((personId) => personId !== managerId);
+  if (!participantIds.every((personId) => personIsActive(personForId(state, personId)))) return null;
+  const archiveRecordIds = publicInvestmentProjectIds(core.archiveRecordIds);
+  const archiveIds = new Set(records(state, "archiveRecords").map(recordId));
+  if (!archiveRecordIds.every((archiveId) => archiveIds.has(archiveId))) return null;
+  const candidateStages = managerCanEdit ? candidate.stages : previous?.stages;
+  const stages = normalizePublicInvestmentProjectStages(candidateStages);
+  const checklist = normalizePublicInvestmentProjectChecklist(candidate.checklist);
+  if (!validPublicInvestmentProjectGates(stages, checklist)) return null;
+  const milestones = normalizePublicInvestmentProjectMilestones(state, candidate.milestones);
+  const risks = normalizePublicInvestmentProjectRisks(state, candidate.risks);
+  if (!milestones || !risks) return null;
+  const requestedStatus = publicInvestmentProjectStatuses.has(String(core.status || "")) ? String(core.status) : "draft";
+  if (requestedStatus === "completed" && stages.some((stage) => stage.status !== "completed")) return null;
+  const plannedStart = gpmbIsoDate(core.plannedStart);
+  const plannedEnd = gpmbIsoDate(core.plannedEnd);
+  if (plannedStart && plannedEnd && plannedEnd < plannedStart) return null;
+  const timestamp = new Date().toISOString();
+  const history = normalizePublicInvestmentProjectHistory(previous?.history);
+  const phase = String(stages.find((stage) => stage.status !== "completed")?.id || "settlement");
+  history.push({
+    id: `project-history-${crypto.randomUUID()}`,
+    action: previous ? "Cập nhật hồ sơ dự án" : "Khởi tạo hồ sơ dự án",
+    details: `${code} · ${phase}`,
+    createdAt: timestamp,
+    createdBy: String(actor.displayName || actor.username || ""),
+    createdById: String(actor.id || ""),
+  });
+  return {
+    ...(previous ? clone(previous) : {}),
+    id,
+    projectId,
+    projectName: String(project.name || ""),
+    code,
+    status: requestedStatus,
+    phase,
+    projectGroup: ["A", "B", "C", "other"].includes(String(core.projectGroup || "")) ? String(core.projectGroup) : "C",
+    sector: publicInvestmentAppraisalText(core.sector, 160),
+    investor: publicInvestmentAppraisalText(core.investor, 240),
+    authority: publicInvestmentAppraisalText(core.authority, 200),
+    capitalSource: publicInvestmentAppraisalText(core.capitalSource, 240),
+    totalInvestment: Math.max(0, Math.round(Number(core.totalInvestment) || 0)),
+    decisionNo: publicInvestmentAppraisalText(core.decisionNo, 120),
+    decisionDate: gpmbIsoDate(core.decisionDate),
+    plannedStart,
+    plannedEnd,
+    objective: publicInvestmentAppraisalText(core.objective, 6000, true),
+    departmentId,
+    managerId,
+    participantIds,
+    archiveRecordIds,
+    templateVersion: publicInvestmentProjectTemplateVersion,
+    stages,
+    checklist,
+    milestones,
+    risks,
+    history: history.slice(-300),
     createdAt: previous?.createdAt || timestamp,
     createdBy: previous?.createdBy || actor.displayName || actor.username || "",
     createdById: previous?.createdById || actor.id || "",
@@ -3327,8 +3720,9 @@ function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   if (collection === "gpmbWorkflows") return canManageGpmbWorkflow(state, actor);
   if (collection === "gpmbCases") return canManageGpmbWorkflow(state, actor);
   if (collection === "publicInvestmentAppraisals") return canUpdatePublicInvestmentAppraisalRecord(state, actor, previous);
+  if (collection === "publicInvestmentProjects") return canUpdatePublicInvestmentProjectRecord(state, actor, previous);
   if (collection === "tasks" && typeof gpmbWorkflowManagedTask === "function" && (gpmbWorkflowManagedTask(previous) || gpmbWorkflowManagedTask(next))) {
-    return Boolean(previous) && gpmbWorkflowTaskChangeAllowed(state, actor, previous, next);
+    return !!previous && gpmbWorkflowTaskChangeAllowed(state, actor, previous, next);
   }
   if (collection === "calendarEvents") {
     return validCalendarEvent(state, next) && canManageCalendarEvent(state, actor)
@@ -3359,6 +3753,26 @@ function canUpsert(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   return false;
 }
 
+function collectionPermissionDeniedReason(collection: CollectionName): string {
+  if (collection === "notifications") return "Invalid notification acknowledgement.";
+  if (collection === "gpmbWorkflows") return "GPMB workflow update is outside account scope.";
+  if (collection === "gpmbCases") return "GPMB case update is outside account scope.";
+  if (collection === "publicInvestmentAppraisals") return "Public investment appraisal update is outside account scope.";
+  if (collection === "publicInvestmentProjects") return "Public investment project update is outside account scope.";
+  if (collection === "people") return "Personnel update is outside account scope.";
+  if (collection === "accounts") return "Account update is outside account scope.";
+  if (collection === "calendarEvents") return "Calendar update is outside account scope.";
+  if (collection === "projectCatalog") return "Project catalog update is outside account scope.";
+  if (collection === "bulletins") return "Bulletin update is outside account scope.";
+  if (collection === "archiveRecords") return "Archive update is outside account scope.";
+  if (collection === "evaluations") return "Personal KPI update is outside account scope.";
+  if (collection === "departmentEvaluations") return "Department KPI update is outside account scope.";
+  if (collection === "supportRequests") return "Support request update is outside account scope.";
+  if (collection === "activityLog") return "Activity log update is outside account scope.";
+  if (collection === "systemSettings") return "System setting update requires administrator access.";
+  return "Permission denied.";
+}
+
 function personHasRetainedReferences(state: JsonRecord, personId: string): boolean {
   if (!personId) return false;
   if (records(state, "tasks").some((task) => taskParticipantValues(task).includes(personId))) return true;
@@ -3366,6 +3780,7 @@ function personHasRetainedReferences(state: JsonRecord, personId: string): boole
   if (records(state, "accounts").some((account) => String(account.personId || "") === personId)) return true;
   if (records(state, "activityLog").some((entry) => String(entry.personId || "") === personId)) return true;
   if (records(state, "publicInvestmentAppraisals").some((record) => publicInvestmentAppraisalAssignedPersonIds(record).includes(personId))) return true;
+  if (records(state, "publicInvestmentProjects").some((record) => publicInvestmentProjectAssignedPersonIds(record).includes(personId))) return true;
   return records(state, "calendarEvents").some((event) => [
     ...calendarIds(event.leaderIds),
     ...calendarIds(event.participantIds),
@@ -3378,13 +3793,18 @@ function canDelete(state: JsonRecord, actor: JsonRecord, collection: CollectionN
   if (collection === "gpmbWorkflows") return isAdmin(actor);
   if (collection === "gpmbCases") return isAdmin(actor);
   if (collection === "publicInvestmentAppraisals") return isAdmin(actor);
+  if (collection === "publicInvestmentProjects") return isAdmin(actor);
   if (collection === "calendarEvents") return canManageCalendarEvent(state, actor)
     && !records(state, "tasks").some((task) => task.sourceCalendarEventId === previous.id);
   if (collection === "people") return canManagePeople(state, actor) && !personHasRetainedReferences(state, recordId(previous));
-  if (collection === "archiveRecords" && records(state, "publicInvestmentAppraisals").some((record) => publicInvestmentAppraisalIds(record.archiveRecordIds).includes(recordId(previous)))) return false;
+  if (collection === "archiveRecords" && (
+    records(state, "publicInvestmentAppraisals").some((record) => publicInvestmentAppraisalIds(record.archiveRecordIds).includes(recordId(previous)))
+    || records(state, "publicInvestmentProjects").some((record) => publicInvestmentProjectIds(record.archiveRecordIds).includes(recordId(previous)))
+  )) return false;
   if (collection === "projectCatalog") return moduleIsAvailableToAccount(state, actor, "tasks")
     && (isAdmin(actor) || hasDepartmentManagement(actor) || accountRole(actor) === "section_head")
-    && !records(state, "publicInvestmentAppraisals").some((record) => String(record.projectId || "") === recordId(previous));
+    && !records(state, "publicInvestmentAppraisals").some((record) => String(record.projectId || "") === recordId(previous))
+    && !records(state, "publicInvestmentProjects").some((record) => String(record.projectId || "") === recordId(previous));
   if (isAdmin(actor)) return true;
   if (collection === "activityLog") return false;
   if (collection === "accounts") return false;
@@ -3438,8 +3858,11 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
       output.gpmbWorkflows = [];
       output.gpmbCases = [];
     }
-    output.publicInvestmentAppraisals = moduleIsAvailableToAccount(state, account, "public-investment-appraisal")
+    output.publicInvestmentAppraisals = moduleIsAvailableToAccount(state, account, "public-investment-projects")
       ? records(state, "publicInvestmentAppraisals").filter((record) => canViewPublicInvestmentAppraisalRecord(state, account, record))
+      : [];
+    output.publicInvestmentProjects = moduleIsAvailableToAccount(state, account, "public-investment-projects")
+      ? records(state, "publicInvestmentProjects").filter((record) => canViewPublicInvestmentProjectRecord(state, account, record))
       : [];
     output.notifications = notificationFeedForAccount(state, account);
     // Support conversations are private to the reporter and Admin, even when
@@ -3460,7 +3883,7 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
     (gpmbWorkflowAllowed && gpmbWorkflowManagedTask(task))
       || (departmentScoped
         ? taskHasParticipantInDepartment(state, task, departmentId)
-        : taskParticipant(state, task, personId) || taskAssigner(task, account)),
+        : taskParticipant(state, task, personId)),
   );
   const primaryPeople = departmentScoped
     ? records(state, "people").filter((person) => String(person.departmentId || "") === departmentId)
@@ -3473,8 +3896,11 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
     tasks: visibleTasks,
     gpmbWorkflows: gpmbWorkflowAllowed ? records(state, "gpmbWorkflows") : [],
     gpmbCases: gpmbWorkflowAllowed ? records(state, "gpmbCases") : [],
-    publicInvestmentAppraisals: moduleIsAvailableToAccount(state, account, "public-investment-appraisal")
+    publicInvestmentAppraisals: moduleIsAvailableToAccount(state, account, "public-investment-projects")
       ? records(state, "publicInvestmentAppraisals").filter((record) => canViewPublicInvestmentAppraisalRecord(state, account, record))
+      : [],
+    publicInvestmentProjects: moduleIsAvailableToAccount(state, account, "public-investment-projects")
+      ? records(state, "publicInvestmentProjects").filter((record) => canViewPublicInvestmentProjectRecord(state, account, record))
       : [],
     evaluations: records(state, "evaluations").filter((evaluation) =>
       departmentScoped
@@ -3832,9 +4258,11 @@ function systemSettingConflict(id: string, previous: JsonRecord | undefined, ope
 
 function normalizeSystemSettingCandidate(operation: MutationEntry): JsonRecord | null {
   if (!isRecord(operation.value)) return null;
-  const id = String(operation.id || "").trim();
-  const key = String(operation.value.key || "").trim();
-  if (!id || !key || id !== systemSettingId(key) || !systemSettingKeys().includes(key)) return null;
+  const rawId = String(operation.id || "").trim();
+  const rawKey = String(operation.value.key || "").trim();
+  const key = canonicalSystemSettingKey(rawKey);
+  const id = systemSettingId(key);
+  if (!rawId || !key || ![systemSettingId(rawKey), id].includes(rawId) || !systemSettingKeys().includes(key)) return null;
   if (!Object.prototype.hasOwnProperty.call(operation.value, "value")) return null;
   return { id, key, value: clone(operation.value.value) };
 }
@@ -3894,7 +4322,8 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
   const serverNotificationIds: string[] = [];
   const calendarAuditEvents: Array<{ action: string; event: JsonRecord }> = [];
   const blockedStoppedRecurrenceTaskIds = new Set<string>();
-  let changed = purgeRetiredAssignmentTasks(next);
+  const acceptedTaskIds = new Set<string>();
+  let changed = purgeRetiredLegacyTasks(next);
 
   collections.forEach((collection) => {
     const changes = patch.collections?.[collection];
@@ -3914,7 +4343,9 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
           denied.push({ scope: collection, id, reason: "Invalid system setting." });
           return;
         }
-        const baseValue = isRecord(operation.baseValue) ? operation.baseValue : null;
+        id = String(candidate.id || id);
+        previous = values.get(id);
+        const baseValue = isRecord(operation.baseValue) ? canonicalSystemSettingRecord(operation.baseValue) : null;
         if (previous && (!baseValue || !sameJson(baseValue, previous))) {
           denied.push(systemSettingConflict(id, previous, operation));
           return;
@@ -3941,6 +4372,22 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       let taskBaseValue = collection === "tasks" && isRecord(operation.baseValue) ? operation.baseValue : null;
       const supportRequestBaseValue = collection === "supportRequests" && isRecord(operation.baseValue) ? operation.baseValue : null;
       if (collection === "tasks") {
+        if (!previous && String(candidate.recurrenceSourceId || "") && [...values.values()].some((task) =>
+          taskRecurrenceSeriesKey(task) === taskRecurrenceSeriesKey(candidate) && task.due === candidate.due)) {
+          blockedStoppedRecurrenceTaskIds.add(id);
+          return;
+        }
+        if (previous && ["passed", "failed"].includes(String(candidate.completionReviewStatus || ""))
+          && candidate.completionReviewStatus !== previous.completionReviewStatus) {
+          if (!canReviewTaskCompletion(next, actor, previous)) {
+            denied.push({ scope: collection, id, reason: "Completion review permission denied." });
+            return;
+          }
+          if (!taskCompletionReviewChange(previous, candidate) && !taskCompletionRecoveryChange(previous, candidate)) {
+            denied.push({ scope: collection, id, reason: "Invalid task completion review." });
+            return;
+          }
+        }
         candidate = normalizeTaskMutationCandidate(previous, candidate);
         const recurrenceSafeCandidate = preserveStoppedRecurringTask(next, candidate, previous);
         if (!recurrenceSafeCandidate) {
@@ -3995,6 +4442,29 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         }
         candidate = normalized;
       }
+      if (collection === "publicInvestmentProjects") {
+        const normalized = normalizePublicInvestmentProject(next, actor, previous, candidate);
+        if (!normalized) {
+          denied.push({ scope: collection, id, reason: "Invalid public investment project record." });
+          return;
+        }
+        candidate = normalized;
+      }
+      if (
+        collection === "tasks"
+        && previous
+        && taskBaseValue
+        && gpmbWorkflowManagedTask(previous)
+        && gpmbWorkflowTaskProgressMutationIntent(taskBaseValue, candidate)
+      ) {
+        const normalized = normalizeGpmbWorkflowTaskProgressMutation(next, actor, previous, taskBaseValue, candidate);
+        if (!normalized) {
+          denied.push({ scope: collection, id, reason: "Invalid GPMB task progress update." });
+          return;
+        }
+        taskBaseValue = normalized.baseValue;
+        candidate = normalized.candidate;
+      }
       if (
         collection === "tasks"
         && previous
@@ -4031,8 +4501,10 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         const reason = collection === "tasks"
           ? !moduleIsAvailableToAccount(next, actor, "tasks")
             ? "Task module is not available to this account."
-            : "Task update is outside account scope."
-          : "Permission denied.";
+            : gpmbWorkflowManagedTask(previous) || gpmbWorkflowManagedTask(candidate)
+              ? "Invalid GPMB task progress update."
+              : "Task update is outside account scope."
+          : collectionPermissionDeniedReason(collection);
         denied.push({ scope: collection, id, reason });
         return;
       }
@@ -4051,6 +4523,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         saved.updatedAt = timestamp;
       }
       values.set(id, saved);
+      if (collection === "tasks") acceptedTaskIds.add(id);
       changed += 1;
       if (collection === "calendarEvents") calendarAuditEvents.push({ action: previous ? "Cập nhật cuộc họp" : "Thêm cuộc họp", event: saved });
       if (collection === "tasks") {
@@ -4072,7 +4545,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         return;
       }
       if (!canDelete(next, actor, collection, previous)) {
-        denied.push({ scope: collection, id, reason: "Permission denied." });
+        denied.push({ scope: collection, id, reason: collectionPermissionDeniedReason(collection) });
         return;
       }
       values.delete(id);
@@ -4103,7 +4576,7 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       denied.push({ scope: "field", id: key, reason: "Permission denied." });
       return;
     }
-    next[key] = key === "moduleSettings" ? normalizeModuleSettings(candidate) : clone(candidate);
+    next[key] = clone(candidate);
     changed += 1;
   });
 
@@ -4125,6 +4598,9 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
   changed += gpmbAdvance.taskIds.length + gpmbAdvance.workflowIds.length + gpmbAdvance.notificationIds.length;
   serverNotificationIds.push(...gpmbAdvance.notificationIds);
 
+  const recurrenceAdvance = advanceRecurringTaskCommands(next, actor, acceptedTaskIds);
+  changed += recurrenceAdvance.taskIds.length + recurrenceAdvance.activityIds.length;
+
   const recurrenceCleanup = cleanupStoppedRecurringTaskInstances(next);
   changed += recurrenceCleanup.deletedTaskIds.length + recurrenceCleanup.deletedNotificationIds.length;
   changed += recurrenceCleanup.activityIds.length;
@@ -4137,13 +4613,13 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
     denied,
     changed,
     serverNotificationIds,
-    serverGeneratedTaskIds: gpmbAdvance.taskIds,
+    serverGeneratedTaskIds: [...gpmbAdvance.taskIds, ...recurrenceAdvance.taskIds],
     serverUpdatedGpmbWorkflowIds: gpmbAdvance.workflowIds,
     serverUpdatedGpmbCaseIds: gpmbCaseLinks.updatedCaseIds,
     serverDeletedGpmbCaseIds: gpmbCaseLinks.deletedCaseIds,
     serverDeletedTaskIds: recurrenceCleanup.deletedTaskIds,
     serverDeletedNotificationIds: recurrenceCleanup.deletedNotificationIds,
-    serverCleanupActivityIds: recurrenceCleanup.activityIds,
+    serverCleanupActivityIds: [...recurrenceCleanup.activityIds, ...recurrenceAdvance.activityIds],
   };
 }
 
@@ -4210,7 +4686,7 @@ async function loginActivityRows(
     month_start_at: monthStart,
   });
   if (error) throw error;
-  return (data || [])
+  return (Array.isArray(data) ? data : []).filter(isRecord)
     .map((row) => ({
       accountId: String(row.account_id || ""),
       period: String(row.period || ""),
@@ -4261,7 +4737,7 @@ async function dailyLoginVisitRows(historyStart: string): Promise<{ rows: DailyL
   }
   return {
     available: true,
-    rows: (data || [])
+    rows: (Array.isArray(data) ? data : []).filter(isRecord)
       .map((row) => ({
         accountId: String(row.account_id || ""),
         period: String(row.visit_date || ""),
@@ -4511,7 +4987,7 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
 function projectionRecordRows(recordsToSave: JsonRecord[], revision: number): JsonRecord[] {
   const updatedAt = new Date().toISOString();
   return recordsToSave
-    .map((record) => {
+    .map((record): JsonRecord | null => {
       const id = recordId(record);
       return id
         ? { id, version: Math.max(1, revision), data: clone(record), updated_at: updatedAt }
@@ -4522,7 +4998,7 @@ function projectionRecordRows(recordsToSave: JsonRecord[], revision: number): Js
 
 function evaluationProjectionRows(state: JsonRecord, revision: number): JsonRecord[] {
   const updatedAt = new Date().toISOString();
-  const add = (prefix: string, evaluation: JsonRecord) => {
+  const add = (prefix: string, evaluation: JsonRecord): JsonRecord | null => {
     const id = recordId(evaluation);
     return id
       ? { id: `${prefix}:${id}`, version: Math.max(1, revision), data: clone(evaluation), updated_at: updatedAt }
@@ -4558,7 +5034,7 @@ function kpiCatalogProjectionRows(state: JsonRecord, revision: number): JsonReco
     updated_at: updatedAt,
   }));
   const projectRows = records(state, "projectCatalog")
-    .map((project) => {
+    .map((project): JsonRecord | null => {
       const id = recordId(project);
       return id
         ? { id: `project:${id}`, version: Math.max(1, revision), data: clone(project), updated_at: updatedAt }
@@ -4608,9 +5084,11 @@ async function updateRecordProjectionMarker(revision: number): Promise<void> {
 
 async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch, revision: number): Promise<void> {
   const changedCollections = patch.collections || {};
-  for (const collection of ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
+  const transactionalTasks = await transactionalTaskStorage();
+  for (const collection of ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
     const changes = changedCollections[collection];
     if (!changes) continue;
+    if (collection === "tasks" && transactionalTasks) continue;
     const table = projectionTableByCollection[collection];
     if (!table) continue;
     const ids = [...new Set((changes.upserts || []).map((entry) => String(entry.id || "")).filter(Boolean))];
@@ -4639,7 +5117,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
     const rows = ids
       .map((id) => source.get(id))
       .filter((record): record is JsonRecord => Boolean(record))
-      .map((record) => {
+      .map((record): JsonRecord | null => {
         const row = evaluationProjectionRows({ evaluations: [], departmentEvaluations: [record] }, revision)[0];
         return row;
       })
@@ -4654,7 +5132,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
     const rows = (projectChanges.upserts || [])
       .map((entry) => source.get(String(entry.id || "")))
       .filter((record): record is JsonRecord => Boolean(record))
-      .map((record) => {
+      .map((record): JsonRecord | null => {
         const id = recordId(record);
         return id ? { id: `project:${id}`, version: Math.max(1, revision), data: clone(record), updated_at: new Date().toISOString() } : null;
       })
@@ -4724,17 +5202,21 @@ async function cleanupStoppedRecurringTasksWithRetry(): Promise<StateSnapshot> {
 }
 
 async function syncAllRecordProjections(state: JsonRecord, revision: number): Promise<void> {
+  const transactionalTasks = await transactionalTaskStorage();
   await upsertProjectionRows("people", projectionRecordRows(records(state, "people"), revision));
-  await upsertProjectionRows("tasks", projectionRecordRows(records(state, "tasks"), revision));
+  if (!transactionalTasks) await upsertProjectionRows("tasks", projectionRecordRows(records(state, "tasks"), revision));
   await upsertProjectionRows("gpmb_workflows", projectionRecordRows(records(state, "gpmbWorkflows"), revision));
   await upsertProjectionRows("gpmb_cases", projectionRecordRows(records(state, "gpmbCases"), revision));
   await upsertProjectionRows("public_investment_appraisals", projectionRecordRows(records(state, "publicInvestmentAppraisals"), revision));
+  await upsertProjectionRows("public_investment_projects", projectionRecordRows(records(state, "publicInvestmentProjects"), revision));
   await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
   await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
   await upsertProjectionRows("notifications", projectionRecordRows(records(state, "notifications"), revision));
   await upsertProjectionRows("activity_log", projectionRecordRows(records(state, "activityLog"), revision));
-  const reports = records(state, "tasks").flatMap((task) => taskProgressProjectionRows(task, revision));
-  await upsertProjectionRows("task_progress_reports", reports);
+  if (!transactionalTasks) {
+    const reports = records(state, "tasks").flatMap((task) => taskProgressProjectionRows(task, revision));
+    await upsertProjectionRows("task_progress_reports", reports);
+  }
   await updateRecordProjectionMarker(revision);
 }
 
@@ -4743,7 +5225,12 @@ async function requireSession(request: Request, current: StateSnapshot): Promise
   return accountId || json(request, { error: "Authentication required." }, 401);
 }
 
-async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ snapshot: StateSnapshot; denied: DeniedMutation[]; changed: number }> {
+async function readTaskCommandReceipt(actorId: string, commandId: string) {
+  return taskCommandReceiptResult(await admin.from("kpi_task_command_receipts")
+    .select("task_id, command_name, request_hash").eq("actor_id", actorId).eq("command_id", commandId).maybeSingle());
+}
+
+async function updateWithRetry(actorId: string, patch: StatePatch, command?: TaskCommandCommit): Promise<{ snapshot: StateSnapshot; denied: DeniedMutation[]; changed: number; idempotent?: boolean }> {
   let lastDenied: DeniedMutation[] = [];
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
@@ -4752,19 +5239,51 @@ async function updateWithRetry(actorId: string, patch: StatePatch): Promise<{ sn
       throw new UnsafeBulkDeletionError("Unsafe bulk deletion was blocked.");
     }
     const actor = accountForId(current.state, actorId);
-    if (!actor) throw new Error("Authentication required.");
+    if (!actor || Boolean(actor.disabled)) throw new AuthenticationRequiredError("Authentication required.");
+    if (command) {
+      if (!moduleIsAvailableToAccount(current.state, actor, "tasks")
+        || !records(visibleState(current.state, actor), "tasks").some((task) => recordId(task) === command.taskId)) {
+        return { snapshot: current, denied: [{ scope: "tasks", id: command.taskId, reason: "Task update is outside account scope." }], changed: 0 };
+      }
+      const lookup = await readTaskCommandReceipt(actorId, command.commandId);
+      if (!lookup.available) throw new Error("Task command receipt schema became unavailable.");
+      if (lookup.receipt) {
+        assertTaskCommandReceipt(lookup.receipt, command);
+        return { snapshot: await snapshot(), denied: [], changed: 0, idempotent: true };
+      }
+    }
     const result = applyPatch(current.state, actor, patch);
     lastDenied = result.denied;
+    if (command && lastDenied.some((denied) => denied.scope === "tasks" && denied.id === command.taskId)) {
+      return { snapshot: current, denied: lastDenied, changed: 0 };
+    }
     const departmentStopEffects = stopRecurringTasksForDepartmentChanges(current.state, result.state, actor);
     result.changed += departmentStopEffects.taskIds.length + departmentStopEffects.activityIds.length;
     if (!result.changed) return { snapshot: current, denied: lastDenied, changed: 0 };
     await secureMutatedAccountCredentials(result.state, patch);
-    const { data, error } = await admin.rpc("kpi_update_shared_state", {
-      expected_revision: current.revision,
-      next_state: result.state,
-    });
+    let taskVersion = 0;
+    if (command) {
+      const stored = await admin.from("tasks").select("row_version, data").eq("id", command.taskId).maybeSingle();
+      if (stored.error) throw stored.error;
+      if (!stored.data || !sameJson(stored.data.data, records(current.state, "tasks").find((task) => recordId(task) === command.taskId))) {
+        await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
+        continue;
+      }
+      taskVersion = Number(stored.data.row_version);
+    }
+    const { data, error } = command
+      ? await admin.rpc("kpi_commit_task_command", {
+        p_expected_revision: current.revision, p_expected_task_version: taskVersion,
+        p_task_id: command.taskId, p_actor_id: actorId, p_session_hash: command.sessionHash,
+        p_command_id: command.commandId, p_command_name: command.command, p_request_hash: command.requestHash,
+        p_next_state: result.state,
+      })
+      : await admin.rpc("kpi_update_shared_state", { expected_revision: current.revision, next_state: result.state });
+    if (error?.code === "KPA01") throw new AuthenticationRequiredError("Authentication required.");
+    if (error?.code === "KPC01") throw new TaskCommandConflictError(error.message);
     if (error) throw error;
     if (Array.isArray(data) && data.length) {
+      if (command && data[0].replayed) return { snapshot: await snapshot(), denied: [], changed: 0, idempotent: true };
       const updated = data[0] as { next_revision: number; next_updated_at: string };
       const nextSnapshot = {
         snapshot: { revision: Number(updated.next_revision), updatedAt: String(updated.next_updated_at || ""), state: result.state },
@@ -4916,8 +5435,9 @@ function migrateTaskCategoriesForCatalogChange(state: JsonRecord, actor: JsonRec
     const currentCategory = String(task.category || "").trim();
     const oldIndex = oldRole.criteria.findIndex((criterion) => taskCategoryCatalogKey(Array.isArray(criterion) ? criterion[0] : "") === taskCategoryCatalogKey(currentCategory));
     if (oldIndex < 0) return task;
-    if ((nextRole.criteria || []).some((criterion) => String(Array.isArray(criterion) ? criterion[0] || "" : "").trim() === currentCategory)) return task;
-    const category = String(Array.isArray(nextRole.criteria?.[oldIndex]) ? nextRole.criteria[oldIndex][0] || "" : "").trim();
+    const nextCriteria = Array.isArray(nextRole.criteria) ? nextRole.criteria : [];
+    if (nextCriteria.some((criterion) => String(Array.isArray(criterion) ? criterion[0] || "" : "").trim() === currentCategory)) return task;
+    const category = String(Array.isArray(nextCriteria[oldIndex]) ? nextCriteria[oldIndex][0] || "" : "").trim();
     if (!category || category === currentCategory) return task;
     changed += 1;
     return stampTaskAudit(state, task, {
@@ -5053,7 +5573,7 @@ function taskHasCollaborator(state: JsonRecord, task: JsonRecord, personId: stri
 function recurringTaskSourceForHandover(state: JsonRecord, task: JsonRecord, personId: string): boolean {
   if (String(task.recurrenceSourceId || "").trim()) return false;
   if (String(task.recurrenceStoppedAt || "")) return false;
-  if (assignedTask(task)) return false;
+  if (retiredLegacyTask(task)) return false;
   if (taskOwnerForHandover(state, task) !== personId) return false;
   const recurrence = String(task.recurrence || task.periodicity || "").trim().toLowerCase();
   return ["daily", "weekly", "monthly", "quarterly", "hàng ngày", "hàng tuần", "hàng tháng", "hàng quý", "hang ngay", "hang tuan", "hang thang", "hang quy"].includes(recurrence);
@@ -5096,7 +5616,7 @@ function cleanupStoppedRecurringTaskInstances(state: JsonRecord): {
   const sourcesById = new Map<string, JsonRecord>();
   const sourcesBySeries = new Map<string, JsonRecord>();
   tasks.forEach((task) => {
-    if (String(task.recurrenceSourceId || "") || assignedTask(task) || !recurringValueIsEnabled(task) || !String(task.recurrenceStoppedAt || task.recurrenceStopDate || "")) return;
+    if (String(task.recurrenceSourceId || "") || retiredLegacyTask(task) || !recurringValueIsEnabled(task) || !String(task.recurrenceStoppedAt || task.recurrenceStopDate || "")) return;
     const id = recordId(task);
     const series = taskRecurrenceSeriesKey(task);
     if (id) sourcesById.set(id, task);
@@ -5184,7 +5704,7 @@ function preserveStoppedRecurringTask(state: JsonRecord, candidate: JsonRecord, 
 }
 
 function recurringSeriesSource(state: JsonRecord, task: JsonRecord): JsonRecord | undefined {
-  if (assignedTask(task) || !taskRecurrenceSeriesKey(task)) return undefined;
+  if (retiredLegacyTask(task) || !taskRecurrenceSeriesKey(task)) return undefined;
   const sourceId = String(task.recurrenceSourceId || taskRecurrenceSeriesKey(task));
   return records(state, "tasks").find((candidate) => !String(candidate.recurrenceSourceId || "") && recordId(candidate) === sourceId)
     || records(state, "tasks").find((candidate) => !String(candidate.recurrenceSourceId || "") && taskRecurrenceSeriesKey(candidate) === taskRecurrenceSeriesKey(task));
@@ -5197,6 +5717,50 @@ function recurrenceOwnerForDate(state: JsonRecord, source: JsonRecord, date: str
     .sort((left, right) => String(left.effectiveDate || "").localeCompare(String(right.effectiveDate || "")))
     .at(-1);
   return taskParticipantPerson(state, handover?.toPersonId || source.ownerId);
+}
+
+function advanceRecurringTaskCommands(state: JsonRecord, actor: JsonRecord, touchedIds: Set<string>): { taskIds: string[]; activityIds: string[] } {
+  const tasks = records(state, "tasks");
+  const taskIds: string[] = [];
+  const activityIds: string[] = [];
+  for (const source of tasks.filter((task) => !task.recurrenceSourceId && !retiredLegacyTask(task)
+    && String(task.kind || "regular") === "regular" && recurringValueIsEnabled(task))) {
+    const seriesKey = taskRecurrenceSeriesKey(source);
+    const series = tasks.filter((task) => taskRecurrenceSeriesKey(task) === seriesKey);
+    const latest = series.reduce((last, task) => String(task.due || "") > String(last.due || "") ? task : last, source);
+    if (!touchedIds.has(recordId(latest))) continue;
+    const occurrence = nextTaskOccurrence(source, latest);
+    if (!occurrence || series.some((task) => task.due === occurrence.due)) continue;
+    const owner = recurrenceOwnerForDate(state, source, occurrence.due);
+    if (!personIsActive(owner)) continue;
+    const timestamp = new Date().toISOString();
+    const candidate: JsonRecord = {
+      ...clone(source), id: `recurring:${recordId(source)}:${occurrence.due}`,
+      ...occurrence, ownerId: recordId(owner), ownerName: String(owner?.name || ""),
+      status: "Chuẩn bị thực hiện", progress: 0, attachments: [], progressReports: [],
+      followUpDate: "", blockerStatus: "none", blockerNote: "",
+      recurrenceSourceId: recordId(source), recurrenceSeriesId: seriesKey,
+      recurrenceAnchorDay: Number(source.recurrenceAnchorDay) || Number(String(source.due).slice(8, 10)),
+      recurrenceAnchorDue: source.recurrenceAnchorDue || source.due,
+    };
+    for (const key of Object.keys(candidate)) if (key.startsWith("deadlineExtension")) candidate[key] = "";
+    delete candidate.createdAt;
+    delete candidate.createdBy;
+    delete candidate.createdById;
+    const generated = stampTaskAudit(state, undefined, normalizeTaskProgressLifecycle(candidate), actor);
+    tasks.push(generated);
+    taskIds.push(recordId(generated));
+    const activityId = `server-sync-recurring-${crypto.randomUUID()}`;
+    activityIds.push(activityId);
+    const activityLog = records(state, "activityLog");
+    activityLog.push({ id: activityId, action: "Tự tạo định kỳ", module: "Công việc", targetType: "task",
+      targetId: generated.id, title: generated.title, personId: generated.ownerId,
+      departmentId: String(owner?.departmentId || ""), createdAt: timestamp,
+      createdById: recordId(actor), createdBy: String(actor.displayName || actor.username || "") });
+    state.activityLog = activityLog.slice(-5000);
+  }
+  state.tasks = tasks;
+  return { taskIds, activityIds };
 }
 
 function canStopRecurringSeries(state: JsonRecord, actor: JsonRecord, source: JsonRecord): boolean {
@@ -5315,7 +5879,7 @@ function stopRecurringTasksForDepartmentChanges(previousState: JsonRecord, nextS
     const nextDepartment = records(nextState, "departments").find((item) => recordId(item) === String(person.departmentId || ""));
     const reason = `nhân sự ${String(person.name || "được giao")} chuyển từ ${String(previousDepartment?.name || "phòng cũ")} sang ${String(nextDepartment?.name || "phòng mới")}`;
     const sources = records(nextState, "tasks").filter((task) => !String(task.recurrenceSourceId || "")
-      && !assignedTask(task)
+      && !retiredLegacyTask(task)
       && recurringValueIsEnabled(task)
       && !String(task.recurrenceStoppedAt || ""));
     for (const source of sources) {
@@ -5325,10 +5889,10 @@ function stopRecurringTasksForDepartmentChanges(previousState: JsonRecord, nextS
       if (!result) continue;
       nextState.tasks = result.state.tasks;
       nextState.activityLog = result.state.activityLog;
-      result.state.tasks.forEach((task) => {
+      records(result.state, "tasks").forEach((task) => {
         if (taskRecurrenceSeriesKey(task) === taskRecurrenceSeriesKey(source)) taskIds.add(recordId(task));
       });
-      const activity = result.state.activityLog.at(-1);
+      const activity = records(result.state, "activityLog").at(-1);
       if (activity && recordId(activity)) activityIds.push(recordId(activity));
       stoppedSeriesCount += 1;
       stoppedOccurrences += result.stoppedOccurrences;
@@ -5629,12 +6193,17 @@ Deno.serve(async (request) => {
     if (action === "status") {
       const current = await snapshot();
       let recordProjection = await recordProjectionHealth(current.revision);
-      // Do not repair all projection tables inside the frequently polled status
-      // endpoint. Production tables can have a different schema from the legacy
-      // {id, version, data, updated_at} projection model. Repeated full writes
-      // here cause PGRST204 errors and can exhaust Edge Function CPU limits.
-      // Keep reporting the actual projection health without claiming it synced.
-      // A separately reviewed schema-aware migration is needed to repair it.
+      // A previous interrupted deploy or write can leave the record tables one
+      // revision behind. Repair from the authoritative shared state before a
+      // client relies on the projection health result.
+      if (recordProjection.available === true && recordProjection.synchronized !== true && current.revision > 0) {
+        try {
+          await syncAllRecordProjections(current.state, current.revision);
+          recordProjection = await recordProjectionHealth(current.revision);
+        } catch (projectionError) {
+          console.error("Unable to repair record projections.", projectionError);
+        }
+      }
       const configuredOrigins = (Deno.env.get("KPI_ALLOWED_ORIGIN") || "")
         .split(",")
         .map((value) => value.trim())
@@ -5763,6 +6332,18 @@ Deno.serve(async (request) => {
       if (!account) return json(request, { error: "Authentication required." }, 401);
       if (!isAdmin(account)) return json(request, { ok: true });
       return json(request, await accountPresenceSummary(current));
+    }
+
+    if (action === "task-storage-status" && request.method === "GET") {
+      const current = await snapshot();
+      const accountId = await requireSession(request, current);
+      if (accountId instanceof Response) return accountId;
+      const account = accountForId(current.state, accountId);
+      if (!account || !isAdmin(account)) return json(request, { error: "Forbidden." }, 403);
+      if (!await transactionalTaskStorage()) return json(request, { schemaVersion: 0, sourceMode: "snapshot", migrationRequired: true });
+      const { data, error } = await admin.rpc("kpi_task_storage_health");
+      if (error) throw error;
+      return json(request, { deploymentVersion, ...data });
     }
 
     if (action === "usage-history" && request.method === "GET") {
@@ -6027,6 +6608,106 @@ Deno.serve(async (request) => {
       });
     }
 
+    if (["task-command", "task-command-result"].includes(action) && request.method === "POST") {
+      const current = await snapshot(action !== "task-command-result");
+      const accountId = await requireSession(request, current);
+      if (accountId instanceof Response) return accountId;
+      if (current.revision <= 0) return json(request, { error: "Central data is not initialized." }, 409);
+      const body = await readJsonPayload(request);
+      if (!validTaskCommandPayload(body)) return json(request, { error: "Invalid task command payload." }, 422);
+
+      const liveTask = records(current.state, "tasks").find((task) => recordId(task) === body.taskId);
+      if (!liveTask) return json(request, { error: "Task not found." }, 404);
+      const account = accountForId(current.state, accountId);
+      if (!account || Boolean(account.disabled)) return json(request, { error: "Authentication required." }, 401);
+
+      if (!moduleIsAvailableToAccount(current.state, account, "tasks")
+        || !records(visibleState(current.state, account), "tasks").some((task) => recordId(task) === body.taskId)) {
+        return json(request, { error: "Task update is outside account scope." }, 403);
+      }
+
+      const classifiedCommand = classifyTaskCommand(body.baseTask, body.task);
+      if (classifiedCommand !== body.command) {
+        return json(request, { error: "Task command does not match the requested state transition.", expectedCommand: classifiedCommand }, 422);
+      }
+      const command: TaskCommandCommit = {
+        taskId: body.taskId, commandId: body.commandId, command: body.command,
+        requestHash: await sha256(JSON.stringify(canonical({ taskId: body.taskId, command: body.command, baseTask: body.baseTask, task: body.task }))),
+        sessionHash: await sha256(request.headers.get("x-kpi-session") || ""),
+      };
+      const lookup = await readTaskCommandReceipt(accountId, body.commandId);
+      if (lookup.receipt) assertTaskCommandReceipt(lookup.receipt, command);
+      if (action === "task-command-result" && !lookup.receipt) return json(request, { available: lookup.available, found: false });
+      if (lookup.receipt || (!lookup.available && taskProgressReportHasId(liveTask, body.commandId))) {
+        const replay = lookup.receipt ? await snapshot(false) : current;
+        const replayAccount = accountForId(replay.state, accountId);
+        if (!replayAccount || Boolean(replayAccount.disabled)) return json(request, { error: "Authentication required." }, 401);
+        const replayTask = records(visibleState(replay.state, replayAccount), "tasks").find((task) => recordId(task) === body.taskId);
+        if (!moduleIsAvailableToAccount(replay.state, replayAccount, "tasks") || !replayTask) {
+          return json(request, { error: "Task update is outside account scope." }, 403);
+        }
+        return json(request, {
+          ok: true,
+          idempotent: true,
+          available: lookup.available,
+          found: true,
+          command: body.command,
+          revision: replay.revision,
+          updatedAt: replay.updatedAt,
+          task: replayTask,
+          ...taskCommandResponseState(body, current, replay, replayAccount),
+        });
+      }
+
+      // Never invent a fingerprint for a command committed by an older Edge.
+      if (lookup.available && taskProgressReportHasId(liveTask, body.commandId)) {
+        return json(request, {
+          error: "Command history predates the durable receipt. Refresh the task before submitting a new command.",
+          state: visibleState(current.state, account), revision: current.revision,
+        }, 409);
+      }
+
+      const patch: StatePatch = {
+        collections: {
+          tasks: {
+            upserts: [{ id: body.taskId, baseValue: body.baseTask, value: body.task }],
+          },
+        },
+      };
+      const result = await updateWithRetry(accountId, patch, lookup.available ? command : undefined);
+      const denied = result.denied.find((item) => item.scope === "tasks" && item.id === body.taskId);
+      if (denied) {
+        const deniedAccount = accountForId(result.snapshot.state, accountId) || account;
+        return json(request, {
+          error: denied.reason,
+          denied: [denied],
+          revision: result.snapshot.revision,
+          updatedAt: result.snapshot.updatedAt,
+          state: visibleState(result.snapshot.state, deniedAccount),
+        }, taskCommandErrorStatus(denied.reason));
+      }
+
+      const responseAccount = accountForId(result.snapshot.state, accountId);
+      if (!responseAccount || Boolean(responseAccount.disabled)) return json(request, { error: "Authentication required." }, 401);
+      if (!moduleIsAvailableToAccount(result.snapshot.state, responseAccount, "tasks")
+        || !records(visibleState(result.snapshot.state, responseAccount), "tasks").some((task) => recordId(task) === body.taskId)) {
+        return json(request, { error: "Task update is outside account scope." }, 403);
+      }
+      const committedTask = records(result.snapshot.state, "tasks").find((task) => recordId(task) === body.taskId);
+      if (!committedTask || (!result.idempotent && !taskProgressReportHasId(committedTask, body.commandId))) {
+        return json(request, { error: "Task command was not committed." }, 409);
+      }
+      return json(request, {
+        ok: true,
+        idempotent: result.idempotent === true,
+        command: body.command,
+        revision: result.snapshot.revision,
+        updatedAt: result.snapshot.updatedAt,
+        task: committedTask,
+        ...taskCommandResponseState(body, current, result.snapshot, responseAccount),
+      });
+    }
+
     if (action === "mutate" && ["PUT", "POST"].includes(request.method)) {
       const current = await snapshot();
       const accountId = await requireSession(request, current);
@@ -6083,6 +6764,11 @@ Deno.serve(async (request) => {
 
     return json(request, { error: "Unknown endpoint." }, 404);
   } catch (error) {
+    if (error instanceof AuthenticationRequiredError) return json(request, { error: error.message }, 401);
+    if (error instanceof TaskCommandConflictError) return json(request, { error: error.message, code: "task-command-id-reused" }, 409);
+    if (action === "task-command" && error instanceof Error && error.message === "Concurrent update limit reached.") {
+      return json(request, { error: "Task storage is busy. The command has not been confirmed.", code: "task-command-busy" }, 503);
+    }
     console.error(error);
     if (error instanceof PayloadTooLargeError) return json(request, { error: "Request payload exceeds the server limit." }, 413);
     if (error instanceof InvalidJsonPayloadError) return json(request, { error: "Invalid request payload." }, 400);

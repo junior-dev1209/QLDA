@@ -196,18 +196,18 @@ with source as (
   from public.kpi_shared_state
   where id = 'primary'
 ), all_evaluations as (
-  select 'personal:' || item.value->>'id' as id, item.value, source.revision, source.updated_at
+  select 'personal:' || (item.value->>'id') as id, item.value, source.revision, source.updated_at
   from source
   cross join lateral jsonb_array_elements(coalesce(source.state->'evaluations', '[]'::jsonb)) as item(value)
   where coalesce(item.value->>'id', '') <> ''
   union all
-  select 'department:' || item.value->>'id' as id, item.value, source.revision, source.updated_at
+  select 'department:' || (item.value->>'id') as id, item.value, source.revision, source.updated_at
   from source
   cross join lateral jsonb_array_elements(coalesce(source.state->'departmentEvaluations', '[]'::jsonb)) as item(value)
   where coalesce(item.value->>'id', '') <> ''
 )
 insert into public.evaluations (id, version, data, created_at, updated_at)
-select id, revision, item, updated_at, updated_at
+select id, revision, value, updated_at, updated_at
 from all_evaluations
 on conflict (id) do update
 set version = excluded.version, data = excluded.data, updated_at = excluded.updated_at;
@@ -223,7 +223,7 @@ with source as (
   union all select 'catalog:module-settings', source.state->'moduleSettings', source.revision, source.updated_at from source
   union all select 'catalog:system-customization', source.state->'systemCustomization', source.revision, source.updated_at from source
   union all
-  select 'project:' || item.value->>'id', item.value, source.revision, source.updated_at
+  select 'project:' || (item.value->>'id'), item.value, source.revision, source.updated_at
   from source
   cross join lateral jsonb_array_elements(coalesce(source.state->'projectCatalog', '[]'::jsonb)) as item(value)
   where coalesce(item.value->>'id', '') <> ''
