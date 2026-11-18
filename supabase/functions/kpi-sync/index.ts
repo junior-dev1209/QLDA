@@ -53,7 +53,7 @@ const moduleSettingsVersion = 6;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals" | "public_investment_projects";
+type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "kpi_record_evaluations" | "kpi_record_catalog" | "kpi_record_activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals" | "public_investment_projects";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -160,9 +160,9 @@ const projectionTableByCollection: Partial<Record<CollectionName, RecordProjecti
   gpmbCases: "gpmb_cases",
   publicInvestmentAppraisals: "public_investment_appraisals",
   publicInvestmentProjects: "public_investment_projects",
-  evaluations: "evaluations",
+  evaluations: "kpi_record_evaluations",
   notifications: "notifications",
-  activityLog: "activity_log",
+  activityLog: "kpi_record_activity_log",
 };
 const kpiCatalogScalarFields: ScalarField[] = [
   "departments",
@@ -5122,8 +5122,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return row;
       })
       .filter((record): record is JsonRecord => Boolean(record));
-    await upsertProjectionRows("evaluations", rows);
-    await deleteProjectionRows("evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
+    await upsertProjectionRows("kpi_record_evaluations", rows);
+    await deleteProjectionRows("kpi_record_evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
   }
 
   const projectChanges = changedCollections.projectCatalog;
@@ -5137,8 +5137,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return id ? { id: `project:${id}`, version: Math.max(1, revision), data: clone(record), updated_at: new Date().toISOString() } : null;
       })
       .filter((record): record is JsonRecord => record !== null);
-    await upsertProjectionRows("kpi_catalog", rows);
-    await deleteProjectionRows("kpi_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
+    await upsertProjectionRows("kpi_record_catalog", rows);
+    await deleteProjectionRows("kpi_record_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
   }
 
   const changedCatalogFields = new Set((patch.fields || []).map((field) => field.key));
@@ -5148,7 +5148,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         const fieldName = String(row.id || "").replace(/^catalog:/, "").replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
         return changedCatalogFields.has(fieldName as ScalarField);
       });
-    await upsertProjectionRows("kpi_catalog", rows);
+    await upsertProjectionRows("kpi_record_catalog", rows);
   }
 
   // Keep server-owned sync and calendar audit entries queryable without
@@ -5158,7 +5158,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
   const latestServerActivity = serverActivities.filter((item) => !recordId(item).startsWith("server-sync-calendar-")).slice(-1);
   const recentCalendarActivities = serverActivities.filter((item) => recordId(item).startsWith("server-sync-calendar-")).slice(-20);
   const activityRows = [...latestServerActivity, ...recentCalendarActivities];
-  if (activityRows.length) await upsertProjectionRows("activity_log", projectionRecordRows(activityRows, revision));
+  if (activityRows.length) await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(activityRows, revision));
   await updateRecordProjectionMarker(revision);
 }
 
@@ -5209,10 +5209,10 @@ async function syncAllRecordProjections(state: JsonRecord, revision: number): Pr
   await upsertProjectionRows("gpmb_cases", projectionRecordRows(records(state, "gpmbCases"), revision));
   await upsertProjectionRows("public_investment_appraisals", projectionRecordRows(records(state, "publicInvestmentAppraisals"), revision));
   await upsertProjectionRows("public_investment_projects", projectionRecordRows(records(state, "publicInvestmentProjects"), revision));
-  await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
-  await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
+  await upsertProjectionRows("kpi_record_evaluations", evaluationProjectionRows(state, revision));
+  await upsertProjectionRows("kpi_record_catalog", kpiCatalogProjectionRows(state, revision));
   await upsertProjectionRows("notifications", projectionRecordRows(records(state, "notifications"), revision));
-  await upsertProjectionRows("activity_log", projectionRecordRows(records(state, "activityLog"), revision));
+  await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(records(state, "activityLog"), revision));
   if (!transactionalTasks) {
     const reports = records(state, "tasks").flatMap((task) => taskProgressProjectionRows(task, revision));
     await upsertProjectionRows("task_progress_reports", reports);
@@ -6193,17 +6193,8 @@ Deno.serve(async (request) => {
     if (action === "status") {
       const current = await snapshot();
       let recordProjection = await recordProjectionHealth(current.revision);
-      // A previous interrupted deploy or write can leave the record tables one
-      // revision behind. Repair from the authoritative shared state before a
-      // client relies on the projection health result.
-      if (recordProjection.available === true && recordProjection.synchronized !== true && current.revision > 0) {
-        try {
-          await syncAllRecordProjections(current.state, current.revision);
-          recordProjection = await recordProjectionHealth(current.revision);
-        } catch (projectionError) {
-          console.error("Unable to repair record projections.", projectionError);
-        }
-      }
+      // Do not repair large projections synchronously in the status GET handler.
+      // Status remains read-only and exposes recordProjection.synchronized for diagnostics.
       const configuredOrigins = (Deno.env.get("KPI_ALLOWED_ORIGIN") || "")
         .split(",")
         .map((value) => value.trim())
