@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.140";
+const APP_VERSION = "3.4.151";
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -29,6 +29,13 @@ const SHARED_SYNC_REQUEST_TIMEOUT_MS = 20000;
 const SETTINGS_CONFLICT_FREE_DEPLOYMENT_VERSION = "2026.11.05.1";
 const GPMB_CASES_DEPLOYMENT_VERSION = "2026.11.11.1";
 const PUBLIC_INVESTMENT_APPRAISAL_DEPLOYMENT_VERSION = "2026.11.11.2";
+const PUBLIC_INVESTMENT_PROJECT_DEPLOYMENT_VERSION = "2026.11.13.2";
+const TASK_MUTATION_DEPLOYMENT_VERSION = "2026.11.17.3";
+const PUBLIC_INVESTMENT_HUB_VIEW = "public-investment-projects";
+const PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW = "public-investment-appraisal";
+const PUBLIC_INVESTMENT_WORKSPACE_KEY = "kpi_public_investment_workspace";
+const PUBLIC_INVESTMENT_WORKSPACES = new Set(["projects", "appraisal"]);
+let activePublicInvestmentWorkspace = "projects";
 const ACCOUNT_USAGE_REQUEST_TIMEOUT_MS = 45000;
 const ACCOUNT_USAGE_AUTO_REFRESH_MS = 60000;
 const MAX_DELETED_ID_HISTORY = 2000;
@@ -36,8 +43,8 @@ const ACCOUNT_PRESENCE_HEARTBEAT_MS = 60000;
 const PERSON_EMPLOYMENT_ACTIVE = "active";
 const PERSON_EMPLOYMENT_SUSPENDED = "suspended";
 const PERSON_EMPLOYMENT_LEFT = "left";
-const SHARED_SYNC_COLLECTIONS = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"];
-const SHARED_PROTECTED_COLLECTIONS = ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
+const SHARED_SYNC_COLLECTIONS = ["people", "calendarEvents", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "projectCatalog", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts", "supportRequests", "notifications", "activityLog", "systemSettings"];
+const SHARED_PROTECTED_COLLECTIONS = ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
 const SHARED_SYNC_SCALAR_FIELDS = [
   "moduleSettings",
   "systemCustomization",
@@ -52,6 +59,39 @@ const SHARED_SYNC_SCALAR_FIELDS = [
   "kpiPeriodLocks",
   "deletedIds",
 ];
+const SHARED_SYNC_SCOPE_LABELS = Object.freeze({
+  people: "Nhân sự",
+  calendarEvents: "Lịch công việc",
+  tasks: "Công việc",
+  gpmbWorkflows: "Quy trình GPMB",
+  gpmbCases: "Hồ sơ GPMB theo hộ/thửa",
+  publicInvestmentAppraisals: "Thẩm định dự án đầu tư công",
+  publicInvestmentProjects: "Quản lý dự án đầu tư công",
+  projectCatalog: "Danh mục dự án",
+  bulletins: "Bảng tin",
+  archiveRecords: "Lưu trữ",
+  evaluations: "KPI cá nhân",
+  departmentEvaluations: "KPI phòng",
+  accounts: "Tài khoản",
+  supportRequests: "Yêu cầu hỗ trợ",
+  notifications: "Trung tâm thông báo",
+  activityLog: "Lịch sử hoạt động",
+  systemSettings: "Cấu hình hệ thống",
+});
+const SHARED_SYNC_FIELD_LABELS = Object.freeze({
+  moduleSettings: "Phân quyền chức năng",
+  systemCustomization: "Tùy biến giao diện",
+  departments: "Danh mục phòng ban",
+  roles: "Danh mục chức vụ/KPI",
+  behaviorRules: "Quy tắc hành vi",
+  importedPeopleVersion: "Phiên bản dữ liệu nhân sự",
+  canBoGpmbKpiCatalogVersion: "Danh mục KPI cán bộ GPMB",
+  nhanVienTongHopGpmbKpiCatalogVersion: "Danh mục KPI tổng hợp GPMB",
+  sectionHeadKpiCatalogVersion: "Danh mục KPI trưởng nhóm",
+  personalKpiClassificationVersion: "Quy tắc xếp loại KPI cá nhân",
+  kpiPeriodLocks: "Chốt kỳ KPI",
+  deletedIds: "Nhật ký dữ liệu đã xóa",
+});
 function debounce(fn, delay = 200) {
   let timer;
   return function (...args) {
@@ -1075,7 +1115,7 @@ const printableSections = [
   { id: "archive", label: "Lưu Trữ" },
   { id: "people", label: "Nhân sự" },
   { id: "tasks", label: "Công việc" },
-  { id: "public-investment-appraisal", label: "Thẩm định dự án đầu tư công" },
+  { id: "public-investment-projects", label: "Dự án đầu tư công" },
   { id: "department-evaluations", label: "KPI phòng" },
   { id: "evaluations", label: "KPI cá nhân" },
   { id: "history", label: "Lịch sử" },
@@ -1089,7 +1129,7 @@ const systemModules = [
   { id: "archive", label: "Lưu Trữ", note: "Kho hồ sơ dự án, nhân sự, văn bản và công văn." },
   { id: "people", label: "Nhân sự", note: "Hồ sơ nhân sự toàn Ban và thông tin hợp đồng, lương." },
   { id: "tasks", label: "Công việc", note: "Danh mục công việc, hồ sơ và tiến độ." },
-  { id: "public-investment-appraisal", label: "Thẩm định dự án đầu tư công", note: "Hồ sơ, checklist, lấy ý kiến và kết luận thẩm định dự án đầu tư công." },
+  { id: "public-investment-projects", label: "Dự án đầu tư công", note: "Quản lý thực hiện, hồ sơ số, thẩm định, pháp lý, tiến độ, liên kết và vướng mắc dự án." },
   { id: "calendar", label: "Lịch công việc", note: "Lịch tuần, cuộc họp, kết luận và nhắc lịch." },
   { id: "department-evaluations", label: "KPI phòng", note: "Dữ liệu hoạt động và chấm điểm KPI cấp phòng." },
   { id: "evaluations", label: "KPI cá nhân", note: "Chấm điểm KPI cá nhân và kết quả thi đua tháng." },
@@ -1107,7 +1147,7 @@ const moduleDefaultRoleAccess = {
   archive: [...moduleAccessRoles],
   people: ["director", "manager", "deputy_manager"],
   tasks: [...moduleAccessRoles],
-  "public-investment-appraisal": [...moduleAccessRoles],
+  "public-investment-projects": [...moduleAccessRoles],
   calendar: [...moduleAccessRoles],
   "department-evaluations": ["director", "manager", "deputy_manager"],
   evaluations: [...moduleAccessRoles],
@@ -1116,7 +1156,7 @@ const moduleDefaultRoleAccess = {
   rules: [...moduleAccessRoles],
   help: [...moduleAccessRoles],
 };
-const MODULE_SETTINGS_VERSION = 4;
+const MODULE_SETTINGS_VERSION = 6;
 
 const GPMB_LEGACY_WORKFLOW_TEMPLATE = Object.freeze([
   { id: "plan", title: "Xây dựng kế hoạch thu hồi đất", category: "Điều tra, kiểm đếm đất đai / Trích đo, quy chủ", owner: "Phòng GPMB", documents: "Kế hoạch thu hồi đất", days: 7 },
@@ -1256,6 +1296,10 @@ function createPersonnelAccount(person, accounts) {
 }
 
 function syncPersonnelAccounts() {
+  // Creating or relinking personnel accounts is an administrator operation on
+  // the shared server. Other roles may still edit personnel, but must not add
+  // an account mutation to the same patch and trigger an avoidable rejection.
+  if (sharedSync.session && !isOfflineFileRuntime() && !isAdmin()) return false;
   if (!Array.isArray(state.people) || !state.people.length) return false;
   if (!Array.isArray(state.accounts)) state.accounts = [];
   let changed = false;
@@ -1327,7 +1371,14 @@ function normalizeModuleSettings(settings = {}) {
   const defaults = defaultModuleSettings();
   const migrateLegacyDefaults = Number(settings?.schemaVersion || 0) < MODULE_SETTINGS_VERSION;
   systemModules.forEach((module) => {
-    const saved = settings?.[module.id] || {};
+    let saved = settings?.[module.id] || {};
+    if (migrateLegacyDefaults && module.id === PUBLIC_INVESTMENT_HUB_VIEW && settings?.[PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW]) {
+      const legacy = settings[PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW];
+      saved = {
+        enabled: saved.enabled !== false || legacy.enabled !== false,
+        roles: Object.fromEntries(moduleAccessRoles.map((role) => [role, saved?.roles?.[role] === true || legacy?.roles?.[role] === true])),
+      };
+    }
     const roles = defaultModuleRoleSettings(module.id);
     moduleAccessRoles.forEach((role) => {
       if (migrateLegacyDefaults && saved?.roles?.[role] === false) roles[role] = false;
@@ -1511,8 +1562,16 @@ function systemSettingId(key) {
   return `system-setting:${String(key || "").replace(/[^a-zA-Z0-9_.:-]/g, "-")}`;
 }
 
+function canonicalSystemSettingKey(value) {
+  const key = String(value || "").trim();
+  const legacyPrefix = `module.${PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW}.`;
+  return key.startsWith(legacyPrefix)
+    ? `module.${PUBLIC_INVESTMENT_HUB_VIEW}.${key.slice(legacyPrefix.length)}`
+    : key;
+}
+
 function systemSettingKeyFromRecord(record) {
-  return String(record?.key || "").trim();
+  return canonicalSystemSettingKey(record?.key);
 }
 
 function systemSettingKeys() {
@@ -1545,9 +1604,18 @@ function systemSettingValueMap(source = {}) {
 
 function systemSettingRecordsFromState(source = {}, existingRecords = source.systemSettings) {
   const values = systemSettingValueMap(source);
-  const existing = new Map((Array.isArray(existingRecords) ? existingRecords : [])
+  const existing = new Map();
+  (Array.isArray(existingRecords) ? existingRecords : [])
     .filter((record) => record && typeof record === "object")
-    .map((record) => [systemSettingKeyFromRecord(record), record]));
+    .forEach((record) => {
+      const rawKey = String(record.key || "").trim();
+      const key = canonicalSystemSettingKey(rawKey);
+      if (!key) return;
+      const normalized = { ...record, id: systemSettingId(key), key };
+      const saved = existing.get(key);
+      // The current unified record wins when a snapshot still contains both keys.
+      if (!saved || rawKey === key || String(saved.key || "") !== key) existing.set(key, normalized);
+    });
   return systemSettingKeys().map((key) => {
     const previous = existing.get(key) || {};
     return {
@@ -1565,7 +1633,7 @@ function systemSettingRecordsFromState(source = {}, existingRecords = source.sys
 }
 
 function applySystemSettingRecordToState(target, record) {
-  const key = systemSettingKeyFromRecord(record);
+  const key = canonicalSystemSettingKey(record?.key);
   if (!key || !record || !Object.prototype.hasOwnProperty.call(record, "value")) return;
   const value = cloneStatePayload(record.value);
   const moduleMatch = key.match(/^module\.([^\.]+)\.(enabled|role)\.?(.*)$/);
@@ -1686,7 +1754,6 @@ let bulletinMediaDraft = [];
 let archiveFileDraft = [];
 let bulletinResizeRefreshQueued = false;
 let taskAttachmentDraft = [];
-let assignmentAttachmentDraft = [];
 let taskBulkImportState = { rows: [], errors: [], fileName: "" };
 let taskDetailInlineEditor = null;
 let personDetailInlineEditor = null;
@@ -1813,7 +1880,6 @@ const taskBlockerLabels = {
   resolved: "Đã gỡ trở ngại",
 };
 const taskStatuses = [TASK_STATUS_PREPARING, "Đang thực hiện", "Hoàn thành", "Quá hạn"];
-const TASK_KIND_ASSIGNED = "assigned";
 const TASK_KIND_REGULAR = "regular";
 const taskKindLabels = {
   [TASK_KIND_REGULAR]: "Danh mục nhiệm vụ",
@@ -2432,7 +2498,7 @@ function storedFileDisplayUrl(file, dataUrl) {
 function taskAttachmentByKey(key) {
   const normalizedKey = String(key || "");
   if (!normalizedKey) return null;
-  const draft = [...taskAttachmentDraft, ...assignmentAttachmentDraft].find((file) => storedFileKey(file) === normalizedKey);
+  const draft = taskAttachmentDraft.find((file) => storedFileKey(file) === normalizedKey);
   if (draft) return draft;
   for (const task of state.tasks || []) {
     const found = (task.attachments || []).find((file) => storedFileKey(file) === normalizedKey);
@@ -2661,6 +2727,7 @@ function defaultStatePayload() {
     gpmbWorkflows: [],
     gpmbCases: [],
     publicInvestmentAppraisals: [],
+    publicInvestmentProjects: [],
     calendarEvents: [],
     calendarDirectory: [],
     projectCatalog: [],
@@ -3187,7 +3254,7 @@ function projectNameForTask(task) {
   return projectById(task?.projectId)?.name || normalizedProjectCatalogName(task?.projectName);
 }
 
-function isRetiredAssignmentTaskRecord(task) {
+function isRetiredLegacyTaskRecord(task) {
   if (!task || typeof task !== "object") return false;
   const kind = String(task.kind || task.taskKind || "").trim().toLowerCase();
   return kind === "assigned" || (!kind && Boolean(task.assignedById || task.assignedAt || task.responseStatus || task.responseAt));
@@ -3211,14 +3278,15 @@ function normalizeStatePayload(parsed) {
     ? fallback.accounts
     : sourceAccounts;
   const sourceTasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
-  const retiredAssignmentTaskIds = new Set(
-    sourceTasks.filter((task) => isRetiredAssignmentTaskRecord(task)).map((task) => String(task?.id || "")).filter(Boolean),
+  const retiredLegacyTaskIds = new Set(
+    sourceTasks.filter((task) => isRetiredLegacyTaskRecord(task)).map((task) => String(task?.id || "")).filter(Boolean),
   );
-  const tasks = sourceTasks.filter((task) => !isRetiredAssignmentTaskRecord(task));
+  const tasks = sourceTasks.filter((task) => !isRetiredLegacyTaskRecord(task));
   const projectCatalog = normalizeProjectCatalog(parsed.projectCatalog, tasks);
   const gpmbWorkflows = normalizeGpmbWorkflows(parsed.gpmbWorkflows, projectCatalog);
   const gpmbCases = normalizeGpmbCases(parsed.gpmbCases, gpmbWorkflows);
   const publicInvestmentAppraisals = normalizePublicInvestmentAppraisals(parsed.publicInvestmentAppraisals, projectCatalog);
+  const publicInvestmentProjects = window.PublicInvestmentProjects?.normalizeCollection?.(parsed.publicInvestmentProjects, projectCatalog) || [];
   const normalized = {
     activePeriod: parsed.activePeriod || fallback.activePeriod,
     people: Array.isArray(parsed.people) ? parsed.people : [],
@@ -3226,6 +3294,7 @@ function normalizeStatePayload(parsed) {
     gpmbWorkflows,
     gpmbCases,
     publicInvestmentAppraisals,
+    publicInvestmentProjects,
     calendarEvents: Array.isArray(parsed.calendarEvents) ? parsed.calendarEvents.filter((event) => event && typeof event === "object" && event.id) : [],
     calendarDirectory: Array.isArray(parsed.calendarDirectory) ? parsed.calendarDirectory : [],
     projectCatalog,
@@ -3247,7 +3316,7 @@ function normalizeStatePayload(parsed) {
     roles: normalizeRolesCatalog(parsed.roles),
     behaviorRules: normalizeBehaviorRulesCatalog(parsed.behaviorRules),
     activityLog: Array.isArray(parsed.activityLog)
-      ? parsed.activityLog.filter((entry) => !retiredAssignmentTaskIds.has(String(entry?.targetId || "")))
+      ? parsed.activityLog.filter((entry) => !retiredLegacyTaskIds.has(String(entry?.targetId || "")))
       : [],
     importedPeopleVersion: parsed.importedPeopleVersion || "",
     canBoGpmbKpiCatalogVersion: parsed.canBoGpmbKpiCatalogVersion || "",
@@ -3546,7 +3615,10 @@ async function discardUntrustedSharedChanges(reason) {
 }
 
 function isOfflineFileRuntime() {
-  return window.location.protocol === "file:";
+  if (window.location.protocol === "file:") return true;
+  const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+  return loopbackHosts.has(window.location.hostname)
+    && new URLSearchParams(window.location.search).get("offline") === "1";
 }
 
 function sharedSyncSupported() {
@@ -4609,6 +4681,11 @@ function sharedSyncSupportsTaskProgressLifecycle() {
   return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.08.21.1");
 }
 
+function sharedSyncSupportsTaskMutationContract() {
+  if (!usingSupabaseSync()) return true;
+  return deploymentVersionAtLeast(sharedSync.deploymentVersion, TASK_MUTATION_DEPLOYMENT_VERSION);
+}
+
 function sharedSyncSupportsTaskCompletionRecovery() {
   if (!usingSupabaseSync()) return true;
   return deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.10.15.1");
@@ -5279,21 +5356,6 @@ function sharedPatchOperationCount(patch) {
 }
 
 function sharedDeniedChangeMessage(deniedChanges, snapshot) {
-  const labels = {
-    people: "Nhân sự",
-    tasks: "Công việc",
-    projectCatalog: "Danh mục dự án",
-    bulletins: "Bảng tin",
-    archiveRecords: "Lưu trữ",
-    evaluations: "KPI cá nhân",
-    departmentEvaluations: "KPI phòng",
-    accounts: "Tài khoản",
-    supportRequests: "Yêu cầu hỗ trợ",
-    calendarEvents: "Lịch công việc",
-    activityLog: "Lịch sử hoạt động",
-    systemSettings: "Cấu hình hệ thống",
-    field: "Cấu hình hệ thống",
-  };
   const changes = Array.isArray(deniedChanges) ? deniedChanges : [];
   const settingConflicts = changes.filter((change) => change.scope === "systemSettings" && change.settingKey);
   if (settingConflicts.length) {
@@ -5303,7 +5365,10 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
       return new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(date);
     };
     const details = settingConflicts.slice(0, 3).map((change) => {
-      const label = change.settingLabel || change.settingKey;
+      const legacyAppraisalSetting = String(change.settingKey || "").includes(PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW);
+      const label = legacyAppraisalSetting
+        ? (String(change.settingKey || "").includes(".role.") ? "Quyền Dự án đầu tư công" : "Bật mục Dự án đầu tư công")
+        : change.settingLabel || change.settingKey;
       const actor = change.serverUpdatedBy || change.serverUpdatedByUsername || "tài khoản khác";
       const version = Number(change.serverVersion) > 0 ? ` phiên bản ${change.serverVersion}` : "";
       return `“${label}” đã được ${actor} cập nhật lúc ${formatTime(change.serverUpdatedAt)}${version}`;
@@ -5312,7 +5377,11 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
     return `${details.join("; ")}${suffix}. Thay đổi trùng thiết lập trên thiết bị này chưa được lưu; các thiết lập không trùng đã được gộp.`;
   }
   const conflictOnly = changes.length > 0 && changes.every((change) => change.reason === "Record changed by another user." || change.reason === "Field changed by another user.");
-  const targets = [...new Set(changes.map((change) => labels[change.scope] || "Dữ liệu hệ thống"))].slice(0, 3);
+  const deniedTargetLabel = (change) => {
+    if (change?.scope === "field") return SHARED_SYNC_FIELD_LABELS[change.id] || `Cấu hình (${change.id || "không xác định"})`;
+    return SHARED_SYNC_SCOPE_LABELS[change?.scope] || `Dữ liệu (${change?.scope || "không xác định"})`;
+  };
+  const targets = [...new Set(changes.map(deniedTargetLabel))].slice(0, 3);
   const targetText = targets.length ? targets.join(", ") : "một số dữ liệu";
   if (conflictOnly) {
     return `${targetText} đã được cập nhật từ thiết bị khác trước khi lưu. Hệ thống đã tải lại kết quả mới nhất từ máy chủ.`;
@@ -5330,11 +5399,29 @@ function sharedDeniedChangeMessage(deniedChanges, snapshot) {
   if (changes.some((change) => change.scope === "tasks" && change.reason === "Task module is not available to this account.")) {
     return "Tài khoản chưa được bật quyền truy cập mục Công việc. Quản trị viên cần kiểm tra Cấu hình hệ thống > Phân quyền chức năng.";
   }
+  if (changes.some((change) => change.scope === "tasks" && change.reason === "Invalid GPMB task progress update.")) {
+    return "Máy chủ không chấp nhận cập nhật tiến độ GPMB. Hãy tải lại dữ liệu, kiểm tra tài khoản là người thực hiện/người phối hợp hoặc quản lý đúng phòng ban rồi cập nhật lại; thông tin quy trình và thời hạn bước phải chỉnh trong Quản lý GPMB.";
+  }
   if (changes.some((change) => change.scope === "tasks" && change.reason === "Task update is outside account scope.")) {
     return "Máy chủ không nhận diện tài khoản thuộc phạm vi công việc này. Hãy kiểm tra liên kết tài khoản với nhân sự, người thực hiện/phối hợp và phòng ban của công việc.";
   }
   if (changes.some((change) => change.scope === "tasks" && change.reason === "Permission denied.")) {
     return "Máy chủ từ chối thao tác theo quyền hoặc phạm vi công việc của tài khoản. Hãy kiểm tra người thực hiện, người phối hợp, phòng ban và quyền truy cập mục Công việc.";
+  }
+  if (changes.some((change) => change.scope === "notifications" && change.reason === "Invalid notification acknowledgement.")) {
+    return "Máy chủ không chấp nhận trạng thái đã xem/đã ẩn của thông báo vì thông báo nguồn đã thay đổi hoặc không thuộc tài khoản hiện tại. Danh sách thông báo mới nhất đã được tải lại.";
+  }
+  if (changes.some((change) => change.scope === "gpmbWorkflows" && change.reason === "GPMB workflow update is outside account scope.")) {
+    return "Máy chủ không chấp nhận thay đổi Quy trình GPMB vì tài khoản không có quyền điều hành GPMB trong phạm vi này. Dữ liệu mới nhất đã được tải lại.";
+  }
+  if (changes.some((change) => change.scope === "gpmbCases" && change.reason === "GPMB case update is outside account scope.")) {
+    return "Máy chủ không chấp nhận thay đổi Hồ sơ GPMB theo hộ/thửa vì tài khoản không thuộc phạm vi quản lý hoặc phụ trách hồ sơ. Dữ liệu mới nhất đã được tải lại.";
+  }
+  if (changes.some((change) => change.scope === "publicInvestmentAppraisals" && change.reason === "Public investment appraisal update is outside account scope.")) {
+    return "Máy chủ không chấp nhận thay đổi Thẩm định dự án vì tài khoản không được phân công hoặc không có quyền trong phạm vi dự án. Dữ liệu mới nhất đã được tải lại.";
+  }
+  if (changes.some((change) => change.scope === "publicInvestmentProjects" && change.reason === "Public investment project update is outside account scope.")) {
+    return "Máy chủ không chấp nhận thay đổi Quản lý dự án đầu tư công vì tài khoản không được phân công hoặc không có quyền trong phạm vi dự án. Dữ liệu mới nhất đã được tải lại.";
   }
   const rejectedIds = changes
     .filter((change) => change.scope === "tasks")
@@ -5384,6 +5471,7 @@ function showSystemToast(title, message, { tone = "warning", duration = 7000 } =
       id: `system-feedback:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
       title,
       message,
+      category: "system",
       priority: tone,
       recipientAccountId: currentAccount().id,
     }, { duration });
@@ -5910,6 +5998,13 @@ function normalizeDepartmentTermText(value) {
     .replace(/[Cc]án bộ\s+[Hh]ạ\s*tầng/g, "Cán bộ QLHT");
 }
 
+function automaticClientDataMigrationsAllowed() {
+  // A network client must adopt the authoritative server snapshot without
+  // silently rewriting it during page startup. Shared migrations are applied
+  // centrally or by explicit administrator actions after authentication.
+  return isOfflineFileRuntime() || !sharedSyncSupported();
+}
+
 function migrateDepartmentTermLabels(options = {}) {
   const persist = options.persist !== false;
   let changed = false;
@@ -6137,15 +6232,17 @@ function clearMandatoryPasswordChangeFlags() {
   return changed;
 }
 
-migrateDepartmentTermLabels();
-migrateLegacyProjectDepartments();
-mergeImportedPeopleIntoState();
-migrateCanBoGpmbKpiCatalog();
-const nhanVienTongHopGpmbKpiCatalogUpdated = migrateNhanVienTongHopGpmbKpiCatalog();
-const sectionHeadKpiCatalogUpdated = migrateSectionHeadKpiCatalog();
-const passwordPolicyUpdated = clearMandatoryPasswordChangeFlags();
-const sectionHeadManagementUpdated = normalizeSectionHeadManagementLinks();
-if (syncPersonnelAccounts() || nhanVienTongHopGpmbKpiCatalogUpdated || sectionHeadKpiCatalogUpdated || passwordPolicyUpdated || sectionHeadManagementUpdated) saveState();
+if (automaticClientDataMigrationsAllowed()) {
+  migrateDepartmentTermLabels();
+  migrateLegacyProjectDepartments();
+  mergeImportedPeopleIntoState();
+  migrateCanBoGpmbKpiCatalog();
+  const nhanVienTongHopGpmbKpiCatalogUpdated = migrateNhanVienTongHopGpmbKpiCatalog();
+  const sectionHeadKpiCatalogUpdated = migrateSectionHeadKpiCatalog();
+  const passwordPolicyUpdated = clearMandatoryPasswordChangeFlags();
+  const sectionHeadManagementUpdated = normalizeSectionHeadManagementLinks();
+  if (syncPersonnelAccounts() || nhanVienTongHopGpmbKpiCatalogUpdated || sectionHeadKpiCatalogUpdated || passwordPolicyUpdated || sectionHeadManagementUpdated) saveState();
+}
 
 function departmentById(id) {
   return departments.find((item) => item.id === id);
@@ -6580,7 +6677,44 @@ function canDeleteArchive() {
   return isAdmin();
 }
 
+function publicInvestmentRoute(viewId) {
+  if (viewId === PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW) {
+    return { viewId: PUBLIC_INVESTMENT_HUB_VIEW, workspace: "appraisal" };
+  }
+  return { viewId, workspace: viewId === PUBLIC_INVESTMENT_HUB_VIEW ? activePublicInvestmentWorkspace : "" };
+}
+
+function storedPublicInvestmentWorkspace() {
+  try {
+    const saved = localStorage.getItem(PUBLIC_INVESTMENT_WORKSPACE_KEY);
+    return PUBLIC_INVESTMENT_WORKSPACES.has(saved) ? saved : "projects";
+  } catch {
+    return "projects";
+  }
+}
+
+function setPublicInvestmentWorkspace(workspace, { persist = true, render = true } = {}) {
+  const next = PUBLIC_INVESTMENT_WORKSPACES.has(workspace) ? workspace : "projects";
+  activePublicInvestmentWorkspace = next;
+  document.querySelectorAll("[data-public-investment-workspace]").forEach((button) => {
+    const selected = button.dataset.publicInvestmentWorkspace === next;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  document.querySelectorAll("[data-public-investment-workspace-panel]").forEach((panel) => {
+    panel.classList.toggle("is-active", panel.dataset.publicInvestmentWorkspacePanel === next);
+  });
+  if (persist) {
+    try { localStorage.setItem(PUBLIC_INVESTMENT_WORKSPACE_KEY, next); } catch {}
+  }
+  if (!render || activeViewId() !== PUBLIC_INVESTMENT_HUB_VIEW) return;
+  if (next === "appraisal") renderPublicInvestmentAppraisals();
+  else window.PublicInvestmentProjects?.render?.();
+}
+
 function canAccessView(viewId) {
+  viewId = publicInvestmentRoute(viewId).viewId;
   if (!currentAccount()) return false;
   if (!moduleIsAvailableToAccount(viewId)) return false;
   if (viewId === "system-settings") return isAdmin();
@@ -6701,25 +6835,6 @@ function isAssignableByDepartmentLeader(person) {
   return roleId.startsWith("truong-bo-phan-") || (!roleId.startsWith("truong-phong-") && !roleId.startsWith("pho-phong-"));
 }
 
-function canAssignTaskToPerson(personId) {
-  const person = personById(personId);
-  if (!person || !isActivePerson(person) || !canAssignTasks()) return false;
-  if (canViewAllData()) return true;
-  return hasDepartmentManagementAccess() && person.departmentId === currentDepartmentId() && isAssignableByDepartmentLeader(person);
-}
-
-function assignablePeopleForTasks() {
-  if (canViewAllData()) return state.people.filter(isActivePerson);
-  if (hasDepartmentManagementAccess()) {
-    return state.people.filter((person) => person.departmentId === currentDepartmentId() && isActivePerson(person) && isAssignableByDepartmentLeader(person));
-  }
-  return [];
-}
-
-function canEditTaskAssignment(task) {
-  return !!task && isAssignedTask(task) && (isAdmin() || isTaskAssigner(task));
-}
-
 function isCompletedOrOverdueTask(task) {
   const status = getDueStatus(task);
   return status === TASK_STATUS_COMPLETED || status === "Quá hạn";
@@ -6741,10 +6856,6 @@ function canCreateRegularTasks() {
   return canViewAllData() || hasDepartmentManagementAccess() || isSectionHead() || !!currentPerson();
 }
 
-function canEditRegularTask(task) {
-  return !!task && !isAssignedTask(task) && canCreateRegularTaskForPerson(task.ownerId);
-}
-
 function canEditTaskDetails(task) {
   return !!task && isAdmin() && !isGpmbWorkflowTask(task);
 }
@@ -6755,7 +6866,7 @@ function canDeleteTask(task) {
 
 function canCopyTask(task) {
   if (!task || isRecurrenceStoppedTask(task)) return false;
-  return isAssignedTask(task) ? canAssignTaskToPerson(task.ownerId) : canCreateRegularTaskForPerson(task.ownerId);
+  return canCreateRegularTaskForPerson(task.ownerId);
 }
 
 function canReportTask(task) {
@@ -6815,6 +6926,202 @@ async function ensureTaskDeadlineExtensionReviewSupported() {
   return false;
 }
 
+async function ensureTaskMutationContractSupported() {
+  if (isOfflineFileRuntime() || !sharedSync.session) return true;
+  const versionRefreshed = await refreshSharedDeploymentVersion();
+  if (versionRefreshed && sharedSyncSupportsTaskMutationContract()) return true;
+  const version = sharedSync.deploymentVersion || "chưa xác định";
+  showSystemToast(
+    "Chưa thể cập nhật công việc",
+    versionRefreshed
+      ? `Máy chủ online đang chạy phiên bản ${version}, chưa đồng bộ với quy tắc cập nhật công việc ${TASK_MUTATION_DEPLOYMENT_VERSION}. Không có thay đổi nào được lưu.`
+      : "Chưa thể xác nhận phiên bản máy chủ online. Không có thay đổi nào được lưu để tránh trạng thái hiển thị sai rồi bị khôi phục.",
+    { tone: "warning", duration: 9000 },
+  );
+  return false;
+}
+
+async function confirmTaskMutationOnline(taskId) {
+  if (isOfflineFileRuntime() || !sharedSync.session) return true;
+  let result = await flushSharedStateSync();
+  if (result?.reason === "in-flight") {
+    const deadline = Date.now() + 8000;
+    while (sharedSync.inFlight && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+    }
+    if (!sharedSync.inFlight && (sharedSync.pending || sharedSync.dirty)) result = await flushSharedStateSync();
+  }
+  const taskDenied = Array.isArray(result?.denied)
+    && result.denied.some((change) => change?.scope === "tasks" && String(change?.id || "") === String(taskId || ""));
+  if (taskDenied || result?.conflict) {
+    renderAll();
+    return false;
+  }
+  if (!result?.ok && result?.pending) {
+    showSystemToast(
+      "Đang chờ đồng bộ công việc",
+      "Thay đổi đã được giữ an toàn trên thiết bị và sẽ tự gửi lại khi kết nối máy chủ ổn định.",
+      { tone: "warning", duration: 8000 },
+    );
+  }
+  return true;
+}
+
+function taskCommandReportId(previous, next) {
+  const previousIds = new Set((previous?.progressReports || []).map((report) => String(report?.id || "")).filter(Boolean));
+  const added = (next?.progressReports || []).filter((report) => report?.id && !previousIds.has(String(report.id)));
+  return String(added.at(-1)?.id || "");
+}
+
+function taskStateFromCommandResponse(payload) {
+  if (Number(payload?.revision) < Number(sharedSync.revision)) return null;
+  if (payload?.state) return payload.state;
+  const change = payload?.changes;
+  if (change?.protocol !== "task-changes-v1" || change.baseRevision !== sharedSync.revision
+    || change.revision !== payload.revision || !sharedSync.serverBaseState) return null;
+  const remote = cloneStatePayload(sharedSync.serverBaseState);
+  for (const [name, operation] of Object.entries(change.collections || {})) {
+    if (!SHARED_SYNC_COLLECTIONS.includes(name) || !Array.isArray(operation?.upserts) || !Array.isArray(operation?.deletes)) return null;
+    const records = new Map((remote[name] || []).map((record) => [String(record.id), record]));
+    operation.deletes.forEach((id) => records.delete(String(id)));
+    for (const record of operation.upserts) {
+      if (!record || typeof record !== "object" || !record.id) return null;
+      records.set(String(record.id), record);
+    }
+    const order = operation.order || [...records.keys()];
+    if (!Array.isArray(order) || new Set(order).size !== records.size || order.length !== records.size
+      || order.some((id) => !records.has(String(id)))) return null;
+    remote[name] = order.map((id) => records.get(String(id)));
+  }
+  for (const [name, value] of Object.entries(change.fields || {})) {
+    if (![...SHARED_SYNC_SCALAR_FIELDS, "activePeriod", "calendarDirectory"].includes(name)) return null;
+    remote[name] = value;
+  }
+  return remote;
+}
+
+async function acceptTaskCommandState(remote, sentLocal, changeVersion) {
+  if (sharedSync.localChangeVersion === changeVersion) {
+    await adoptSharedState(remote, { render: false });
+    if (sharedSync.localChangeVersion !== changeVersion) {
+      sharedSync.pending = true;
+      await markSharedStateDirty();
+    }
+    return;
+  }
+  // A form in another module may have been saved while this request was in
+  // flight. Rebase only those subsequent edits; never discard their draft.
+  const merged = mergeRemoteStateWithUnsyncedChanges(sentLocal, state, remote);
+  Object.assign(state, merged);
+  applyRuntimeKpiCatalogs(state);
+  sharedSync.baseState = cloneStatePayload(normalizeStatePayload(remote));
+  sharedSync.serverBaseState = sharedServerBasePayload(remote);
+  sharedSync.pending = true;
+  persistState();
+  await markSharedStateDirty();
+}
+
+let taskCommandTransportPromise = null;
+function loadTaskCommandTransport() {
+  if (window.TaskCommandTransport) return Promise.resolve(window.TaskCommandTransport);
+  if (!taskCommandTransportPromise) {
+    taskCommandTransportPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = new URL(`task-command-transport.js?v=${encodeURIComponent(APP_VERSION)}`, document.baseURI).href;
+      script.async = true;
+      script.onload = () => window.TaskCommandTransport ? resolve(window.TaskCommandTransport) : reject(new Error("Task command transport unavailable."));
+      script.onerror = () => { script.remove(); reject(new Error("Task command transport unavailable.")); };
+      document.head.append(script);
+    }).catch((error) => { taskCommandTransportPromise = null; throw error; });
+  }
+  return taskCommandTransportPromise;
+}
+
+async function submitTaskCommandOnline(previous, candidate, command) {
+  if (isOfflineFileRuntime() || !sharedSync.session || !usingSupabaseSync()) return { ok: true, task: candidate, remote: false };
+  if (!await ensureTaskMutationContractSupported()) return { ok: false, reason: "unsupported-server" };
+  const commandId = taskCommandReportId(previous, candidate);
+  if (!commandId) {
+    showSystemToast(
+      "Chưa thể cập nhật công việc",
+      "Thao tác chưa có mã lịch sử kiểm toán nên không được gửi lên máy chủ.",
+      { tone: "warning", duration: 8000 },
+    );
+    return { ok: false, reason: "missing-command-id" };
+  }
+
+  const waitUntil = Date.now() + 20000;
+  while (sharedSync.inFlight && Date.now() < waitUntil) {
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+  }
+  if (sharedSync.inFlight || ((sharedSync.dirty || sharedSync.pending) && !(await flushSharedStateSync())?.ok)) {
+    showSystemToast("Chưa thể gửi cập nhật", "Thay đổi trước đó chưa đồng bộ xong. Nội dung đang nhập vẫn được giữ; hãy thử lại sau khi kết nối ổn định.");
+    return { ok: false, reason: "pending-sync" };
+  }
+  sharedSync.inFlight = true;
+  const sentLocal = cloneStatePayload(state);
+  const changeVersion = sharedSync.localChangeVersion;
+  const baseRevision = sharedSync.revision;
+  const serverCandidate = JSON.parse(JSON.stringify(candidate));
+  try {
+    await attachSharedFileKeys([candidate], [serverCandidate], "attachments");
+    const transport = await loadTaskCommandTransport();
+    const { response, payload } = await transport.send(sharedJsonRequest, {
+      taskId: String(candidate.id || ""),
+      command,
+      commandId,
+      baseRevision,
+      responseMode: "changes-v1",
+      baseTask: previous,
+      task: serverCandidate,
+    });
+    if (response.status === 401) {
+      handleSharedSessionUnauthorized();
+      return { ok: false, reason: "session-verification" };
+    }
+    let remoteState = taskStateFromCommandResponse(payload);
+    if (response.ok && payload?.task && !remoteState) {
+      const latest = await sharedJsonRequest("state");
+      if (latest.response.ok && latest.payload?.state) {
+        remoteState = latest.payload.state;
+        payload.revision = latest.payload.revision;
+      }
+    }
+    if (!response.ok || !remoteState || !payload?.task) {
+      const reason = String(payload?.error || `server-${response.status}`);
+      showSystemToast(
+        response.status === 409 ? "Dữ liệu công việc đã thay đổi" : "Máy chủ từ chối cập nhật công việc",
+        response.status === 409
+          ? "Hệ thống đã giữ phiên bản mới nhất trên máy chủ. Hãy kiểm tra lại công việc trước khi cập nhật tiếp."
+          : reason,
+        { tone: "warning", duration: 9000 },
+      );
+      if (remoteState) {
+        sharedSync.revision = Number(payload.revision) || sharedSync.revision;
+        await acceptTaskCommandState(remoteState, sentLocal, changeVersion);
+      }
+      return { ok: false, reason };
+    }
+    sharedSync.revision = Number(payload.revision) || sharedSync.revision;
+    sharedSync.initialized = sharedSync.revision > 0;
+    await acceptTaskCommandState(remoteState, sentLocal, changeVersion);
+    const committedTask = state.tasks.find((task) => String(task.id) === String(candidate.id));
+    return { ok: true, task: committedTask || payload.task, remote: true, idempotent: payload.idempotent === true };
+  } catch (error) {
+    showSystemToast(
+      "Chưa thể xác nhận cập nhật công việc",
+      error?.name === "AbortError"
+        ? "Máy chủ phản hồi quá thời gian chờ. Không hiển thị thành công khi chưa nhận được xác nhận."
+        : "Chưa xác nhận được kết quả trên máy chủ. Nội dung đang nhập vẫn được giữ; hãy kiểm tra lại công việc trước khi tạo một cập nhật khác.",
+      { tone: "warning", duration: 9000 },
+    );
+    return { ok: false, reason: error?.message || "network-error" };
+  } finally {
+    sharedSync.inFlight = false;
+    if (sharedSync.pending || sharedSync.dirty) queueSharedStateSync();
+  }
+}
+
 function canAssessTaskQualityForPerson(personId, status, task = null) {
   if (normalizeTaskStatus(status) !== TASK_STATUS_COMPLETED) return false;
   if (task && !taskCompletionIsApproved(task)) return false;
@@ -6872,33 +7179,12 @@ function preserveLegacyTaskProgressLifecycle(record, existing) {
   });
 }
 
-function isTaskAssigner(task) {
-  const account = currentAccount();
-  if (!task || !account) return false;
-  if (task.assignedById && task.assignedById === account.id) return true;
-  if (!task.assignedById && task.createdById && task.createdById === account.id) return true;
-  if (!task.assignedById && !task.createdById) {
-    const displayName = account.displayName || "";
-    return !!displayName && (task.assignedByName === displayName || task.createdBy === displayName);
-  }
-  return false;
-}
-
-function canViewAssignedTask(task) {
-  return !!task && isAssignedTask(task) && (canViewSystemContent() || isTaskAssigner(task) || canReportTask(task) || canCollaborateTask(task) || (hasDepartmentTaskAccess() && taskHasParticipantInDepartment(task, currentDepartmentId())));
-}
-
-function canEndTaskAssignment(task) {
-  return !!task && isAssignedTask(task) && (isAdmin() || isTaskAssigner(task)) && !isTaskFinishedStatus(getDueStatus(task));
-}
-
 function canOpenTask(task) {
   return canViewTaskRecord(task) || canEditTaskDetails(task) || canDeleteTask(task) || canUpdateTaskProgress(task) || canReviewTaskCompletion(task);
 }
 
 function canViewTaskRecord(task) {
   if (!task) return false;
-  if (isAssignedTask(task)) return canViewAssignedTask(task);
   if (canViewSystemContent()) return true;
   if (hasDepartmentTaskAccess() && taskHasParticipantInDepartment(task, currentDepartmentId())) return true;
   if (canCollaborateTask(task)) return true;
@@ -7273,6 +7559,7 @@ function nextRecurringOccurrence(sourceTask, latestTask) {
 }
 
 function ensureRecurringTasksForPeriod(targetPeriod = recurrenceTargetPeriod()) {
+  if (typeof usingSupabaseSync === "function" && usingSupabaseSync() && !isOfflineFileRuntime()) return false;
   if (recurringTasksEnsuredPeriod === targetPeriod && recurringTasksEnsuredRevision === derivedStateRevision) {
     return false;
   }
@@ -7439,10 +7726,8 @@ function formatSalary(person) {
 }
 
 function normalizeTaskKind(task) {
-  const kind = typeof task === "string" ? task : task?.kind || task?.taskKind || "";
-  if (kind === TASK_KIND_REGULAR || kind === "regular") return TASK_KIND_REGULAR;
-  if (kind === TASK_KIND_ASSIGNED || kind === "assigned") return TASK_KIND_ASSIGNED;
-  return task?.assignedById || task?.assignedAt || task?.responseStatus || task?.responseAt ? TASK_KIND_ASSIGNED : TASK_KIND_REGULAR;
+  void task;
+  return TASK_KIND_REGULAR;
 }
 
 function normalizeTaskWorkType(task) {
@@ -7466,10 +7751,6 @@ function taskWorkMeta(task) {
   const workType = taskWorkTypeLabels[normalizeTaskWorkType(task)] || taskWorkTypeLabels[TASK_WORK_TYPE_ROUTINE];
   const recurrence = taskRecurrenceLabels[normalizeTaskRecurrence(task)] || taskRecurrenceLabels[TASK_RECURRENCE_NONE];
   return `${workType} · ${recurrence}`;
-}
-
-function isAssignedTask(task) {
-  return normalizeTaskKind(task) === TASK_KIND_ASSIGNED;
 }
 
 function uniquePersonIds(ids = []) {
@@ -7865,8 +8146,6 @@ function taskViolationReasons(task) {
   const overdue = getDueStatus(task) === "Quá hạn" || taskIsLateCompletion(task);
   if (!overdue) return [];
   const reasons = [];
-  if (isAssignedTask(task) && !taskHasTimelyResponse(task)) reasons.push("Chưa phản hồi nhận việc trước thời hạn hoàn thành");
-  if (isAssignedTask(task) && !taskHasTimelyProgressReport(task)) reasons.push("Chưa báo cáo tiến độ trước thời hạn hoàn thành");
   reasons.push("Chậm thời hạn hoàn thành");
   return reasons;
 }
@@ -8408,8 +8687,7 @@ function updateTaskCategoryOptions(selectedValue, ownerSelectId = "taskOwner", c
   const selectedCandidates = [selectedValue, select.value].filter((value) => value && !String(value).startsWith("Chọn người được giao"));
   const requested = selectedCandidates[0] || "";
   const optionRows = options.map((category) => ({ value: category, label: category }));
-  const recordIdField = categorySelectId === "taskCategory" ? "taskId" : "assignmentTaskId";
-  const preserveLegacyCategory = Boolean(byId(recordIdField)?.value);
+  const preserveLegacyCategory = Boolean(byId("taskId")?.value);
   if (preserveLegacyCategory && requested && !options.some((category) => normalizeSearchText(category) === normalizeSearchText(requested))) {
     optionRows.unshift({ value: requested, label: `${requested} (danh mục cũ, chưa có mục thay thế)` });
   }
@@ -8532,45 +8810,6 @@ function renderPersonOptions() {
   }
   updateTaskCollaboratorOptions(currentTaskCollaborators);
   updateTaskCategoryOptions(byId("taskCategory").value);
-  fillSelect(byId("evalPerson"), evaluationPlaceholder.concat(evaluationOptions), selectedEvalPerson);
-  byId("evalPerson").disabled = isEmployee();
-  return;
-
-  const currentAssignmentOwner = byId("assignmentTaskOwner").value;
-  const currentAssignmentCollaborator = byId("assignmentTaskCollaborator").value;
-  const assignmentPeople = canAssignTasks() ? assignablePeopleForTasks() : [];
-  const assignmentCollaboratorPeople = hasDepartmentTaskAccess() ? visiblePeopleForTasks() : assignmentPeople;
-  const assignmentPeopleWithSelected = [...assignmentPeople];
-  const assignmentCollaboratorPeopleWithSelected = [...assignmentCollaboratorPeople];
-  [currentAssignmentOwner].forEach((personId) => {
-    const person = personById(personId);
-    if (person && !assignmentPeopleWithSelected.some((item) => item.id === person.id)) {
-      assignmentPeopleWithSelected.unshift(person);
-    }
-  });
-  [currentAssignmentCollaborator].forEach((personId) => {
-    const person = personById(personId);
-    if (person && !assignmentCollaboratorPeopleWithSelected.some((item) => item.id === person.id)) {
-      assignmentCollaboratorPeopleWithSelected.unshift(person);
-    }
-  });
-  const assignmentOptions = assignmentPeopleWithSelected.map((person) => ({
-    value: person.id,
-    label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
-  }));
-  const assignmentCollaboratorOptions = assignmentCollaboratorPeopleWithSelected.map((person) => ({
-    value: person.id,
-    label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
-  }));
-  const selectedAssignmentOwner = assignmentOptions.some((option) => option.value === currentAssignmentOwner)
-    ? currentAssignmentOwner
-    : assignmentOptions.length === 1
-      ? assignmentOptions[0].value
-      : "";
-  const selectedAssignmentCollaborator = assignmentCollaboratorOptions.some((option) => option.value === currentAssignmentCollaborator) ? currentAssignmentCollaborator : "";
-  fillSelect(byId("assignmentTaskOwner"), personPlaceholder.concat(assignmentOptions), selectedAssignmentOwner);
-  fillSelect(byId("assignmentTaskCollaborator"), [{ value: "", label: "Không chọn người phối hợp" }].concat(assignmentCollaboratorOptions), selectedAssignmentCollaborator);
-  updateTaskCategoryOptions(byId("assignmentTaskCategory").value, "assignmentTaskOwner", "assignmentTaskCategory");
   fillSelect(byId("evalPerson"), evaluationPlaceholder.concat(evaluationOptions), selectedEvalPerson);
   byId("evalPerson").disabled = isEmployee();
 }
@@ -8704,93 +8943,6 @@ function updatePeopleFilterNote(resultCount) {
   note.classList.remove("is-hidden");
 }
 
-function assignedTasksForInbox() {
-  return state.tasks
-    .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
-    .filter((task) => canViewTaskRecord(task) && isAssignedTask(task))
-    .sort((a, b) => {
-      const aDone = isTaskFinishedStatus(a.computedStatus) ? 1 : 0;
-      const bDone = isTaskFinishedStatus(b.computedStatus) ? 1 : 0;
-      if (aDone !== bDone) return aDone - bDone;
-      const aDue = taskDeadlineDate(a)?.toISOString() || "9999-12-31";
-      const bDue = taskDeadlineDate(b)?.toISOString() || "9999-12-31";
-      return aDue.localeCompare(bDue) || (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || "");
-    });
-}
-
-function renderTaskInbox() {
-  const assignedTasks = assignedTasksForInbox();
-  const pendingCount = assignedTasks.filter((task) => !isTaskFinishedStatus(task.computedStatus)).length;
-  byId("taskInboxBadge").textContent = String(pendingCount);
-  byId("taskInboxBadge").classList.toggle("is-hidden", pendingCount === 0);
-  byId("taskInboxSummary").textContent = assignedTasks.length
-    ? `${pendingCount} việc đang cần xử lý, ${assignedTasks.length} việc được giao trong phạm vi tài khoản.`
-    : "Chưa có công việc được giao.";
-  if (!byId("taskInboxDialog").classList.contains("is-hidden")) {
-    renderTaskInboxDialog();
-  }
-}
-
-function renderTaskInboxDialog() {
-  const assignedTasks = assignedTasksForInbox();
-  const pendingCount = assignedTasks.filter((task) => !isTaskFinishedStatus(task.computedStatus)).length;
-  byId("taskInboxDialogSummary").textContent = assignedTasks.length
-    ? `${pendingCount} việc đang cần xử lý, ${assignedTasks.length} việc được giao.`
-    : "Chưa có công việc được giao.";
-  byId("taskInboxList").innerHTML = assignedTasks.length
-    ? assignedTasks
-        .map((task) => {
-          const collaboratorNames = taskCollaboratorNames(task);
-          const latestReport = latestTaskProgressReport(task);
-          const violations = taskViolationReasons(task);
-          return `
-            <article class="task-inbox-item">
-              <div class="section-head">
-                <div>
-                  <span class="badge ${task.computedStatus === "Quá hạn" ? "bad" : isTaskFinishedStatus(task.computedStatus) ? "good" : "warn"}">${escapeHtml(task.computedStatus)}</span>
-                  <h3>${escapeHtml(task.title)}</h3>
-                </div>
-                <button class="ghost" data-open-inbox-task="${escapeHtml(task.id)}" type="button">Mở công việc</button>
-              </div>
-              <div class="task-inbox-meta">
-                <span><strong>Loại công việc:</strong> ${escapeHtml(taskKindLabels[normalizeTaskKind(task)] || "Công việc")}</span>
-                <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
-                <span><strong>Danh mục KPI:</strong> ${escapeHtml(task.category || "Chưa phân loại")}</span>
-                <span><strong>Ngày bắt đầu:</strong> ${escapeHtml(formatTaskStartDate(task) || "Chưa có")}</span>
-                <span><strong>Thời hạn hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
-                <span><strong>Tiến độ:</strong> ${formatScore(task.progress)}%</span>
-                <span><strong>Đánh giá chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))}</span>
-                <span><strong>Điểm thực hiện KPI:</strong> ${formatScore(taskKpiActualScore(task))}</span>
-                <span><strong>Người giao:</strong> ${escapeHtml(task.assignedByName || task.createdBy || "Chưa ghi nhận")}</span>
-                <span><strong>Người được giao:</strong> ${escapeHtml(taskOwnerName(task))}</span>
-                <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
-                <span><strong>Phản hồi:</strong> ${escapeHtml(task.responseStatus || "Chưa phản hồi")}</span>
-                <span><strong>Báo cáo gần nhất:</strong> ${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% - ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
-              </div>
-              ${task.note ? `<p class="task-inbox-note"><strong>Nội dung:</strong> ${escapeHtml(task.note)}</p>` : ""}
-              ${task.responseNote ? `<p class="task-inbox-note"><strong>Phản hồi/Báo cáo:</strong> ${escapeHtml(task.responseNote)}</p>` : ""}
-              ${latestReport?.note && latestReport.note !== task.responseNote ? `<p class="task-inbox-note"><strong>Cập nhật tiến độ gần nhất:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
-              ${taskProgressReportListHtml(task)}
-              ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
-            </article>
-          `;
-        })
-        .join("")
-    : '<div class="empty-state">Chưa có công việc được giao.</div>';
-}
-
-function openTaskInboxDialog() {
-  resetAssignmentTaskForm();
-  renderTaskInboxDialog();
-  byId("taskInboxDialog").classList.remove("is-hidden");
-  byId("taskInboxDialog").setAttribute("aria-hidden", "false");
-}
-
-function closeTaskInboxDialog() {
-  byId("taskInboxDialog").classList.add("is-hidden");
-  byId("taskInboxDialog").setAttribute("aria-hidden", "true");
-}
-
 function taskBoardSearchText(task) {
   const owner = taskOwnerName(task, "");
   const collaborators = taskCollaboratorNames(task).join(" ");
@@ -8798,8 +8950,7 @@ function taskBoardSearchText(task) {
   const attachments = (task.attachments || []).map((file) => file.name).join(" ");
   const reports = (task.progressReports || []).map((report) => report.note).join(" ");
   const taskKind = taskKindLabels[normalizeTaskKind(task)] || "";
-  const regularMeta = isAssignedTask(task) ? "" : taskWorkMeta(task);
-  return `${task.title} ${projectNameForTask(task)} ${taskKind} ${owner} ${collaborators} ${assigner} ${task.category} ${regularMeta} ${task.note || ""} ${task.responseNote || ""} ${reports} ${attachments}`.toLowerCase();
+  return `${task.title} ${projectNameForTask(task)} ${taskKind} ${owner} ${collaborators} ${assigner} ${task.category} ${taskWorkMeta(task)} ${task.note || ""} ${reports} ${attachments}`.toLowerCase();
 }
 
 function indexedTaskBoardSearchText(task) {
@@ -9011,6 +9162,11 @@ function deleteTaskProjectCatalog(projectId) {
   const linkedAppraisalCount = (state.publicInvestmentAppraisals || []).filter((record) => record.projectId === project.id).length;
   if (linkedAppraisalCount) {
     alert(`Không thể xóa dự án đang được liên kết với ${linkedAppraisalCount} hồ sơ thẩm định. Hãy chuyển hoặc xóa hồ sơ thẩm định trước.`);
+    return;
+  }
+  const linkedManagementCount = (state.publicInvestmentProjects || []).filter((record) => record.projectId === project.id).length;
+  if (linkedManagementCount) {
+    alert(`Không thể xóa dự án đang có hồ sơ quản lý thực hiện. Hãy xử lý hồ sơ dự án số trước.`);
     return;
   }
   const linkedTaskCount = state.tasks.filter((task) => projectIdForTask(task) === project.id).length;
@@ -9839,7 +9995,6 @@ function renderTaskBoard(options = {}) {
         const cards = renderedTasks
           .map((task) => {
             const collaboratorNames = taskCollaboratorNames(task);
-            const assigned = isAssignedTask(task);
             const taskKind = normalizeTaskKind(task);
             const editable = canEditTaskDetails(task) && !isRecurrenceStoppedTask(task);
             const deletable = canDeleteTask(task);
@@ -9849,14 +10004,9 @@ function renderTaskBoard(options = {}) {
             const attachments = task.attachments || [];
             const latestReport = latestTaskProgressReport(task);
             const violations = taskViolationReasons(task);
-            const responseText = task.responseStatus
-              ? `${task.responseStatus}${task.responseAt ? ` · ${formatDateTime(task.responseAt)}` : ""}`
-              : "Chưa phản hồi";
             const reportText = latestReport
               ? `${formatScore(latestReport.progress)}% · ${formatDateTime(latestReport.createdAt)}`
-              : assigned
-                ? "Chưa có báo cáo tiến độ"
-                : "Chưa có cập nhật tiến độ";
+              : "Chưa có cập nhật tiến độ";
             const attachmentList = attachments.length
               ? `<div class="task-attachments">${attachments
                   .map((file) => taskAttachmentLinkHtml(file))
@@ -9866,14 +10016,12 @@ function renderTaskBoard(options = {}) {
               <article class="task-card task-card-clickable" data-open-task-detail="${escapeHtml(task.id)}">
                 <h4>${escapeHtml(task.title)}</h4>
                 ${projectNameForTask(task) ? `<div class="task-meta">Dự án: ${escapeHtml(projectNameForTask(task))}</div>` : ""}
-                <div class="task-meta">${assigned ? "Giao cho" : "Người thực hiện"} ${escapeHtml(taskOwnerName(task))} · bắt đầu ${escapeHtml(formatTaskStartDate(task) || "chưa có")} · hoàn thành ${escapeHtml(formatTaskDeadline(task) || "chưa có")}</div>
+                <div class="task-meta">Người thực hiện ${escapeHtml(taskOwnerName(task))} · bắt đầu ${escapeHtml(formatTaskStartDate(task) || "chưa có")} · hoàn thành ${escapeHtml(formatTaskDeadline(task) || "chưa có")}</div>
                 ${collaboratorNames.length ? `<div class="task-meta">Người phối hợp: ${escapeHtml(collaboratorNames.join(", "))}</div>` : ""}
-                ${!assigned ? `<div class="task-meta">${escapeHtml(taskWorkMeta(task))}</div>` : ""}
-                ${assigned ? `<div class="task-meta">Người giao: ${escapeHtml(task.assignedByName || task.createdBy || "Chưa ghi nhận")}</div>` : ""}
+                <div class="task-meta">${escapeHtml(taskWorkMeta(task))}</div>
                 <span class="badge ${status === "Quá hạn" ? "bad" : status === "Hoàn thành" ? "good" : "warn"}">${escapeHtml(taskKindLabels[taskKind] || "Công việc")}: ${escapeHtml(task.category)}</span>
                 <div class="task-status-grid">
-                  ${assigned ? `<span><strong>Phản hồi:</strong> ${escapeHtml(responseText)}</span>` : ""}
-                  <span><strong>${assigned ? "Báo cáo" : "Cập nhật"}:</strong> ${escapeHtml(reportText)}</span>
+                  <span><strong>Cập nhật:</strong> ${escapeHtml(reportText)}</span>
                   ${taskDeadlineExtensionPending(task) ? `<span class="task-extension-pending"><strong>Chờ duyệt gia hạn:</strong> ${escapeHtml(formatDate(task.deadlineExtensionRequestedDue) || "")}</span>` : ""}
                   ${taskCompletionReviewStatus(task) ? `<span><strong>Đánh giá hoàn thành:</strong> ${taskCompletionReviewValueHtml(task)}</span>` : ""}
                   <span><strong>Chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))} · Thực hiện KPI ${formatScore(taskKpiActualScore(task))}</span>
@@ -9930,14 +10078,13 @@ function renderTaskStatusDetailItem(task) {
         ${canOpen ? `<button class="ghost" data-open-status-task="${escapeHtml(task.id)}" type="button">Mở công việc</button>` : "<span class=\"muted\">Chỉ xem</span>"}
       </div>
       <div class="kpi-task-detail-meta">
-        <span><strong>${isAssignedTask(task) ? "Người được giao" : "Người thực hiện"}:</strong> ${escapeHtml(taskOwnerName(task))}</span>
+        <span><strong>Người thực hiện:</strong> ${escapeHtml(taskOwnerName(task))}</span>
         <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
         <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
-        ${isAssignedTask(task) ? `<span><strong>Người giao:</strong> ${escapeHtml(task.assignedByName || task.createdBy || "Chưa ghi nhận")}</span>` : ""}
         <span><strong>Nhóm công việc:</strong> ${escapeHtml(taskKindLabels[normalizeTaskKind(task)] || "Công việc")}</span>
         <span><strong>Danh mục KPI:</strong> ${escapeHtml(task.category || "Chưa phân loại")}</span>
-        ${!isAssignedTask(task) ? `<span><strong>Loại công việc:</strong> ${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)])}</span>` : ""}
-        ${!isAssignedTask(task) ? `<span><strong>Định kỳ:</strong> ${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)])}</span>` : ""}
+        <span><strong>Loại công việc:</strong> ${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)])}</span>
+        <span><strong>Định kỳ:</strong> ${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)])}</span>
         <span><strong>Ngày bắt đầu:</strong> ${escapeHtml(formatTaskStartDate(task) || "Chưa có")}</span>
         <span><strong>Ngày hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
         <span><strong>Tiến độ:</strong> ${formatScore(task.progress)}%</span>
@@ -10060,7 +10207,7 @@ function openTaskCompletionReviewDialog(taskId) {
   byId("taskCompletionReviewStatus").focus();
 }
 
-function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") {
+async function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") {
   const taskIndex = state.tasks.findIndex((item) => item.id === taskId);
   const task = taskIndex >= 0 ? state.tasks[taskIndex] : null;
   if (!task || !canReviewTaskCompletion(task) || !["passed", "failed"].includes(decision)) return false;
@@ -10131,12 +10278,17 @@ function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") 
     },
   ];
   const auditedTask = applyTaskRecordAudit(nextTask, task);
-  state.tasks = state.tasks.map((item, index) => (index === taskIndex ? auditedTask : item));
-  const gpmbAdvanced = approved && isGpmbWorkflowTask(auditedTask)
-    ? ensureGpmbWorkflowProgressionLocally(auditedTask.gpmbWorkflowId, auditedTask.id)
+  const commandResult = await submitTaskCommandOnline(task, auditedTask, "review-completion");
+  if (!commandResult.ok) return false;
+  const committedTask = commandResult.task || auditedTask;
+  if (!commandResult.remote) {
+    state.tasks = state.tasks.map((item, index) => (index === taskIndex ? committedTask : item));
+  }
+  const gpmbAdvanced = approved && isGpmbWorkflowTask(committedTask) && !commandResult.remote
+    ? ensureGpmbWorkflowProgressionLocally(committedTask.gpmbWorkflowId, committedTask.id)
     : false;
-  syncPersonalEvaluationTaskScoresForTask(auditedTask, task);
-  const owner = personById(auditedTask.ownerId);
+  syncPersonalEvaluationTaskScoresForTask(committedTask, task);
+  const owner = personById(committedTask.ownerId);
   logActivity({
     action: approved
       ? wasApproved
@@ -10145,11 +10297,11 @@ function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") 
       : `Đánh giá công việc Không đạt · Chuyển về ${returnedStatus}`,
     module: "Công việc",
     targetType: "task",
-    targetId: auditedTask.id,
-    personId: auditedTask.ownerId,
+    targetId: committedTask.id,
+    personId: committedTask.ownerId,
     departmentId: owner?.departmentId || "",
-    period: taskPeriod(auditedTask),
-    detail: `${auditedTask.title} · ${previousWorkflowStatus} -> ${normalizeTaskStatus(auditedTask.status)}${approved && completionTimingLabel ? ` · ${completionTimingLabel}` : ""}${approved ? ` · chất lượng ${formatScore(assessedQuality)}%` : ""}${note ? ` · ${String(note).trim()}` : ""}`,
+    period: taskPeriod(committedTask),
+    detail: `${committedTask.title} · ${previousWorkflowStatus} -> ${normalizeTaskStatus(committedTask.status)}${approved && completionTimingLabel ? ` · ${completionTimingLabel}` : ""}${approved ? ` · chất lượng ${formatScore(assessedQuality)}%` : ""}${note ? ` · ${String(note).trim()}` : ""}`,
   });
   saveState();
   renderAll();
@@ -10225,18 +10377,23 @@ async function reviewTaskDeadlineExtension(taskId, decision, note = "") {
     ],
   };
   const auditedTask = applyTaskRecordAudit(nextTask, task);
-  state.tasks = state.tasks.map((item, index) => index === taskIndex ? auditedTask : item);
-  syncPersonalEvaluationTaskScoresForTask(auditedTask, task);
-  const owner = personById(auditedTask.ownerId);
+  const commandResult = await submitTaskCommandOnline(task, auditedTask, "review-extension");
+  if (!commandResult.ok) return false;
+  const committedTask = commandResult.task || auditedTask;
+  if (!commandResult.remote) {
+    state.tasks = state.tasks.map((item, index) => index === taskIndex ? committedTask : item);
+  }
+  syncPersonalEvaluationTaskScoresForTask(committedTask, task);
+  const owner = personById(committedTask.ownerId);
   logActivity({
     action: approved ? "Chấp nhận gia hạn công việc" : "Không chấp nhận gia hạn công việc",
     module: "Công việc",
     targetType: "task",
-    targetId: auditedTask.id,
-    personId: auditedTask.ownerId,
+    targetId: committedTask.id,
+    personId: committedTask.ownerId,
     departmentId: owner?.departmentId || "",
-    period: taskPeriod(auditedTask),
-    detail: `${auditedTask.title} · hạn ${formatTaskDeadline(task) || "chưa có"} -> ${formatTaskDeadline(auditedTask) || "chưa có"} · ${reviewNote}`,
+    period: taskPeriod(committedTask),
+    detail: `${committedTask.title} · hạn ${formatTaskDeadline(task) || "chưa có"} -> ${formatTaskDeadline(committedTask) || "chưa có"} · ${reviewNote}`,
   });
   saveState();
   renderAll();
@@ -10245,34 +10402,28 @@ async function reviewTaskDeadlineExtension(taskId, decision, note = "") {
 
 function restoreTaskDetailInlineEditor({ reset = false } = {}) {
   if (!taskDetailInlineEditor) return;
-  const { form, anchor, kind } = taskDetailInlineEditor;
+  const { form, anchor } = taskDetailInlineEditor;
   if (anchor?.parentNode) {
     anchor.parentNode.insertBefore(form, anchor.nextSibling);
     anchor.remove();
   }
   form.classList.remove("task-detail-inline-form");
   taskDetailInlineEditor = null;
-  if (reset) {
-    if (kind === TASK_KIND_ASSIGNED) resetAssignmentTaskForm();
-    else resetTaskForm();
-  }
+  if (reset) resetTaskForm();
 }
 
 function taskDetailActionMarkup(task) {
   const actions = [];
-  const assigned = isAssignedTask(task);
   const editable = canEditTaskDetails(task) && !isRecurrenceStoppedTask(task);
   const copyable = canCopyTask(task);
   const reportable = canUpdateTaskProgress(task);
   const reviewable = canReviewTaskCompletion(task);
-  const endable = canEndTaskAssignment(task);
   const deletable = canDeleteTask(task);
   if (reportable) actions.push('<button class="task-progress-update-button" type="button" data-task-detail-action="report" title="Cập nhật" aria-label="Cập nhật"><span>Cập nhật</span></button>');
   if (canStopTaskRecurrence(task)) actions.push('<button class="task-stop-recurrence-button" type="button" data-task-detail-action="stop-recurrence">Dừng định kỳ</button>');
   if (editable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="edit" title="Sửa công việc" aria-label="Sửa công việc"><span aria-hidden="true">&#9998;</span></button>');
   if (copyable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="copy" title="Sao chép công việc" aria-label="Sao chép công việc"><span aria-hidden="true">&#9112;</span></button>');
   if (reviewable) actions.push('<button class="ghost task-icon-button task-icon-approve" type="button" data-task-detail-action="review" title="Duyệt hoàn thành" aria-label="Duyệt hoàn thành"><span aria-hidden="true">&#10003;</span></button>');
-  if (endable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="end" title="Kết thúc công việc" aria-label="Kết thúc công việc"><span aria-hidden="true">&#9632;</span></button>');
   if (deletable) actions.push('<button class="ghost task-icon-button task-icon-delete" type="button" data-task-detail-action="delete" title="Xóa công việc" aria-label="Xóa công việc"><span aria-hidden="true">&times;</span></button>');
   return actions.length ? actions.join("") : '<span class="muted">Chỉ xem chi tiết công việc.</span>';
 }
@@ -10280,8 +10431,7 @@ function taskDetailActionMarkup(task) {
 function openTaskDetailInlineEditor(taskId, focusId = "", { progressReportOnly = false } = {}) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) return;
-  const assigned = isAssignedTask(task);
-  const form = byId(assigned ? "assignmentTaskForm" : "taskForm");
+  const form = byId("taskForm");
   if (!form) return;
   restoreTaskDetailInlineEditor({ reset: true });
   const anchor = document.createElement("span");
@@ -10289,8 +10439,8 @@ function openTaskDetailInlineEditor(taskId, focusId = "", { progressReportOnly =
   form.parentNode.insertBefore(anchor, form);
   taskDetailInlineEditor = {
     taskId: task.id,
-    kind: assigned ? TASK_KIND_ASSIGNED : TASK_KIND_REGULAR,
-    progressReportOnly: progressReportOnly && !assigned,
+    kind: TASK_KIND_REGULAR,
+    progressReportOnly,
     form,
     anchor,
   };
@@ -10301,17 +10451,16 @@ function openTaskDetailInlineEditor(taskId, focusId = "", { progressReportOnly =
   byId("taskDetailActions").innerHTML = '<button class="ghost" type="button" data-task-detail-action="cancel-edit">Hủy chỉnh sửa</button>';
   byId("taskDetailContent").innerHTML = `
     <section class="task-detail-editor">
-      <h3>${assigned ? "Cập nhật công việc được giao" : "Cập nhật công việc"}</h3>
+      <h3>Cập nhật công việc</h3>
       <div id="taskDetailEditorSlot"></div>
     </section>
   `;
   byId("taskDetailEditorSlot").append(form);
   form.classList.add("task-detail-inline-form");
-  if (assigned) populateAssignmentTaskForm(task);
-  else populateTaskForm(task);
+  populateTaskForm(task);
   if (taskDetailInlineEditor.progressReportOnly) byId("taskNote").value = "";
 
-  const target = byId(focusId) || byId(assigned ? "assignmentTaskTitle" : "taskTitle");
+  const target = byId(focusId) || byId("taskTitle");
   if (target && !target.disabled) {
     target.scrollIntoView({ behavior: "smooth", block: "center" });
     target.focus({ preventScroll: true });
@@ -10349,7 +10498,6 @@ function openTaskDetailDialog(taskId) {
   if (!task || !canViewTaskRecord(task)) return;
   const collaborators = taskCollaboratorNames(task);
   const status = task.computedStatus || getDueStatus(task);
-  const assigned = isAssignedTask(task);
   const latestReport = latestTaskProgressReport(task);
   const blockerNote = String(task.blockerNote || "").trim();
   const extensionReason = String(task.deadlineExtensionReason || "").trim();
@@ -10412,14 +10560,13 @@ function openTaskDetailDialog(taskId) {
     <section class="task-detail-section task-detail-information">
       <h3>Thông tin công việc</h3>
       <div class="task-detail-info-grid">
-        <span><strong>${assigned ? "Người được giao" : "Người thực hiện"}</strong>${escapeHtml(taskOwnerName(task, "Chưa cập nhật"))}</span>
+        <span><strong>Người thực hiện</strong>${escapeHtml(taskOwnerName(task, "Chưa cập nhật"))}</span>
         <span><strong>Người phối hợp</strong>${escapeHtml(collaborators.length ? collaborators.join(", ") : "Chưa chọn")}</span>
-        ${assigned ? `<span><strong>Người giao</strong>${escapeHtml(task.assignedByName || task.createdBy || "Chưa cập nhật")}</span>` : ""}
         <span><strong>Tên dự án</strong>${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
         <span><strong>Danh mục nhiệm vụ</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
-        ${!assigned ? `<span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>` : ""}
+        <span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>
         <span><strong>Mức độ ưu tiên</strong>${escapeHtml(taskPriorityLabels[normalizeTaskPriority(task.priority)])}</span>
-        ${!assigned ? `<span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}${task.recurrenceStoppedAt ? ` · Đã dừng ${escapeHtml(formatDate(task.recurrenceStopDate) || formatDateTime(task.recurrenceStoppedAt))}` : ""}</span>` : ""}
+        <span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}${task.recurrenceStoppedAt ? ` · Đã dừng ${escapeHtml(formatDate(task.recurrenceStopDate) || formatDateTime(task.recurrenceStoppedAt))}` : ""}</span>
         <span><strong>Ngày tạo</strong>${escapeHtml(formatDateTime(task.createdAt) || "Chưa ghi nhận")}</span>
         <span><strong>Người tạo</strong>${escapeHtml(taskRecordedCreatorName(task))}</span>
         <span><strong>Ngày bắt đầu</strong>${escapeHtml(formatTaskStartDate(task) || "Chưa cập nhật")}</span>
@@ -10429,7 +10576,7 @@ function openTaskDetailDialog(taskId) {
       </div>
     </section>
     <section class="task-detail-section">
-      <h3>${assigned ? "Nội dung giao việc" : "Nội dung công việc"}</h3>
+      <h3>Nội dung công việc</h3>
       <p class="task-detail-note">${escapeHtml(task.note || "Chưa cập nhật.")}</p>
     </section>
     <section class="task-detail-section">
@@ -10442,16 +10589,6 @@ function openTaskDetailDialog(taskId) {
       ${task.deadlineExtensionStatus ? `<div class="task-deadline-extension-detail is-${escapeHtml(task.deadlineExtensionStatus)}"><div class="task-deadline-extension-detail-head"><strong>${taskDeadlineExtensionPending(task) ? "Đang chờ duyệt gia hạn" : task.deadlineExtensionStatus === "approved" ? "Đã chấp nhận mốc hoàn thành mới" : "Đề nghị gia hạn chưa được chấp nhận"}</strong>${deadlineReviewButton}</div><span>Hạn hiện tại: ${escapeHtml(formatTaskDeadline(task) || "Chưa có")} · Mốc đề nghị: ${escapeHtml(formatDate(task.deadlineExtensionRequestedDue) || "Chưa có")}</span>${extensionReason ? `<span><b>Nội dung trở ngại / đề nghị hỗ trợ:</b> ${escapeHtml(extensionReason)}</span>` : ""}${!taskDeadlineExtensionPending(task) && task.deadlineExtensionReviewNote ? `<span>Ý kiến duyệt: ${escapeHtml(task.deadlineExtensionReviewNote)}</span>` : ""}</div>` : ""}
       ${showBlockerNoteSeparately ? `<p class="task-detail-note">${escapeHtml(blockerNote)}</p>` : !task.deadlineExtensionStatus && !blockerNote ? `<p class="task-detail-note">Chưa có nội dung trở ngại hoặc đề nghị hỗ trợ.</p>` : ""}
     </section>
-    ${assigned ? `
-      <section class="task-detail-section">
-        <h3>Phản hồi nhận việc</h3>
-        <div class="task-detail-info-grid">
-          <span><strong>Trạng thái phản hồi</strong>${escapeHtml(task.responseStatus || "Chưa phản hồi")}</span>
-          <span><strong>Thời điểm phản hồi</strong>${escapeHtml(formatDateTime(task.responseAt) || "Chưa cập nhật")}</span>
-        </div>
-        <p class="task-detail-note">${escapeHtml(task.responseNote || "Chưa có nội dung phản hồi.")}</p>
-      </section>
-    ` : ""}
     <section class="task-detail-section">
       <h3>Lịch sử báo cáo tiến độ</h3>
       ${taskProgressReportListHtml(task) || `<p class="muted">Chưa có báo cáo tiến độ.</p>`}
@@ -10515,26 +10652,6 @@ function renderTaskAttachmentDraft() {
           ${taskAttachmentLinkHtml(file)}
           <span class="muted">${escapeHtml(formatFileSize(file.size))}</span>
           <button class="ghost" data-remove-task-attachment="${escapeHtml(file.id)}" type="button">Bỏ</button>
-        </div>
-      `,
-    )
-    .join("");
-  hydrateTaskAttachmentLinks(list);
-}
-
-function renderAssignmentTaskAttachmentDraft() {
-  const list = byId("assignmentTaskAttachmentList");
-  if (!assignmentAttachmentDraft.length) {
-    list.innerHTML = '<span class="muted">Chưa có hồ sơ đính kèm.</span>';
-    return;
-  }
-  list.innerHTML = assignmentAttachmentDraft
-    .map(
-      (file) => `
-        <div class="attachment-item">
-          ${taskAttachmentLinkHtml(file)}
-          <span class="muted">${escapeHtml(formatFileSize(file.size))}</span>
-          <button class="ghost" data-remove-assignment-attachment="${escapeHtml(file.id)}" type="button">Bỏ</button>
         </div>
       `,
     )
@@ -11271,8 +11388,8 @@ function renderKpiTaskDetailItem(task) {
         <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
         <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
         <span><strong>Loại:</strong> ${escapeHtml(taskKindLabels[normalizeTaskKind(task)] || "Công việc")}</span>
-        ${!isAssignedTask(task) ? `<span><strong>Loại công việc:</strong> ${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)])}</span>` : ""}
-        ${!isAssignedTask(task) ? `<span><strong>Định kỳ:</strong> ${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)])}</span>` : ""}
+        <span><strong>Loại công việc:</strong> ${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)])}</span>
+        <span><strong>Định kỳ:</strong> ${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)])}</span>
         <span><strong>Danh mục KPI:</strong> ${escapeHtml(task.category || "Chưa phân loại")}</span>
         <span><strong>Ngày bắt đầu:</strong> ${escapeHtml(formatTaskStartDate(task) || "Chưa có")}</span>
         <span><strong>Ngày hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
@@ -11283,8 +11400,7 @@ function renderKpiTaskDetailItem(task) {
         <span><strong>Cập nhật gần nhất:</strong> ${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% - ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
       </div>
       ${task.note ? `<p class="kpi-task-detail-note"><strong>Nội dung:</strong> ${escapeHtml(task.note)}</p>` : ""}
-      ${task.responseNote ? `<p class="kpi-task-detail-note"><strong>Phản hồi/Báo cáo:</strong> ${escapeHtml(task.responseNote)}</p>` : ""}
-      ${latestReport?.note && latestReport.note !== task.responseNote ? `<p class="kpi-task-detail-note"><strong>Báo cáo gần nhất:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
+      ${latestReport?.note ? `<p class="kpi-task-detail-note"><strong>Báo cáo gần nhất:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
       ${taskProgressReportListHtml(task)}
       ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
     </article>
@@ -12049,7 +12165,7 @@ function taskTimelineItems(task) {
   const collaboratorNames = taskCollaboratorNames(task);
   const status = getDueStatus(task);
   const collaboratorMeta = collaboratorNames.length ? ` · phối hợp ${collaboratorNames.join(", ")}` : "";
-  const regularMeta = isAssignedTask(task) ? "" : ` · ${taskWorkMeta(task)}`;
+  const regularMeta = ` · ${taskWorkMeta(task)}`;
   const projectName = projectNameForTask(task);
   const projectMeta = projectName ? ` · dự án ${projectName}` : "";
   const qualityMeta = taskHasQualityPercent(task) ? ` · chất lượng ${formatScore(taskQualityPercentValue(task))}%` : "";
@@ -16765,7 +16881,7 @@ function fieldLabelTextNode(label) {
 
 function customizableTextNode(element) {
   if (element.matches("label")) return fieldLabelTextNode(element);
-  if (element.matches(".nav-item, .block, .score-panel, .metrics article, .dashboard-card-column, .dashboard-card-column > section, .task-kind-head, .task-inbox-panel, .task-column, .criteria-item, .behavior-item, .score-result > div, .archive-stat, .bulletin-card, .archive-card, .module-toggle-card, .task-collaborator-field")) {
+  if (element.matches(".nav-item, .block, .score-panel, .metrics article, .dashboard-card-column, .dashboard-card-column > section, .task-kind-head, .task-column, .criteria-item, .behavior-item, .score-result > div, .archive-stat, .bulletin-card, .archive-card, .module-toggle-card, .task-collaborator-field")) {
     const heading = element.querySelector(":scope > h2, :scope > h3, :scope h3, :scope h4, :scope strong, :scope span");
     if (heading) return customizableTextNode(heading);
   }
@@ -16829,7 +16945,6 @@ function customizationHandleEligible(element) {
       ".metrics article",
       ".dashboard-card-column",
       ".dashboard-card-column > section",
-      ".task-inbox-panel",
       ".task-kind-head",
       ".task-column",
       ".criteria-item",
@@ -16915,7 +17030,6 @@ function customizationDropContainerSelector() {
     ".view.is-active .metrics",
     ".view.is-active .dashboard-card-columns",
     ".view.is-active .dashboard-card-column",
-    ".view.is-active .task-inbox-panel",
     ".view.is-active .task-board",
     ".view.is-active .task-columns",
     ".view.is-active .bulletin-list",
@@ -17103,7 +17217,6 @@ function customizableElements() {
     ".view.is-active .metrics article",
     ".view.is-active .dashboard-card-column",
     ".view.is-active .dashboard-card-column > section",
-    ".view.is-active .task-inbox-panel",
     ".view.is-active .task-kind-head",
     ".view.is-active .task-column",
     ".view.is-active .criteria-item",
@@ -17128,8 +17241,6 @@ function customizableElements() {
     ".view.is-active .filter-note span",
     ".view.is-active .score-result span",
     ".view.is-active .metrics span",
-    ".view.is-active .task-inbox-button strong",
-    ".view.is-active .task-inbox-button small",
     ".view.is-active .chart-heading h3",
     ".view.is-active .task-column-head span",
     ".view.is-active .task-column-head strong",
@@ -17288,7 +17399,6 @@ function renderKpiFormulaCustomizers() {
 function popupCustomizationKey(card) {
   if (card.classList.contains("bulletin-detail-modal")) return "bulletin-detail";
   if (card.classList.contains("archive-detail-modal")) return "archive-detail";
-  if (card.classList.contains("task-inbox-modal")) return "task-inbox";
   if (card.classList.contains("task-detail-modal")) return "task-detail";
   if (card.classList.contains("task-status-detail-modal")) return "task-status-detail";
   if (card.classList.contains("kpi-task-detail-modal")) return "kpi-task-detail";
@@ -18456,9 +18566,10 @@ function applyAccessControls() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("is-hidden", !canAccessView(button.dataset.view));
   });
+  const accountChanged = accessControlAccountId !== account.id;
+  if (accountChanged) activePublicInvestmentWorkspace = storedPublicInvestmentWorkspace();
   const currentView = activeViewId();
   const savedView = localStorage.getItem(activeViewStorageKey());
-  const accountChanged = accessControlAccountId !== account.id;
   const targetView =
     !canAccessView(currentView) || accountChanged
       ? savedView && canAccessView(savedView)
@@ -18473,10 +18584,15 @@ function applyAccessControls() {
 
 function setActiveView(viewId, { persist = true } = {}) {
   if (!viewId) return;
+  const route = publicInvestmentRoute(viewId);
+  viewId = route.viewId;
   if (persist) localStorage.setItem(activeViewStorageKey(), viewId);
 
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === viewId));
   document.querySelectorAll(".view").forEach((item) => item.classList.toggle("is-active", item.id === viewId));
+  if (viewId === PUBLIC_INVESTMENT_HUB_VIEW) {
+    setPublicInvestmentWorkspace(route.workspace || activePublicInvestmentWorkspace, { persist: true, render: false });
+  }
   syncMobileNavigationAccess(viewId);
 }
 
@@ -18498,8 +18614,10 @@ function renderActiveView(viewId = activeViewId(), { animateDashboard = false } 
     updateTaskFormLock();
     renderGpmbWorkflows();
     renderTaskBoard({ applyCustomization: false });
-  } else if (viewId === "public-investment-appraisal") {
-    renderPublicInvestmentAppraisals();
+  } else if (viewId === "public-investment-projects") {
+    setPublicInvestmentWorkspace(activePublicInvestmentWorkspace, { persist: false, render: false });
+    if (activePublicInvestmentWorkspace === "appraisal") renderPublicInvestmentAppraisals();
+    else window.PublicInvestmentProjects?.render?.();
   } else if (viewId === "calendar") {
     renderCalendarView();
   } else if (viewId === "department-evaluations") {
@@ -18547,13 +18665,16 @@ function scheduleActiveViewRender(viewId, { animateDashboard = false } = {}) {
 }
 
 function switchView(viewId) {
-  if (!canAccessView(viewId)) return;
+  const route = publicInvestmentRoute(viewId);
+  if (!canAccessView(route.viewId)) return;
+  viewId = route.viewId;
   const currentView = activeViewId();
   if (currentView === viewId) {
+    if (viewId === PUBLIC_INVESTMENT_HUB_VIEW) setPublicInvestmentWorkspace(route.workspace || activePublicInvestmentWorkspace);
     syncMobileNavigationAccess(viewId);
     return;
   }
-  setActiveView(viewId);
+  setActiveView(route.workspace === "appraisal" ? PUBLIC_INVESTMENT_LEGACY_APPRAISAL_VIEW : viewId);
   scheduleActiveViewRender(viewId, { animateDashboard: viewId === "dashboard" });
 }
 
@@ -18821,12 +18942,12 @@ function publicInvestmentAppraisalPersonId(account = currentAccount()) {
 }
 
 function canCreatePublicInvestmentAppraisal(account = currentAccount()) {
-  if (!account || !moduleIsAvailableToAccount("public-investment-appraisal", account)) return false;
+  if (!account || !moduleIsAvailableToAccount(PUBLIC_INVESTMENT_HUB_VIEW, account)) return false;
   return ["admin", "director", "manager", "deputy_manager", "section_head"].includes(account.role);
 }
 
 function canViewPublicInvestmentAppraisal(record, account = currentAccount()) {
-  if (!account || !record || !moduleIsAvailableToAccount("public-investment-appraisal", account)) return false;
+  if (!account || !record || !moduleIsAvailableToAccount(PUBLIC_INVESTMENT_HUB_VIEW, account)) return false;
   if (["admin", "director"].includes(account.role)) return true;
   const personId = publicInvestmentAppraisalPersonId(account);
   const assigned = String(record.leadAppraiserId || "") === personId || (record.assigneeIds || []).includes(personId);
@@ -20229,18 +20350,17 @@ window.virtualAssistantOpenProgressForm = (draft = {}) => {
   const reportButton = byId("taskDetailActions").querySelector('[data-task-detail-action="report"]');
   if (!reportButton) return false;
   reportButton.click();
-  const assigned = isAssignedTask(task);
-  const form = byId(assigned ? "assignmentTaskForm" : "taskForm");
+  const form = byId("taskForm");
   if (!form || form.classList.contains("is-hidden")) return false;
-  const reportNote = byId(assigned ? "assignmentTaskResponseNote" : "taskNote");
+  const reportNote = byId("taskNote");
   if (reportNote && !reportNote.disabled) {
     reportNote.value = "";
     reportNote.dispatchEvent(new Event("input", { bubbles: true }));
   }
   return {
     taskId: String(task.id),
-    kind: assigned ? TASK_KIND_ASSIGNED : TASK_KIND_REGULAR,
-    formId: assigned ? "assignmentTaskForm" : "taskForm",
+    kind: TASK_KIND_REGULAR,
+    formId: "taskForm",
     title: String(task.title || "Công việc"),
     currentStatus: normalizeTaskStatus(task.status),
     currentProgress: Math.max(0, Math.min(100, Number(task.progress) || 0)),
@@ -20468,36 +20588,6 @@ function updateTaskResponseMeta(task) {
     : "Chưa có cập nhật tiến độ.";
   taskProgressMeta.dataset.baseText = taskProgressMeta.textContent;
   renderTaskProgressReportList("taskProgressReportList", task);
-  return;
-
-  const responseMeta = byId("taskResponseMeta");
-  const progressMeta = byId("taskProgressMeta");
-  if (!task) {
-    responseMeta.textContent = "";
-    progressMeta.textContent = "";
-    progressMeta.dataset.baseText = "";
-    renderTaskProgressReportList("taskProgressReportList", null);
-    return;
-  }
-  if (!isAssignedTask(task)) {
-    responseMeta.textContent = "";
-    const latestReport = latestTaskProgressReport(task);
-    progressMeta.textContent = latestReport
-      ? `Cập nhật gần nhất lúc ${formatDateTime(latestReport.createdAt)} bởi ${latestReport.createdBy || "người thực hiện"}: ${formatScore(latestReport.progress)}%.`
-      : "Chưa có cập nhật tiến độ.";
-    progressMeta.dataset.baseText = progressMeta.textContent;
-    renderTaskProgressReportList("taskProgressReportList", task);
-    return;
-  }
-  responseMeta.textContent = task.responseAt
-    ? `Phản hồi lúc ${formatDateTime(task.responseAt)} bởi ${task.responseByName || "người được giao"}.`
-    : "Chưa có phản hồi nhận việc.";
-  const latestReport = latestTaskProgressReport(task);
-  progressMeta.textContent = latestReport
-    ? `Báo cáo/cập nhật gần nhất lúc ${formatDateTime(latestReport.createdAt)} bởi ${latestReport.createdBy || "người được giao"}: ${formatScore(latestReport.progress)}%.`
-    : "Chưa có báo cáo tiến độ.";
-  progressMeta.dataset.baseText = progressMeta.textContent;
-  renderTaskProgressReportList("taskProgressReportList", task);
 }
 
 function updateTaskDeadlineExtensionNotice(task = null) {
@@ -20530,29 +20620,20 @@ function updateTaskDeadlineExtensionNotice(task = null) {
 function updateTaskFormLock(task = null) {
   const existingTask = task || state.tasks.find((item) => item.id === byId("taskId").value);
   const adminOverride = isAdmin();
-  const kind = TASK_KIND_REGULAR;
-  const ownerId = byId("taskOwner").value;
   const canEditDetails = existingTask
     ? canEditTaskDetails(existingTask)
-    : kind === TASK_KIND_ASSIGNED
-      ? canAssignTasks()
-      : canCreateRegularTasks();
+    : canCreateRegularTasks();
   const reportLockedByApproval = !!existingTask && taskProgressLockedAfterApproval(existingTask) && !adminOverride;
   const canUpdateReport = existingTask ? !reportLockedByApproval && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
   const canUpdateCollaborators = existingTask ? !reportLockedByApproval && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
   const canEditQuality = !!existingTask && adminOverride;
-  byId("taskOwnerLabelText").textContent = kind === TASK_KIND_ASSIGNED ? "Người được giao" : "Người thực hiện";
-  byId("taskNoteLabelText").textContent = kind === TASK_KIND_ASSIGNED ? "Yêu cầu giao việc" : "Nội dung công việc / Báo cáo tiến độ";
-  byId("taskNote").placeholder = kind === TASK_KIND_ASSIGNED
-    ? "Nội dung yêu cầu, rủi ro, phối hợp, hồ sơ liên quan..."
-    : existingTask
-      ? "Nội dung công việc hoặc báo cáo tiến độ cập nhật..."
-      : "Nội dung công việc, báo cáo tiến độ, rủi ro, phối hợp, hồ sơ liên quan...";
-  document.querySelectorAll(".assignment-only").forEach((element) => {
-    element.classList.toggle("is-hidden", kind !== TASK_KIND_ASSIGNED);
-  });
+  byId("taskOwnerLabelText").textContent = "Người thực hiện";
+  byId("taskNoteLabelText").textContent = "Nội dung công việc / Báo cáo tiến độ";
+  byId("taskNote").placeholder = existingTask
+    ? "Nội dung công việc hoặc báo cáo tiến độ cập nhật..."
+    : "Nội dung công việc, báo cáo tiến độ, rủi ro, phối hợp, hồ sơ liên quan...";
   document.querySelectorAll(".regular-only").forEach((element) => {
-    element.classList.toggle("is-hidden", kind !== TASK_KIND_REGULAR);
+    element.classList.remove("is-hidden");
   });
   byId("taskForm")
     .querySelectorAll("#taskTitle, #taskProjectId, #taskOwner, #taskCategory, #taskWorkType, #taskPriority, #taskRecurrence, #taskStartDate, #taskDue, #taskDueTime")
@@ -20567,7 +20648,7 @@ function updateTaskFormLock(task = null) {
       input.disabled = !canEditDetails;
     });
   }
-  const ownerPickerLocked = !canEditDetails || (isEmployee() && kind === TASK_KIND_REGULAR);
+  const ownerPickerLocked = !canEditDetails || isEmployee();
   const ownerPicker = byId("taskOwnerPicker");
   if (ownerPicker) {
     ownerPicker.classList.toggle("is-disabled", ownerPickerLocked);
@@ -20589,7 +20670,7 @@ function updateTaskFormLock(task = null) {
     collaboratorPicker.setAttribute("aria-disabled", String(!canUpdateCollaborators));
     if (!canUpdateCollaborators) setTaskCollaboratorPickerOpen(false);
   }
-  if (isEmployee() && kind === TASK_KIND_REGULAR) {
+  if (isEmployee()) {
     byId("taskOwner").disabled = true;
   }
   byId("taskStatus").disabled = !canUpdateReport;
@@ -20618,110 +20699,6 @@ function updateTaskFormLock(task = null) {
   }
   byId("taskForm").querySelector("button[type='submit']").disabled = !canEditDetails && !canUpdateReport && !canEditQuality;
   updateTaskDeadlineExtensionNotice(existingTask);
-}
-
-function updateAssignmentTaskResponseMeta(task) {
-  const responseMeta = byId("assignmentTaskResponseMeta");
-  const progressMeta = byId("assignmentTaskProgressMeta");
-  if (!task) {
-    responseMeta.textContent = "";
-    progressMeta.textContent = "";
-    progressMeta.dataset.baseText = "";
-    renderTaskProgressReportList("assignmentTaskProgressReportList", null);
-    return;
-  }
-  responseMeta.textContent = task.responseAt
-    ? `Phản hồi lúc ${formatDateTime(task.responseAt)} bởi ${task.responseByName || "người được giao"}.`
-    : "Chưa có phản hồi nhận việc.";
-  const latestReport = latestTaskProgressReport(task);
-  progressMeta.textContent = latestReport
-    ? `Báo cáo gần nhất lúc ${formatDateTime(latestReport.createdAt)} bởi ${latestReport.createdBy || "người được giao"}: ${formatScore(latestReport.progress)}%.`
-    : "Chưa có báo cáo tiến độ.";
-  progressMeta.dataset.baseText = progressMeta.textContent;
-  renderTaskProgressReportList("assignmentTaskProgressReportList", task);
-}
-
-function updateAssignmentTaskFormLock(task = null) {
-  const existingTask = task || state.tasks.find((item) => item.id === byId("assignmentTaskId").value);
-  const adminOverride = isAdmin();
-  const isClosed = existingTask && normalizeTaskStatus(existingTask.status) === TASK_STATUS_CLOSED;
-  const canEditDetails = existingTask ? (!isClosed || adminOverride) && canEditTaskDetails(existingTask) : canAssignTaskToPerson(byId("assignmentTaskOwner").value) || canAssignTasks();
-  const reportLockedByApproval = !!existingTask && taskProgressLockedAfterApproval(existingTask) && !adminOverride;
-  const canUpdateReport = existingTask ? (!isClosed || adminOverride) && !reportLockedByApproval && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
-  const canUpdateCollaborators = existingTask ? (!isClosed || adminOverride) && !reportLockedByApproval && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
-  const canEditQuality = (!!existingTask && adminOverride) && (!isClosed || adminOverride);
-  byId("assignmentTaskAssignerLabel").value = existingTask?.assignedByName || existingTask?.createdBy || (canAssignTasks() ? currentActorInfo().name : "");
-  byId("assignmentTaskForm")
-    .querySelectorAll("#assignmentTaskTitle, #assignmentTaskProjectId, #assignmentTaskOwner, #assignmentTaskCategory, #assignmentTaskStartDate, #assignmentTaskDue, #assignmentTaskDueTime, #assignmentTaskNote")
-    .forEach((input) => {
-      input.disabled = !canEditDetails;
-    });
-  byId("assignmentTaskCollaborator").disabled = !canUpdateCollaborators;
-  byId("assignmentTaskStatus").disabled = !canUpdateReport;
-  byId("assignmentTaskForm")
-    .querySelectorAll("#assignmentTaskProgress, #assignmentTaskAttachments")
-    .forEach((input) => {
-      input.disabled = !canUpdateReport;
-    });
-  const qualityInput = byId("assignmentTaskQualityPercent");
-  if (!taskCompletionIsApproved(existingTask) && !adminOverride) {
-    qualityInput.value = "";
-  }
-  qualityInput.disabled = !canEditQuality;
-  qualityInput.title = canEditQuality
-    ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
-    : "Đánh giá chất lượng được nhập cùng kết quả Đạt tại màn hình Duyệt hoàn thành.";
-  const canRespondToAssignment = !!existingTask && (!isClosed || adminOverride) && !reportLockedByApproval && (adminOverride || canReportTask(existingTask));
-  const collaboratorProgressOnly = !!existingTask && !canEditDetails && canCollaborateTask(existingTask) && !canReportTask(existingTask);
-  const departmentManagementProgressOnly = !!existingTask && !canEditDetails && canManageDepartmentTaskProgress(existingTask) && !canReportTask(existingTask);
-  const progressOnly = collaboratorProgressOnly || departmentManagementProgressOnly;
-  byId("assignmentTaskResponseStatus").disabled = !canRespondToAssignment;
-  byId("assignmentTaskResponseNote").disabled = !(existingTask && (!isClosed || adminOverride) && !reportLockedByApproval && canUpdateReport);
-  byId("assignmentTaskResponseNoteLabel").textContent = progressOnly ? "Báo cáo tiến độ mới" : "Nội dung phản hồi / Báo cáo tiến độ";
-  byId("assignmentTaskResponseNote").placeholder = progressOnly
-    ? "Nhập nội dung báo cáo tiến độ mới. Mỗi lần lưu sẽ tạo một dòng lịch sử riêng."
-    : "Xác nhận nhận việc, lý do cần trao đổi hoặc báo cáo tiến độ thực hiện...";
-  if (reportLockedByApproval) {
-    const progressMeta = byId("assignmentTaskProgressMeta");
-    if (progressMeta) {
-      const baseText = progressMeta.dataset.baseText || progressMeta.textContent || "";
-      progressMeta.textContent = `${baseText ? `${baseText} ` : ""}Công việc đã được đánh giá hoàn thành là Đạt, báo cáo tiến độ đã khóa.`;
-    }
-  }
-  byId("assignmentTaskForm").querySelector("button[type='submit']").disabled = !canEditDetails && !canUpdateReport && !canEditQuality;
-  const closedOption = byId("assignmentTaskStatus").querySelector(`option[value="${TASK_STATUS_CLOSED}"]`);
-  if (closedOption) closedOption.disabled = !adminOverride;
-  byId("endAssignmentTask").classList.toggle("is-hidden", !canEndTaskAssignment(existingTask));
-  byId("endAssignmentTask").disabled = !canEndTaskAssignment(existingTask);
-}
-
-function populateAssignmentTaskForm(task) {
-  if (!task) return;
-  byId("assignmentTaskId").value = task.id;
-  byId("assignmentTaskTitle").value = task.title || "";
-  renderTaskProjectOptions();
-  byId("assignmentTaskProjectId").value = projectIdForTask(task);
-  byId("assignmentTaskOwner").value = task.ownerId || "";
-  byId("assignmentTaskCollaborator").value = task.collaboratorId || "";
-  renderPersonOptions();
-  byId("assignmentTaskOwner").value = task.ownerId || "";
-  byId("assignmentTaskCollaborator").value = task.collaboratorId || "";
-  updateTaskCategoryOptions(task.category, "assignmentTaskOwner", "assignmentTaskCategory");
-  byId("assignmentTaskStartDate").value = task.startDate || "";
-  byId("assignmentTaskDue").value = task.due || "";
-  byId("assignmentTaskDueTime").value = task.dueTime || "";
-  byId("assignmentTaskStatus").value = normalizeTaskStatus(task.status);
-  byId("assignmentTaskProgress").value = task.progress || 0;
-  byId("assignmentTaskQualityPercent").value = normalizeTaskQualityInput(task.qualityPercent);
-  byId("assignmentTaskNote").value = task.note || "";
-  byId("assignmentTaskAssignerLabel").value = task.assignedByName || task.createdBy || "";
-  byId("assignmentTaskResponseStatus").value = task.responseStatus || "";
-  byId("assignmentTaskResponseNote").value = !canEditTaskDetails(task) && canUpdateTaskProgress(task) && !taskHasQualityPercent(task) ? "" : task.responseNote || "";
-  updateAssignmentTaskResponseMeta(task);
-  byId("assignmentTaskAttachments").value = "";
-  assignmentAttachmentDraft = [...(task.attachments || [])];
-  renderAssignmentTaskAttachmentDraft();
-  updateAssignmentTaskFormLock(task);
 }
 
 function copiedTaskTitle(title) {
@@ -20761,122 +20738,9 @@ function copyRegularTaskToForm(task) {
   focusEditForm("taskForm", "taskTitle");
 }
 
-function copyAssignmentTaskToForm(task) {
-  resetAssignmentTaskForm();
-  renderTaskInboxDialog();
-  byId("taskInboxDialog").classList.remove("is-hidden");
-  byId("taskInboxDialog").setAttribute("aria-hidden", "false");
-  byId("assignmentTaskTitle").value = copiedTaskTitle(task.title);
-  byId("assignmentTaskProjectId").value = projectIdForTask(task);
-  byId("assignmentTaskOwner").value = task.ownerId || "";
-  byId("assignmentTaskCollaborator").value = task.collaboratorId || "";
-  updateTaskCategoryOptions(task.category, "assignmentTaskOwner", "assignmentTaskCategory");
-  byId("assignmentTaskStartDate").value = task.startDate || "";
-  byId("assignmentTaskDue").value = task.due || "";
-  byId("assignmentTaskDueTime").value = task.dueTime || "";
-  byId("assignmentTaskStatus").value = TASK_STATUS_PREPARING;
-  byId("assignmentTaskProgress").value = 0;
-  byId("assignmentTaskQualityPercent").value = "";
-  byId("assignmentTaskNote").value = task.note || "";
-  byId("assignmentTaskResponseStatus").value = "";
-  byId("assignmentTaskResponseNote").value = "";
-  assignmentAttachmentDraft = [];
-  byId("assignmentTaskAttachments").value = "";
-  updateAssignmentTaskResponseMeta(null);
-  renderAssignmentTaskAttachmentDraft();
-  updateAssignmentTaskFormLock();
-  byId("assignmentTaskTitle").scrollIntoView({ behavior: "smooth", block: "center" });
-  byId("assignmentTaskTitle").focus({ preventScroll: true });
-}
-
 function copyTaskToForm(task) {
   if (!task || !canCopyTask(task)) return;
-  if (isAssignedTask(task)) {
-    copyAssignmentTaskToForm(task);
-    return;
-  }
   copyRegularTaskToForm(task);
-}
-
-function resetAssignmentTaskForm() {
-  byId("assignmentTaskForm").reset();
-  byId("assignmentTaskId").value = "";
-  renderTaskProjectOptions();
-  byId("assignmentTaskProjectId").value = "";
-  byId("assignmentTaskProgress").value = 0;
-  byId("assignmentTaskQualityPercent").value = "";
-  byId("assignmentTaskStatus").value = TASK_STATUS_PREPARING;
-  byId("assignmentTaskStartDate").value = "";
-  byId("assignmentTaskDueTime").value = "";
-  byId("assignmentTaskAssignerLabel").value = canAssignTasks() ? currentActorInfo().name : "";
-  byId("assignmentTaskCollaborator").value = "";
-  byId("assignmentTaskResponseStatus").value = "";
-  byId("assignmentTaskResponseNote").value = "";
-  updateAssignmentTaskResponseMeta(null);
-  byId("assignmentTaskAttachments").value = "";
-  assignmentAttachmentDraft = [];
-  renderPersonOptions();
-  updateTaskCategoryOptions("", "assignmentTaskOwner", "assignmentTaskCategory");
-  renderAssignmentTaskAttachmentDraft();
-  updateAssignmentTaskFormLock();
-}
-
-function endAssignmentTask(taskId = byId("assignmentTaskId").value) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task || !canEndTaskAssignment(task)) return false;
-  if (!confirm("Kết thúc công việc này? Công việc sẽ được đóng lại và không còn hiện thông báo quá hạn.")) return false;
-  const timestamp = new Date().toISOString();
-  const actor = currentActorInfo();
-  const owner = personById(task.ownerId);
-  const previousStatus = normalizeTaskStatus(task.status);
-  const record = applyRecordAudit(
-    {
-      ...task,
-      status: TASK_STATUS_CLOSED,
-      closedAt: timestamp,
-      closedBy: actor.name,
-      closedById: actor.id,
-      progressReports: [
-        ...(task.progressReports || []),
-        {
-          id: uid("task-report"),
-          progress: Number(task.progress || 0),
-          status: TASK_STATUS_CLOSED,
-          previousStatus,
-          action: "Kết thúc công việc",
-          note: `Đóng công việc. Trạng thái trước đó: ${previousStatus}.`,
-          createdAt: timestamp,
-          createdById: actor.id,
-          createdBy: actor.name,
-        },
-      ],
-    },
-    task,
-  );
-  Object.assign(task, record);
-  logActivity({
-    action: "Kết thúc",
-    module: "Công việc",
-    targetType: "task",
-    targetId: task.id,
-    personId: task.ownerId,
-    departmentId: owner?.departmentId || "",
-    period: taskPeriod(task),
-    title: task.title,
-    details: `Đóng công việc được giao. Trạng thái trước đó: ${previousStatus}`,
-    score: `${formatScore(task.progress)}%`,
-  });
-  saveState();
-  populateAssignmentTaskForm(task);
-  renderTaskInbox();
-  renderTaskInboxDialog();
-  renderTaskBoard();
-  renderDashboard();
-  return true;
-}
-
-function endAssignmentTaskFromForm() {
-  endAssignmentTask();
 }
 
 function populateDepartmentEvaluationForm(evaluation) {
@@ -20941,17 +20805,7 @@ function openHistoryTimelineTarget(target) {
     clearTaskTimeFilter();
     renderTaskBoard();
     switchView("tasks");
-    if (task && isAssignedTask(task)) {
-      renderTaskInboxDialog();
-      byId("taskInboxDialog").classList.remove("is-hidden");
-      byId("taskInboxDialog").setAttribute("aria-hidden", "false");
-      if (canOpenTask(task)) {
-        populateAssignmentTaskForm(task);
-        const focusTarget = byId("assignmentTaskNote");
-        focusTarget.scrollIntoView({ behavior: "smooth", block: "center" });
-        focusTarget.focus({ preventScroll: true });
-      }
-    } else if (task && canOpenTask(task)) {
+    if (task && canOpenTask(task)) {
       populateTaskForm(task);
       focusEditForm("taskForm", canEditTaskDetails(task) ? "taskTitle" : "taskNote");
     } else {
@@ -21762,6 +21616,12 @@ byId("dashboard").addEventListener("click", (event) => {
 
 document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
+});
+
+document.querySelector(".public-investment-hub-tabs")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-public-investment-workspace]");
+  if (!button) return;
+  setPublicInvestmentWorkspace(button.dataset.publicInvestmentWorkspace);
 });
 
 runWhenDocumentReady(() => {
@@ -23360,10 +23220,11 @@ byId("peopleTable").addEventListener("click", (event) => {
   if (handoverId && canManageEmployeeHandover()) openEmployeeHandoverDialog(handoverId);
 });
 
-async function saveTaskRecord(record, fileInput, draftAttachments, responseStatus, responseNote, progressReportNote, resetCallback, forceProgressReport = false) {
+async function saveTaskRecord(record, fileInput, draftAttachments, progressReportNote, resetCallback, forceProgressReport = false) {
   const index = state.tasks.findIndex((item) => item.id === record.id);
   const existingTask = index >= 0 ? state.tasks[index] : null;
   const adminOverride = isAdmin();
+  if (existingTask && !await ensureTaskMutationContractSupported()) return false;
   let uploadedAttachments = [];
   try {
     uploadedAttachments = await readTaskAttachmentFiles(fileInput.files);
@@ -23418,43 +23279,31 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
   }
   preparedRecord.projectId = selectedProject?.id || "";
   preparedRecord.projectName = selectedProject?.name || "";
-  const recordKind = existingTask ? normalizeTaskKind(existingTask) : normalizeTaskKind(preparedRecord.kind || TASK_KIND_REGULAR);
+  const recordKind = TASK_KIND_REGULAR;
   preparedRecord.kind = recordKind;
-  if (recordKind === TASK_KIND_REGULAR) {
-    preparedRecord.workType = normalizeTaskWorkType(preparedRecord);
-    preparedRecord.recurrence = normalizeTaskRecurrence(preparedRecord);
-    preparedRecord.collaboratorIds = taskCollaboratorIds(preparedRecord).filter((id) => id !== preparedRecord.ownerId);
-    preparedRecord.collaboratorId = "";
-    if (preparedRecord.recurrence === TASK_RECURRENCE_NONE) {
-      preparedRecord.recurrenceSourceId = "";
-      preparedRecord.recurrenceSeriesId = "";
-      preparedRecord.recurrenceAnchorDue = "";
-      preparedRecord.recurrenceAnchorDay = "";
-    } else if (existingTask?.recurrenceSourceId) {
-      preparedRecord.recurrenceSourceId = existingTask.recurrenceSourceId;
-      preparedRecord.recurrenceSeriesId = existingTask.recurrenceSeriesId || existingTask.recurrenceSourceId;
-      preparedRecord.recurrenceAnchorDue = existingTask.recurrenceAnchorDue || existingTask.due;
-      preparedRecord.recurrenceAnchorDay = existingTask.recurrenceAnchorDay || Number(existingTask.due?.slice(8, 10)) || "";
-    } else {
-      preparedRecord.recurrenceSourceId = "";
-      preparedRecord.recurrenceSeriesId = existingTask?.recurrenceSeriesId || preparedRecord.id;
-      preparedRecord.recurrenceAnchorDue = preparedRecord.due;
-      preparedRecord.recurrenceAnchorDay = Number(preparedRecord.due?.slice(8, 10)) || "";
-    }
-  } else {
-    preparedRecord.collaboratorIds = [];
-    preparedRecord.workType = "";
-    preparedRecord.recurrence = TASK_RECURRENCE_NONE;
+  preparedRecord.workType = normalizeTaskWorkType(preparedRecord);
+  preparedRecord.recurrence = normalizeTaskRecurrence(preparedRecord);
+  preparedRecord.collaboratorIds = taskCollaboratorIds(preparedRecord).filter((id) => id !== preparedRecord.ownerId);
+  preparedRecord.collaboratorId = "";
+  if (preparedRecord.recurrence === TASK_RECURRENCE_NONE) {
     preparedRecord.recurrenceSourceId = "";
     preparedRecord.recurrenceSeriesId = "";
     preparedRecord.recurrenceAnchorDue = "";
     preparedRecord.recurrenceAnchorDay = "";
+  } else if (existingTask?.recurrenceSourceId) {
+    preparedRecord.recurrenceSourceId = existingTask.recurrenceSourceId;
+    preparedRecord.recurrenceSeriesId = existingTask.recurrenceSeriesId || existingTask.recurrenceSourceId;
+    preparedRecord.recurrenceAnchorDue = existingTask.recurrenceAnchorDue || existingTask.due;
+    preparedRecord.recurrenceAnchorDay = existingTask.recurrenceAnchorDay || Number(existingTask.due?.slice(8, 10)) || "";
+  } else {
+    preparedRecord.recurrenceSourceId = "";
+    preparedRecord.recurrenceSeriesId = existingTask?.recurrenceSeriesId || preparedRecord.id;
+    preparedRecord.recurrenceAnchorDue = preparedRecord.due;
+    preparedRecord.recurrenceAnchorDay = Number(preparedRecord.due?.slice(8, 10)) || "";
   }
   const canEditDetails = existingTask
     ? canEditTaskDetails(existingTask)
-    : recordKind === TASK_KIND_ASSIGNED
-      ? canAssignTaskToPerson(preparedRecord.ownerId)
-      : canCreateRegularTaskForPerson(preparedRecord.ownerId);
+    : canCreateRegularTaskForPerson(preparedRecord.ownerId);
   const reportLockedByApproval = !!existingTask && taskProgressLockedAfterApproval(existingTask) && !adminOverride;
   const canUpdateReport = existingTask ? !reportLockedByApproval && (adminOverride || canUpdateTaskProgress(existingTask)) : false;
   const canUpdateCollaborators = !!existingTask && !reportLockedByApproval && (canEditDetails || canUpdateTaskCollaborators(existingTask));
@@ -23465,13 +23314,8 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     preparedRecord.note = existingTask.note || "";
   }
   if (existingTask && !canUpdateCollaborators) {
-    if (recordKind === TASK_KIND_REGULAR) {
-      preparedRecord.collaboratorIds = taskCollaboratorIds(existingTask);
-      preparedRecord.collaboratorId = "";
-    } else {
-      preparedRecord.collaboratorIds = [];
-      preparedRecord.collaboratorId = existingTask.collaboratorId || "";
-    }
+    preparedRecord.collaboratorIds = taskCollaboratorIds(existingTask);
+    preparedRecord.collaboratorId = "";
   }
   const submittedQuality = normalizeTaskQualityInput(preparedRecord.qualityPercent);
   const priorQuality = existingTask ? normalizeTaskQualityInput(existingTask.qualityPercent) : "";
@@ -23493,15 +23337,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     alert("Tài khoản hiện tại không có quyền tạo loại công việc này.");
     return false;
   }
-  if (recordKind === TASK_KIND_ASSIGNED && canEditDetails && !isAdmin() && !canAssignTaskToPerson(preparedRecord.ownerId)) {
-    alert("Tài khoản hiện tại chỉ được giao việc trong phạm vi phân quyền.");
-    return false;
-  }
-  if (recordKind === TASK_KIND_ASSIGNED && normalizeTaskStatus(preparedRecord.status) === TASK_STATUS_CLOSED && !adminOverride && (!existingTask || !canEndTaskAssignment(existingTask))) {
-    alert("Chỉ người giao việc mới được kết thúc công việc này.");
-    return false;
-  }
-  if (recordKind === TASK_KIND_REGULAR && canEditDetails && !isAdmin() && !canCreateRegularTaskForPerson(preparedRecord.ownerId)) {
+  if (canEditDetails && !isAdmin() && !canCreateRegularTaskForPerson(preparedRecord.ownerId)) {
     alert("Tài khoản hiện tại chỉ được tạo/sửa công việc thường kỳ trong phạm vi được xem.");
     return false;
   }
@@ -23602,13 +23438,8 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
           ...existingTask,
         };
   if (!canEditDetails && canUpdateCollaborators) {
-    if (recordKind === TASK_KIND_REGULAR) {
-      mergedRecord.collaboratorIds = taskCollaboratorIds(preparedRecord);
-      mergedRecord.collaboratorId = "";
-    } else {
-      mergedRecord.collaboratorIds = [];
-      mergedRecord.collaboratorId = preparedRecord.collaboratorId || "";
-    }
+    mergedRecord.collaboratorIds = taskCollaboratorIds(preparedRecord);
+    mergedRecord.collaboratorId = "";
   }
   mergedRecord.qualityPercent = nextQuality;
   const completionResubmitted = nextStatusForQuality === TASK_STATUS_COMPLETED && (
@@ -23650,18 +23481,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     preserveLegacyTaskProgressLifecycle(mergedRecord, existingTask);
   }
 
-  if (recordKind === TASK_KIND_ASSIGNED && canEditDetails) {
-    mergedRecord.assignedById = detailsChanged ? actor.id : existingTask?.assignedById || actor.id;
-    mergedRecord.assignedByName = detailsChanged ? actor.name : existingTask?.assignedByName || actor.name;
-    mergedRecord.assignedAt = detailsChanged ? timestamp : existingTask?.assignedAt || timestamp;
-    mergedRecord.responseStatus = ownerChanged ? "" : existingTask?.responseStatus || "";
-    mergedRecord.responseNote = ownerChanged ? "" : existingTask?.responseNote || "";
-    mergedRecord.responseAt = ownerChanged ? "" : existingTask?.responseAt || "";
-    mergedRecord.responseById = ownerChanged ? "" : existingTask?.responseById || "";
-    mergedRecord.responseByName = ownerChanged ? "" : existingTask?.responseByName || "";
-  }
-
-  if (recordKind === TASK_KIND_REGULAR && canEditDetails) {
+  if (canEditDetails) {
     mergedRecord.assignedById = "";
     mergedRecord.assignedByName = "";
     mergedRecord.assignedAt = "";
@@ -23670,20 +23490,6 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
     mergedRecord.responseAt = "";
     mergedRecord.responseById = "";
     mergedRecord.responseByName = "";
-  }
-
-  if (existingTask && canUpdateReport && recordKind === TASK_KIND_ASSIGNED && (canReportTask(existingTask) || canEditDetails)) {
-    const responseNoteText = String(responseNote || "").trim();
-    const nextResponseNote = responseNoteText || existingTask.responseNote || "";
-    const changedResponse = responseStatus !== (existingTask.responseStatus || "") || (!!responseNoteText && responseNoteText !== (existingTask.responseNote || ""));
-    mergedRecord = {
-      ...mergedRecord,
-      responseStatus,
-      responseNote: nextResponseNote,
-      responseAt: changedResponse && (responseStatus || responseNoteText) ? timestamp : existingTask.responseAt || "",
-      responseById: changedResponse && (responseStatus || responseNoteText) ? actor.id : existingTask.responseById || "",
-      responseByName: changedResponse && (responseStatus || responseNoteText) ? actor.name : existingTask.responseByName || "",
-    };
   }
 
   if (normalizeTaskStatus(mergedRecord.status) === TASK_STATUS_COMPLETED) {
@@ -23757,52 +23563,69 @@ async function saveTaskRecord(record, fileInput, draftAttachments, responseStatu
   const previousActivityLog = state.activityLog;
   const previousEvaluations = state.evaluations;
   const auditedRecord = applyTaskRecordAudit(mergedRecord, existingTask);
-  state.tasks = index >= 0 ? state.tasks.map((item) => (item.id === preparedRecord.id ? auditedRecord : item)) : [...state.tasks, auditedRecord];
-  syncPersonalEvaluationTaskScoresForTask(auditedRecord, existingTask);
-  const owner = personById(auditedRecord.ownerId);
-  const collaboratorNames = taskCollaboratorNames(auditedRecord);
+  const taskCommand = deadlineExtensionRequest
+    ? "request-extension"
+    : completionResubmitted
+      ? "submit-completion"
+      : qualityAssessmentChanged
+        ? "review-completion"
+        : canEditDetails && detailsChanged
+          ? "save-task"
+          : "update-progress";
+  const commandResult = existingTask
+    ? await submitTaskCommandOnline(existingTask, auditedRecord, taskCommand)
+    : { ok: true, task: auditedRecord, remote: false };
+  if (!commandResult.ok) return false;
+  const committedRecord = commandResult.task || auditedRecord;
+  if (!commandResult.remote) {
+    state.tasks = index >= 0 ? state.tasks.map((item) => (item.id === preparedRecord.id ? committedRecord : item)) : [...state.tasks, committedRecord];
+  }
+  syncPersonalEvaluationTaskScoresForTask(committedRecord, existingTask);
+  const owner = personById(committedRecord.ownerId);
+  const collaboratorNames = taskCollaboratorNames(committedRecord);
   const collaboratorMeta = collaboratorNames.length ? ` · phối hợp ${collaboratorNames.join(", ")}` : "";
-  const projectMeta = auditedRecord.projectName ? ` · dự án ${auditedRecord.projectName}` : "";
+  const projectMeta = committedRecord.projectName ? ` · dự án ${committedRecord.projectName}` : "";
   const action = !existingTask
-    ? recordKind === TASK_KIND_ASSIGNED
-      ? "Giao việc"
-      : "Tạo"
+    ? "Tạo"
     : canEditDetails && detailsChanged
-      ? recordKind === TASK_KIND_ASSIGNED
-        ? "Cập nhật giao việc"
-        : "Cập nhật thường kỳ"
+      ? "Cập nhật thường kỳ"
       : updateChangeLabels.length
         ? "Cập nhật công việc"
       : collaboratorsChanged
         ? "Cập nhật người phối hợp"
       : qualityAssessmentChanged
         ? "Đánh giá chất lượng"
-      : recordKind === TASK_KIND_ASSIGNED
-        ? "Phản hồi/Báo cáo"
-        : "Cập nhật tiến độ";
+      : "Cập nhật tiến độ";
   logActivity({
     action,
     module: "Công việc",
     targetType: "task",
     targetId: preparedRecord.id,
-    personId: auditedRecord.ownerId,
+    personId: committedRecord.ownerId,
     departmentId: owner?.departmentId || "",
-    period: taskPeriod(auditedRecord),
-    title: auditedRecord.title,
-    details: `${taskKindLabels[recordKind]}${recordKind === TASK_KIND_REGULAR ? ` · ${taskWorkMeta(auditedRecord)}` : ""}${projectMeta} · ${taskOwnerName(auditedRecord, "Chưa rõ người nhận")}${collaboratorMeta} · ${normalizeTaskStatus(auditedRecord.status)} · hoàn thành ${formatTaskDeadline(auditedRecord) || "chưa có"}${taskHasQualityPercent(auditedRecord) ? ` · chất lượng ${formatScore(taskQualityPercentValue(auditedRecord))}%` : ""}`,
-    score: taskHasQualityPercent(auditedRecord)
-      ? `Tiến độ ${formatScore(auditedRecord.progress)}% · Chất lượng ${formatScore(taskQualityPercentValue(auditedRecord))}%`
-      : `${formatScore(auditedRecord.progress)}%`,
+    period: taskPeriod(committedRecord),
+    title: committedRecord.title,
+    details: `${taskKindLabels[recordKind]} · ${taskWorkMeta(committedRecord)}${projectMeta} · ${taskOwnerName(committedRecord, "Chưa rõ người nhận")}${collaboratorMeta} · ${normalizeTaskStatus(committedRecord.status)} · hoàn thành ${formatTaskDeadline(committedRecord) || "chưa có"}${taskHasQualityPercent(committedRecord) ? ` · chất lượng ${formatScore(taskQualityPercentValue(committedRecord))}%` : ""}`,
+    score: taskHasQualityPercent(committedRecord)
+      ? `Tiến độ ${formatScore(committedRecord.progress)}% · Chất lượng ${formatScore(taskQualityPercentValue(committedRecord))}%`
+      : `${formatScore(committedRecord.progress)}%`,
   });
   try {
     saveState();
   } catch {
+    if (commandResult.remote) {
+      showSystemToast("Công việc đã được lưu trên máy chủ", "Bộ nhớ cục bộ không đủ để lưu bản sao tệp; dữ liệu online vẫn được giữ nguyên.", { tone: "warning", duration: 9000 });
+      resetCallback();
+      renderAll();
+      return true;
+    }
     state.tasks = previousTasks;
     state.activityLog = previousActivityLog;
     state.evaluations = previousEvaluations;
     alert("Không thể lưu hồ sơ đính kèm vì dung lượng dữ liệu trình duyệt đã đầy. Vui lòng giảm số lượng hoặc dung lượng tệp.");
     return false;
   }
+  if ((!existingTask || (sharedSync.session && !commandResult.remote)) && !await confirmTaskMutationOnline(committedRecord.id)) return false;
   resetCallback();
   renderAll();
   return true;
@@ -23848,8 +23671,6 @@ byId("taskForm").addEventListener("submit", async (event) => {
     },
     byId("taskAttachments"),
     taskAttachmentDraft,
-    "",
-    "",
     existingTask && (progressReportOnly || taskNote !== String(existingTask.note || "").trim()) ? taskNote : "",
     resetTaskForm,
     progressReportOnly,
@@ -23860,43 +23681,6 @@ byId("taskForm").addEventListener("submit", async (event) => {
     openTaskDetailDialog(taskId);
   } else if (saved) {
     closeTaskFormDialog();
-  }
-});
-
-byId("assignmentTaskForm")?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const taskId = byId("assignmentTaskId").value || uid("task");
-  const saved = await saveTaskRecord(
-    {
-      id: taskId,
-      kind: TASK_KIND_ASSIGNED,
-      title: byId("assignmentTaskTitle").value.trim(),
-      projectId: byId("assignmentTaskProjectId").value,
-      ownerId: byId("assignmentTaskOwner").value,
-      collaboratorId: byId("assignmentTaskCollaborator").value,
-      category: byId("assignmentTaskCategory").value,
-      startDate: byId("assignmentTaskStartDate").value,
-      due: byId("assignmentTaskDue").value,
-      dueTime: byId("assignmentTaskDueTime").value,
-      status: normalizeTaskStatus(byId("assignmentTaskStatus").value),
-      progress: clamp(byId("assignmentTaskProgress").value, 0, 100),
-      qualityPercent: normalizeTaskQualityInput(byId("assignmentTaskQualityPercent").value),
-      note: byId("assignmentTaskNote").value.trim(),
-    },
-    byId("assignmentTaskAttachments"),
-    assignmentAttachmentDraft,
-    byId("assignmentTaskResponseStatus").value,
-    byId("assignmentTaskResponseNote").value.trim(),
-    byId("assignmentTaskResponseNote").value.trim(),
-    () => {
-      resetAssignmentTaskForm();
-      renderTaskInboxDialog();
-    },
-  );
-  if (saved) window.virtualAssistantTaskWizardSaved?.(taskId);
-  if (saved && taskDetailInlineEditor?.taskId === taskId) {
-    restoreTaskDetailInlineEditor();
-    openTaskDetailDialog(taskId);
   }
 });
 
@@ -23920,8 +23704,6 @@ byId("resetTaskForm").addEventListener("click", () => {
   resetTaskForm();
   syncTaskFormDialogHeading();
 });
-byId("resetAssignmentTaskForm")?.addEventListener("click", resetAssignmentTaskForm);
-byId("endAssignmentTask")?.addEventListener("click", endAssignmentTaskFromForm);
 byId("openTaskProjectCatalog").addEventListener("click", openTaskProjectCatalogDialog);
 byId("closeTaskProjectCatalog").addEventListener("click", closeTaskProjectCatalogDialog);
 byId("taskProjectCatalogDialog").addEventListener("click", (event) => {
@@ -23994,14 +23776,6 @@ byId("taskDue").addEventListener("input", () => updateTaskDeadlineExtensionNotic
 byId("taskDue").addEventListener("change", () => updateTaskDeadlineExtensionNotice());
 byId("taskFollowUpDate").addEventListener("input", () => updateTaskDeadlineExtensionNotice());
 byId("taskFollowUpDate").addEventListener("change", () => updateTaskDeadlineExtensionNotice());
-byId("assignmentTaskOwner")?.addEventListener("change", () => {
-  byId("assignmentTaskCategory").value = "";
-  updateTaskCategoryOptions("", "assignmentTaskOwner", "assignmentTaskCategory");
-  updateAssignmentTaskFormLock();
-});
-byId("assignmentTaskStatus")?.addEventListener("change", () => {
-  updateAssignmentTaskFormLock();
-});
 byId("taskSearch").addEventListener("input", debounce(renderTaskBoard, 200));
 byId("taskScopeFilter").addEventListener("change", (event) => setTaskDisplayScope(event.target.value));
 byId("taskProjectFilter").addEventListener("change", renderTaskBoard);
@@ -24023,19 +23797,6 @@ document.querySelectorAll("[data-scroll-page]").forEach((button) => button.addEv
   const top = button.dataset.scrollPage === "bottom" ? scrollRoot.scrollHeight : 0;
   window.scrollTo({ top, behavior: "smooth" });
 }));
-byId("taskInboxButton")?.addEventListener("click", openTaskInboxDialog);
-byId("closeTaskInbox")?.addEventListener("click", closeTaskInboxDialog);
-byId("taskInboxDialog")?.addEventListener("click", (event) => {
-  if (event.target === byId("taskInboxDialog")) {
-    closeTaskInboxDialog();
-  }
-});
-byId("taskInboxList")?.addEventListener("click", (event) => {
-  const taskId = event.target.closest("[data-open-inbox-task]")?.dataset.openInboxTask;
-  if (!taskId) return;
-  closeTaskInboxDialog();
-  openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
-});
 byId("closeTaskStatusDetail").addEventListener("click", closeTaskStatusDetailDialog);
 byId("exportTaskStatusDetailExcel").addEventListener("click", () => downloadDashboardPopupExcel(taskStatusDetailExport));
 byId("taskStatusDetailDialog").addEventListener("click", (event) => {
@@ -24074,7 +23835,7 @@ byId("taskCompletionReviewDialog").addEventListener("click", (event) => {
   }
 });
 byId("taskCompletionReviewStatus").addEventListener("change", updateTaskCompletionReviewQualityField);
-byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
+byId("taskCompletionReviewForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const taskId = byId("taskCompletionReviewTaskId").value;
   const decision = byId("taskCompletionReviewStatus").value;
@@ -24088,7 +23849,7 @@ byId("taskCompletionReviewForm").addEventListener("submit", (event) => {
     byId("taskCompletionReviewQualityPercent").focus();
     return;
   }
-  if (reviewTaskCompletion(taskId, decision, byId("taskCompletionReviewNote").value, qualityPercent)) {
+  if (await reviewTaskCompletion(taskId, decision, byId("taskCompletionReviewNote").value, qualityPercent)) {
     closeTaskCompletionReviewDialog();
   }
 });
@@ -24153,11 +23914,7 @@ byId("taskDetailActions").addEventListener("click", (event) => {
   }
   if (action === "report" && canUpdateTaskProgress(task)) {
     if (window.virtualAssistantSelectProgressTask?.(taskId) === true) return;
-    openTaskDetailInlineEditor(
-      taskId,
-      isAssignedTask(task) ? "assignmentTaskResponseNote" : "taskNote",
-      { progressReportOnly: !isAssignedTask(task) },
-    );
+    openTaskDetailInlineEditor(taskId, "taskNote", { progressReportOnly: true });
     return;
   }
   if (action === "copy" && canCopyTask(task)) {
@@ -24173,10 +23930,6 @@ byId("taskDetailActions").addEventListener("click", (event) => {
   if (action === "review-deadline-extension" && canReviewTaskDeadlineExtension(task)) {
     closeTaskDetailDialog();
     openTaskDeadlineExtensionReviewDialog(taskId);
-    return;
-  }
-  if (action === "end" && canEndTaskAssignment(task)) {
-    if (endAssignmentTask(taskId)) closeTaskDetailDialog();
     return;
   }
   if (action === "delete" && canDeleteTask(task)) {
@@ -24215,13 +23968,6 @@ byId("taskAttachmentList").addEventListener("click", (event) => {
 byId("taskAttachments").addEventListener("change", (event) => {
   renderTaskAttachmentSelection(event.target.files);
 });
-byId("assignmentTaskAttachmentList")?.addEventListener("click", (event) => {
-  const removeId = event.target.dataset.removeAssignmentAttachment;
-  if (!removeId) return;
-  assignmentAttachmentDraft = assignmentAttachmentDraft.filter((file) => file.id !== removeId);
-  renderAssignmentTaskAttachmentDraft();
-});
-
 byId("taskBoard").addEventListener("click", (event) => {
   const loadMoreStatus = event.target.closest("[data-load-more-task-status]")?.dataset.loadMoreTaskStatus;
   const statusButton = event.target.closest("[data-open-task-status]");
@@ -24249,14 +23995,6 @@ byId("taskBoard").addEventListener("click", (event) => {
   if (editId) {
     const task = state.tasks.find((item) => item.id === editId);
     if (!task || !canEditTaskDetails(task)) return;
-    if (isAssignedTask(task)) {
-      renderTaskInboxDialog();
-      byId("taskInboxDialog").classList.remove("is-hidden");
-      byId("taskInboxDialog").setAttribute("aria-hidden", "false");
-      populateAssignmentTaskForm(task);
-      byId("assignmentTaskTitle").scrollIntoView({ behavior: "smooth", block: "center" });
-      return;
-    }
     populateTaskForm(task);
     focusEditForm("taskForm", "taskTitle");
   }
@@ -24269,17 +24007,8 @@ byId("taskBoard").addEventListener("click", (event) => {
     const task = state.tasks.find((item) => item.id === respondId);
     if (!task || !canUpdateTaskProgress(task)) return;
     if (window.virtualAssistantSelectProgressTask?.(respondId) === true) return;
-    if (isAssignedTask(task)) {
-      renderTaskInboxDialog();
-      byId("taskInboxDialog").classList.remove("is-hidden");
-      byId("taskInboxDialog").setAttribute("aria-hidden", "false");
-      populateAssignmentTaskForm(task);
-      byId("assignmentTaskResponseNote").scrollIntoView({ behavior: "smooth", block: "center" });
-      (canReportTask(task) ? byId("assignmentTaskResponseStatus") : byId("assignmentTaskResponseNote")).focus({ preventScroll: true });
-      return;
-    }
     populateTaskForm(task);
-    focusEditForm("taskForm", isAssignedTask(task) ? "taskResponseStatus" : "taskNote");
+    focusEditForm("taskForm", "taskNote");
   }
   if (reviewId) {
     openTaskCompletionReviewDialog(reviewId);
@@ -24716,6 +24445,10 @@ function splitStateForExport(exported) {
         tasks: exported.tasks || [],
         calendarEvents: exported.calendarEvents || [],
         projectCatalog: exported.projectCatalog || [],
+        gpmbWorkflows: exported.gpmbWorkflows || [],
+        gpmbCases: exported.gpmbCases || [],
+        publicInvestmentAppraisals: exported.publicInvestmentAppraisals || [],
+        publicInvestmentProjects: exported.publicInvestmentProjects || [],
         evaluations: exported.evaluations || [],
         departmentEvaluations: exported.departmentEvaluations || [],
         moduleSettings: exported.moduleSettings || {},
@@ -24873,6 +24606,10 @@ function mergeOperations(target, data, timestamp, allowMissing = false) {
   if (tasks) target.tasks = mergeImportedRecords(target.tasks, tasks, timestamp);
   if (Array.isArray(data.calendarEvents)) target.calendarEvents = mergeImportedRecords(target.calendarEvents, data.calendarEvents, timestamp);
   if (projectCatalog) target.projectCatalog = mergeImportedRecords(target.projectCatalog, projectCatalog, timestamp);
+  if (Array.isArray(data.gpmbWorkflows)) target.gpmbWorkflows = mergeImportedRecords(target.gpmbWorkflows, data.gpmbWorkflows, timestamp);
+  if (Array.isArray(data.gpmbCases)) target.gpmbCases = mergeImportedRecords(target.gpmbCases, data.gpmbCases, timestamp);
+  if (Array.isArray(data.publicInvestmentAppraisals)) target.publicInvestmentAppraisals = mergeImportedRecords(target.publicInvestmentAppraisals, data.publicInvestmentAppraisals, timestamp);
+  if (Array.isArray(data.publicInvestmentProjects)) target.publicInvestmentProjects = mergeImportedRecords(target.publicInvestmentProjects, data.publicInvestmentProjects, timestamp);
   if (evaluations) target.evaluations = mergeImportedRecords(target.evaluations, evaluations, timestamp);
   if (departmentEvaluations) target.departmentEvaluations = mergeImportedRecords(target.departmentEvaluations, departmentEvaluations, timestamp);
   if (data.activePeriod) target.activePeriod = data.activePeriod;
