@@ -4329,11 +4329,11 @@ h3 {
   background: #f8fcfd;
 }
 
-.is-admin-customizable-field:is(.block, .score-panel, .task-inbox-panel, .task-kind-head, .task-column, .criteria-item, .behavior-item, .bulletin-card, .archive-card, .module-toggle-card, article) {
+.is-admin-customizable-field:is(.block, .score-panel, .task-kind-head, .task-column, .criteria-item, .behavior-item, .bulletin-card, .archive-card, .module-toggle-card, article) {
   outline-offset: 4px;
 }
 
-.is-admin-customizable-field:is(.block, .score-panel, .task-inbox-panel, .task-kind-head, .task-column, .criteria-item, .behavior-item, .bulletin-card, .archive-card, .module-toggle-card, article)::after {
+.is-admin-customizable-field:is(.block, .score-panel, .task-kind-head, .task-column, .criteria-item, .behavior-item, .bulletin-card, .archive-card, .module-toggle-card, article)::after {
   content: "Tùy biến";
   position: absolute;
   top: 6px;
@@ -5975,10 +5975,6 @@ body.is-customization-resizing {
 
 #taskForm #resetTaskForm {
   min-width: 72px;
-}
-
-.assignment-form {
-  grid-template-columns: repeat(5, minmax(145px, 1fr));
 }
 
 .wide {
@@ -7649,152 +7645,6 @@ td:last-child {
   font-family: Consolas, "Courier New", monospace;
   font-size: 0.92rem;
   line-height: 1.45;
-  white-space: pre-wrap;
-}
-
-.task-inbox-panel {
-  margin: 0;
-  display: flex;
-  justify-content: flex-start;
-}
-
-.task-inbox-button {
-  position: relative;
-  width: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 38px;
-  padding: 7px 40px 7px 10px;
-  border: 1px solid #c7d7e2;
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  text-align: left;
-  box-shadow: var(--shadow);
-}
-
-.task-inbox-button:hover {
-  background: #f4f9fc;
-  border-color: #b8d0dc;
-}
-
-.task-inbox-button strong {
-  display: block;
-  color: var(--primary-dark);
-  font-size: 0.98rem;
-}
-
-.task-inbox-button small {
-  display: none;
-  margin-top: 0;
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.task-inbox-icon {
-  width: 26px;
-  height: 18px;
-  flex: 0 0 auto;
-  border: 2px solid var(--primary);
-  border-radius: 6px;
-  background:
-    linear-gradient(135deg, transparent 48%, var(--primary) 49%, var(--primary) 52%, transparent 53%),
-    linear-gradient(225deg, transparent 48%, var(--primary) 49%, var(--primary) 52%, transparent 53%);
-}
-
-.task-inbox-badge {
-  position: absolute;
-  top: -7px;
-  right: -7px;
-  min-width: 19px;
-  height: 19px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0 6px;
-  border: 2px solid #fff;
-  border-radius: 999px;
-  background: var(--bad);
-  color: #fff;
-  font-size: 0.78rem;
-  font-weight: 800;
-}
-
-#taskInboxDialog {
-  padding: 16px;
-}
-
-.modal-card.task-inbox-modal {
-  width: min(var(--app-wide-popup-width, 1320px), calc(100vw - 32px));
-  min-height: min(680px, calc(100vh - 32px));
-  max-height: min(840px, calc(100vh - 32px));
-  overflow: auto;
-  gap: 14px;
-  align-content: start;
-  padding: 18px;
-}
-
-.task-inbox-modal .section-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding-bottom: 10px;
-  background: var(--surface);
-}
-
-.assignment-form {
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.assignment-form textarea {
-  min-height: 104px;
-}
-
-#assignmentTaskResponseNote {
-  min-height: 118px;
-}
-
-.task-inbox-list {
-  display: grid;
-  gap: 9px;
-  max-height: min(420px, 42vh);
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.task-inbox-item {
-  display: grid;
-  gap: 9px;
-  padding: 13px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.task-inbox-item h3 {
-  margin: 0;
-  color: var(--primary-dark);
-}
-
-.task-inbox-meta {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-
-.task-inbox-meta strong {
-  color: var(--text);
-}
-
-.task-inbox-note {
-  margin: 0;
-  color: var(--text);
   white-space: pre-wrap;
 }
 
@@ -10318,7 +10168,6 @@ td:last-child {
   #departmentEvaluationForm > .form-grid,
   #evaluationForm > .form-grid,
   .bulletin-layout,
-  .assignment-form,
   .formula-parameter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -10442,17 +10291,6 @@ td:last-child {
 
   .json-export-options {
     grid-template-columns: 1fr;
-  }
-
-  #taskInboxDialog {
-    padding: 10px;
-  }
-
-  .modal-card.task-inbox-modal {
-    width: min(100%, calc(100vw - 20px));
-    min-height: auto;
-    max-height: calc(100vh - 20px);
-    padding: 14px;
   }
 
   #taskDetailDialog {
@@ -10643,13 +10481,11 @@ td:last-child {
   .archive-layout,
   .archive-filter,
   .bulletin-filter,
-  .assignment-form,
   .formula-parameter-grid,
   .score-result,
   .rules-grid,
   .rules-criteria,
   .task-columns,
-  .task-inbox-meta,
   .kpi-task-detail-meta,
   .bulletin-media-grid,
   .filter-row {
@@ -10684,8 +10520,7 @@ td:last-child {
   .task-board,
   .task-kind-section,
   .task-card,
-  .task-column,
-  .task-inbox-panel {
+  .task-column {
     min-width: 0;
   }
 
@@ -10780,16 +10615,6 @@ td:last-child {
 
   .collaborator-picker .checkbox-list {
     max-height: min(200px, 38vh);
-  }
-
-  .task-inbox-button {
-    min-height: 40px;
-    padding: 7px 10px;
-    gap: 8px;
-  }
-
-  .task-inbox-button strong {
-    font-size: 0.9rem;
   }
 
   .filter-row {
@@ -11095,10 +10920,6 @@ td:last-child {
       "due time";
   }
 
-  .modal-card.task-inbox-modal {
-    padding: 11px;
-  }
-
   .modal-card.task-detail-modal {
     padding: 11px;
   }
@@ -11110,15 +10931,6 @@ td:last-child {
 
   .task-detail-actions > button {
     flex: 1 1 calc(50% - 4px);
-  }
-
-  .task-inbox-modal .section-head {
-    gap: 6px;
-  }
-
-  .task-inbox-meta {
-    gap: 6px;
-    font-size: 0.82rem;
   }
 
   .login-screen {
@@ -11854,7 +11666,6 @@ td:last-child {
     gap: 3mm !important;
   }
 
-  .task-inbox-panel,
   .modal-backdrop {
     display: none !important;
   }
@@ -14918,9 +14729,9 @@ html.is-authenticated #loginScreen,
   .topbar {
     justify-content: flex-start !important;
     text-align: left !important;
-    height: 64px !important;
-    min-height: 64px !important;
-    max-height: 64px !important;
+    height: 72px !important;
+    min-height: 72px !important;
+    max-height: 72px !important;
   }
 
   .topbar > div.topbar-brand {
@@ -14948,7 +14759,7 @@ html.is-authenticated #loginScreen,
   }
 
   .topbar::before {
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.94) 0%, rgba(255, 255, 255, 0.9) 38%, rgba(255, 255, 255, 0.7) 72%, rgba(255, 255, 255, 0.24) 100%);
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.84) 42%, rgba(255, 255, 255, 0.5) 76%, rgba(255, 255, 255, 0.12) 100%);
   }
 
   .topbar-visual {
@@ -14956,7 +14767,9 @@ html.is-authenticated #loginScreen,
   }
 
   .topbar-visual-scene {
-    object-fit: contain;
+    object-fit: cover;
+    object-position: 50% 50%;
+    filter: saturate(0.96) brightness(1.01);
   }
 
   .mobile-bottom-nav .bottom-nav-item .nav-icon {

@@ -38,6 +38,8 @@
   const restoreButton = document.getElementById("assistantRestore");
   const quickNotice = document.getElementById("assistantQuickNotice");
   const quickNoticeText = document.getElementById("assistantQuickNoticeText");
+  const quickNoticeCategory = document.getElementById("assistantQuickNoticeCategory");
+  const quickNoticeBody = document.getElementById("assistantQuickNoticeBody");
   const restoreImage = restoreButton.querySelector("img");
   const assistantPoseImage = launcher.querySelector(".assistant-launcher-pose--idle");
   const stateImages = {
@@ -397,10 +399,10 @@
     let top = placement === "above"
       ? clamp(anchor.top - height - gap, margin, window.innerHeight - height - margin)
       : clamp(anchor.bottom + gap, margin, window.innerHeight - height - margin);
-    const activeTarget = taskForm?.querySelector("[data-luna-current-step]");
+    const activeTarget = taskWizard.form?.querySelector("[data-luna-current-step]");
     if (taskWizard.active && !taskWizard.awaitingConfirmation && activeTarget) {
       const targetRect = activeTarget.getBoundingClientRect();
-      const openPickerPanels = ["taskOwnerPanel", "taskCollaboratorPanel"]
+      const openPickerPanels = taskWizard.mode === "calendar" ? [] : ["taskOwnerPanel", "taskCollaboratorPanel"]
         .map((id) => document.getElementById(id))
         .filter((element) => element && !element.classList.contains("is-hidden"))
         .map((element) => element.getBoundingClientRect());
@@ -694,6 +696,10 @@
     return Boolean(window.isSecureContext || ["localhost", "127.0.0.1"].includes(window.location.hostname));
   }
 
+  function speechRecognitionConstructor() {
+    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  }
+
   function setWakeWordStatus(message, error = false) {
     if (!wakeWordStatus) return;
     wakeWordStatus.textContent = message;
@@ -701,15 +707,25 @@
   }
 
   function syncWakePreference(accountId = activeAccountId) {
-    wakeListeningEnabled = false;
-    if (accountId) writeBooleanPreference(wakeWordPreferenceKey(accountId), false);
+    const supported = typeof speechRecognitionConstructor() === "function";
+    const secure = microphoneSecureContext();
+    const requested = Boolean(accountId && readBooleanPreference(wakeWordPreferenceKey(accountId), false));
+    wakeListeningEnabled = requested && supported && secure;
     if (wakeWordToggle) {
-      wakeWordToggle.checked = false;
-      wakeWordToggle.disabled = true;
+      wakeWordToggle.checked = wakeListeningEnabled;
+      wakeWordToggle.disabled = !accountId || !supported || !secure;
+      if (!supported) wakeWordToggle.title = "Trình duyệt này chưa hỗ trợ nhận dạng giọng nói nền.";
+      else if (!secure) wakeWordToggle.title = "Nghe nền cần HTTPS hoặc localhost.";
+      else wakeWordToggle.removeAttribute("title");
     }
-    if (!microphoneSecureContext()) setWakeWordStatus("Nghe giọng nói cần HTTPS hoặc localhost.", true);
-    else if (accountId) setWakeWordStatus("Luna không nghe nền liên tục. Bấm Nói rồi gọi “Luna ơi” để bắt đầu trao đổi.");
-    else setWakeWordStatus("");
+    stopWakeRecognition();
+    if (!accountId) setWakeWordStatus("");
+    else if (!secure) setWakeWordStatus("Nghe nền cần HTTPS hoặc localhost.", true);
+    else if (!supported) setWakeWordStatus("Trình duyệt này chưa hỗ trợ nghe nền. Bấm Nói để trao đổi từng lượt ạ.", true);
+    else if (wakeListeningEnabled) {
+      setWakeWordStatus("Đang chờ câu gọi “Luna ơi” khi trang đang mở.");
+      scheduleWakeListener(260);
+    } else setWakeWordStatus("Đã tắt nghe nền. Bấm Nói để trao đổi từng lượt.");
   }
 
   function stopLunaSpeech({ resetState = true, resumeWake = true } = {}) {
@@ -812,6 +828,18 @@
     playNextLunaSpeech();
   }
 
+  function selectLunaVietnameseVoice(voices = []) {
+    const vietnamese = Array.from(voices).filter((voice) => /^vi(?:-|$)/i.test(String(voice?.lang || "")));
+    const namedFemaleVoice = /hoai\s*my|vi[-_]vn[-_](?:neural2-a|standard-a|wavenet-a)|vi[-_]vn[-_]chirp3-hd-(?:achernar|aoede|autonoe|callirrhoe|despina|erinome|gacrux|kore|laomedeia|leda|pulcherrima|sulafat|vindemiatrix|zephyr)|vi[-_]vn[-_]linh:mai-voice-2-flash|\bfemale\b/i;
+    const explicitlyNorthern = vietnamese.find((voice) => namedFemaleVoice.test(String(voice.name || ""))
+      && /(?:north|northern|ha\s*noi|hanoi|\bbac\b)/i.test(String(voice.name || "")));
+    if (explicitlyNorthern) return explicitlyNorthern;
+    return vietnamese.find((voice) => namedFemaleVoice.test(String(voice.name || "")))
+      || vietnamese.find((voice) => voice.default)
+      || vietnamese[0]
+      || null;
+  }
+
   function playNextLunaSpeech() {
     if (!currentAccount() || document.hidden || recognition || speechActive || speechWaitingForGesture) return;
     let queuedSpeech = speechQueue.shift();
@@ -863,9 +891,8 @@
       utterance.pitch = 1.04;
       utterance.volume = 1;
       const voices = window.speechSynthesis.getVoices?.() || [];
-      const vietnameseVoices = voices.filter((voice) => /^vi(?:-|$)/i.test(String(voice.lang || "")));
-      const preferredVoice = vietnameseVoices.find((voice) => /female|hoai|linh|mai|lan|huyen|thao|vy/i.test(voice.name || ""));
-      if (preferredVoice || vietnameseVoices[0]) utterance.voice = preferredVoice || vietnameseVoices[0];
+      const preferredVoice = selectLunaVietnameseVoice(voices);
+      if (preferredVoice) utterance.voice = preferredVoice;
       activeSpeechUtterance = utterance;
       utterance.onstart = () => {
         if (sequence !== speechPlaybackSequence) return;
@@ -895,24 +922,56 @@
   function stopWakeRecognition() {
     if (wakeRestartTimer) window.clearTimeout(wakeRestartTimer);
     wakeRestartTimer = 0;
+    const capture = wakeRecognition;
     wakeRecognition = null;
+    if (capture?.engine) {
+      capture.stopped = true;
+      try { capture.engine.abort(); } catch { /* The recognition session may already be closed. */ }
+    }
   }
 
-  function scheduleWakeListener() {
-    stopWakeRecognition();
+  function scheduleWakeListener(delay = 180) {
+    if (wakeRestartTimer) window.clearTimeout(wakeRestartTimer);
+    wakeRestartTimer = 0;
+    if (!wakeListeningEnabled || !activeAccountId || document.hidden || recognition || speechActive || speechWaitingForGesture) return;
+    if (typeof speechRecognitionConstructor() !== "function") return;
+    wakeRestartTimer = window.setTimeout(() => {
+      wakeRestartTimer = 0;
+      startWakeListener();
+    }, Math.max(0, Number(delay) || 0));
   }
 
   function setWakeListeningEnabled(enabled, { persist = true, status = "" } = {}) {
-    wakeListeningEnabled = false;
+    const accountId = activeAccountId;
+    const supported = typeof speechRecognitionConstructor() === "function";
+    const secure = microphoneSecureContext();
+    const canEnable = Boolean(enabled && accountId && supported && secure);
+    wakeListeningEnabled = canEnable;
     if (wakeWordToggle) {
-      wakeWordToggle.checked = false;
-      wakeWordToggle.disabled = true;
+      wakeWordToggle.checked = canEnable;
+      wakeWordToggle.disabled = !accountId || !supported || !secure;
     }
-    if (persist && activeAccountId) writeBooleanPreference(wakeWordPreferenceKey(), false);
     stopWakeRecognition();
-    setWakeWordStatus(status || (enabled
-      ? "Luna không nghe nền liên tục. Bấm Nói rồi gọi “Luna ơi” để bắt đầu trao đổi."
-      : "Đã tắt chờ giọng nói."));
+    if (persist && accountId) writeBooleanPreference(wakeWordPreferenceKey(accountId), canEnable);
+    if (!enabled) {
+      setWakeWordStatus(status || "Đã tắt nghe nền.");
+      return false;
+    }
+    if (!accountId) {
+      setWakeWordStatus("Vui lòng đăng nhập trước khi bật nghe nền.", true);
+      return false;
+    }
+    if (!secure) {
+      setWakeWordStatus("Nghe nền cần HTTPS hoặc localhost.", true);
+      return false;
+    }
+    if (!supported) {
+      setWakeWordStatus("Trình duyệt này chưa hỗ trợ nghe nền. Bấm Nói để trao đổi từng lượt ạ.", true);
+      return false;
+    }
+    setWakeWordStatus(status || "Đang xin quyền micro để chờ câu gọi “Luna ơi”…");
+    scheduleWakeListener(120);
+    return true;
   }
 
   function wakePhraseRemainder(transcript) {
@@ -946,14 +1005,66 @@
         scheduleWakeListener(1600);
       } else {
         const status = taskWizard.active ? taskVoiceWizardStatus : voiceNotice;
-        status.textContent = "Dạ, có em đây ạ. Bấm Nói để tiếp tục trao đổi bằng giọng nói nhé.";
+        status.textContent = "Dạ, có em đây ạ. Em đang lắng nghe yêu cầu của anh/chị ạ.";
+        startVoiceCapture(taskWizard.active ? "task-wizard" : "assistant");
       }
     };
     if (!speakLunaText(greeting, { onEnd: listenForRequest })) listenForRequest();
   }
 
   function startWakeListener() {
-    setWakeListeningEnabled(false, { status: "Luna không nghe nền liên tục. Bấm Nói rồi gọi “Luna ơi” để bắt đầu trao đổi." });
+    if (!wakeListeningEnabled || !activeAccountId || document.hidden || recognition || speechActive || speechWaitingForGesture) return;
+    const Recognition = speechRecognitionConstructor();
+    if (typeof Recognition !== "function") return;
+    const accountId = activeAccountId;
+    const capture = { accountId, engine: null, stopped: false };
+    const engine = new Recognition();
+    capture.engine = engine;
+    wakeRecognition = capture;
+    engine.lang = "vi-VN";
+    engine.continuous = true;
+    engine.interimResults = true;
+    engine.maxAlternatives = 1;
+    engine.onresult = (event) => {
+      if (capture.stopped || wakeRecognition !== capture) return;
+      let transcript = "";
+      for (let index = event.resultIndex || 0; index < event.results.length; index += 1) {
+        transcript += ` ${event.results[index]?.[0]?.transcript || ""}`;
+      }
+      if (wakePhraseRemainder(transcript) !== null) {
+        capture.stopped = true;
+        respondToWakePhrase(transcript, accountId);
+      }
+    };
+    engine.onerror = (event) => {
+      if (capture.stopped || wakeRecognition !== capture) return;
+      wakeRecognition = null;
+      const error = String(event?.error || "");
+      if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(error)) {
+        wakeListeningEnabled = false;
+        if (wakeWordToggle) wakeWordToggle.checked = false;
+        writeBooleanPreference(wakeWordPreferenceKey(accountId), false);
+        setWakeWordStatus(error === "not-allowed" || error === "service-not-allowed"
+          ? "Micro chưa được cấp quyền. Cho phép micro cho trang này rồi bật lại nghe nền ạ."
+          : "Thiết bị chưa cung cấp dịch vụ nghe nền tiếng Việt; hãy dùng Bấm Nói để trao đổi từng lượt ạ.", true);
+        return;
+      }
+      setWakeWordStatus("Đang kết nối lại chế độ chờ “Luna ơi”…");
+      scheduleWakeListener(1200);
+    };
+    engine.onend = () => {
+      if (wakeRecognition !== capture) return;
+      wakeRecognition = null;
+      if (!capture.stopped && wakeListeningEnabled && !document.hidden) scheduleWakeListener(450);
+    };
+    try {
+      setWakeWordStatus("Đang chờ câu gọi “Luna ơi” khi trang đang mở.");
+      engine.start();
+    } catch (error) {
+      wakeRecognition = null;
+      if (error?.name === "InvalidStateError") scheduleWakeListener(600);
+      else setWakeWordStatus("Chưa thể khởi động micro. Hãy bật lại nghe nền sau khi cho phép micro ạ.", true);
+    }
   }
 
   function submitVoiceTranscript(transcript, accountId) {
@@ -1053,6 +1164,7 @@
       messages.replaceChildren();
       restoreAssistantHistory(nextAccountId);
     }
+    window.phucThinhRenderLunaNotificationPreferences?.();
     if (!enabled && (taskWizard.active || !taskVoiceWizard.classList.contains("is-hidden"))) exitTaskWizard();
     root.classList.toggle("is-hidden", !loggedIn || !enabled);
     const savedMinimized = loggedIn ? readAssistantMinimized(nextAccountId) : false;
@@ -1174,6 +1286,15 @@
     return `${metrics.dueToday.length} việc đến hạn, ${metrics.overdue.length} việc quá hạn, ${metrics.submittedToday.length} việc gửi hoàn thành hôm nay và ${metrics.waitingReview.length} việc chờ đánh giá`;
   }
 
+  function currentPersonalSummaryTasks() {
+    const person = typeof currentPerson === "function" ? currentPerson() : null;
+    if (!person?.id || typeof taskParticipantIds !== "function") return { personal: false, tasks: currentSummaryTasks() };
+    return {
+      personal: true,
+      tasks: currentSummaryTasks().filter((task) => taskParticipantIds(task).includes(person.id)),
+    };
+  }
+
   function loginGreetingMessage(account) {
     const { honorific, addressee, pronoun } = assistantUserProfile(account);
     const hour = new Date().getHours();
@@ -1190,7 +1311,11 @@
     if (typeof window.canViewTasks !== "function" || !window.canViewTasks()) return greeting;
     const today = new Date();
     const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    return `${greeting} Tình hình công việc (${assistantSummaryScopeLabel()}, trong phạm vi được xem): ${dailyStatusSummary(currentSummaryTasks(), todayKey)}.`;
+    const focus = currentPersonalSummaryTasks();
+    const context = focus.personal
+      ? `Phần việc của ${pronoun} hôm nay`
+      : `Tình hình công việc (${assistantSummaryScopeLabel()}, trong phạm vi được xem)`;
+    return `${greeting} ${context}: ${dailyStatusSummary(focus.tasks, todayKey)}.`;
   }
 
   function assistantUserProfile(account) {
@@ -1213,19 +1338,26 @@
 
   function presentQuickNotice(notice) {
     quickNoticeItem = notice;
+    const category = ["system", "calendar", "task", "proactive"].includes(notice.displayCategory)
+      ? notice.displayCategory : "proactive";
     if (quickNoticeText) {
-      quickNoticeText.textContent = notice.messageOnly
+      if (quickNoticeCategory) quickNoticeCategory.textContent = category === "system"
+        ? "THÔNG BÁO HỆ THỐNG" : category === "calendar" ? "NHẮC LỊCH CÔNG VIỆC" : "LUNA NHẮC VIỆC";
+      const message = notice.messageOnly
         ? notice.message
         : notice.message ? `${notice.title}: ${notice.message}` : notice.title;
+      if (quickNoticeBody) quickNoticeBody.textContent = message;
+      else quickNoticeText.textContent = message;
     }
     if (!quickNotice) return;
+    quickNotice.dataset.category = category;
     quickNotice.dataset.priority = ["warning", "danger", "success"].includes(notice.priority) ? notice.priority : "info";
     quickNotice.classList.remove("is-hidden");
     window.requestAnimationFrame(positionQuickNotice);
     const noticeExpression = notice.id.startsWith("birthday:") ? "cake"
       : notice.priority === "success" ? "happy" : "notes";
     setAssistantExpression(noticeExpression, { duration: 9000 });
-    const speechQueued = speakLunaText(quickNoticeText?.textContent || notice.message || notice.title, {
+    const speechQueued = speakLunaText(quickNoticeBody?.textContent || notice.message || notice.title, {
       kind: "announcement",
       announcementId: notice.id,
     });
@@ -1314,11 +1446,17 @@
     const account = typeof currentAccount === "function" ? currentAccount() : null;
     if (!assistantIsEnabled() || !account || !item || window.virtualAssistantShouldSuppressProactive?.()
       || (item.recipientAccountId && String(item.recipientAccountId) !== String(account.id))) return false;
+    const id = String(item.id || `assistant-notice:${Date.now()}`);
+    const category = item.category === "calendar" ? "calendar"
+      : item.category === "task" ? "task"
+      : item.targetType === "luna-announcement" || (item.category === "system" && !/^(?:birthday:|bulletin-update:)/.test(id))
+        ? "system" : "proactive";
     const notice = {
-      id: String(item.id || `assistant-notice:${Date.now()}`),
+      id,
       title: String(item.title || "Thông báo hệ thống"),
       message: String(item.message || ""),
       priority: String(item.priority || "info"),
+      displayCategory: category,
       targetType: String(item.targetType || ""),
       targetId: String(item.targetId || ""),
       messageOnly: item.messageOnly === true,
@@ -1586,9 +1724,9 @@
       today.setDate(today.getDate() + (relative === "ngay mai" ? 1 : 2));
       return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     }
-    const iso = source.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
-    const local = source.match(/\b(\d{1,2})[/. \-](\d{1,2})[/. \-](20\d{2})\b/);
-    const spoken = source.match(/(?:ngày\s*)?(\d{1,2})\s+tháng\s+(\d{1,2})(?:\s+năm\s+(20\d{2}))?/i);
+    const iso = source.match(/\b((?:19|20)\d{2})-(\d{1,2})-(\d{1,2})\b/);
+    const local = source.match(/\b(\d{1,2})[/. \-](\d{1,2})[/. \-]((?:19|20)\d{2})\b/);
+    const spoken = source.match(/(?:ngày\s*)?(\d{1,2})\s+tháng\s+(\d{1,2})(?:\s+năm\s+((?:19|20)\d{2}))?/i);
     const shortLocal = source.match(/\b(\d{1,2})[/. \-](\d{1,2})\b/);
     const parts = iso ? [Number(iso[1]), Number(iso[2]), Number(iso[3])]
       : local ? [Number(local[3]), Number(local[2]), Number(local[1])]
@@ -1604,12 +1742,62 @@
     return assistantUserProfile(currentAccount()).pronoun;
   }
 
-  function taskWizardField(step) {
+  function taskWizardCanSave() {
+    const accountId = String(currentAccount()?.id || "");
+    if (!accountId || accountId !== taskWizard.accountId) return false;
+    if (taskWizard.mode === "calendar") return window.virtualAssistantCanManageCalendar?.(accountId) === true;
+    if (taskWizard.mode === "people") return typeof canEditPeople === "function" && canEditPeople();
     if (taskWizard.mode === "progress") {
-      const assigned = taskWizard.kind === "assigned";
-      const ids = assigned
-        ? { status: "assignmentTaskStatus", progress: "assignmentTaskProgress", progressReport: "assignmentTaskResponseNote" }
-        : { status: "taskStatus", progress: "taskProgress", progressReport: "taskNote" };
+      const task = currentTasks().find((item) => String(item.id) === taskWizard.taskId);
+      return taskWizard.taskId
+        ? !!task && typeof canUpdateTaskProgress === "function" && canUpdateTaskProgress(task)
+        : typeof canViewTasks === "function" && canViewTasks();
+    }
+    return typeof canCreateRegularTasks === "function" && canCreateRegularTasks();
+  }
+
+  function taskWizardField(step) {
+    if (taskWizard.mode === "calendar") {
+      const ids = {
+        title: "calendarTitle",
+        date: "calendarDate",
+        startTime: "calendarTime",
+        endTime: "calendarEndTime",
+        location: "calendarLocation",
+        recurrence: "calendarRecurrence",
+        reminder: "calendarReminderEnabled",
+        leaders: "calendarLeaders",
+        departments: "calendarDepartments",
+        allHands: "calendarAllHands",
+        participants: "calendarParticipants",
+        note: "calendarNote",
+        conclusion: "calendarConclusion",
+      };
+      return document.getElementById(ids[step?.key] || "");
+    }
+    if (taskWizard.mode === "people") {
+      const ids = {
+        name: "personName",
+        gender: "personGender",
+        department: "personDepartment",
+        role: "personRole",
+        sectionHead: "personSectionHead",
+        contract: "personContract",
+        qualification: "personQualification",
+        contractTerm: "personContractTerm",
+        contractSignedDate: "personContractSignedDate",
+        phone: "personPhone",
+        birthDate: "personBirthDate",
+        salaryCoefficient: "personSalaryCoefficient",
+        salaryGrade: "personSalaryGrade",
+        salaryReviewDate: "personSalaryReviewDate",
+        address: "personAddress",
+        note: "personNote",
+      };
+      return document.getElementById(ids[step?.key] || "");
+    }
+    if (taskWizard.mode === "progress") {
+      const ids = { status: "taskStatus", progress: "taskProgress", progressReport: "taskNote" };
       return document.getElementById(ids[step?.key] || "");
     }
     const ids = {
@@ -1678,6 +1866,56 @@
     ];
   }
 
+  function buildCalendarWizardSteps() {
+    return [
+      { key: "title", label: "Nội dung lịch", question: "Lịch hoặc cuộc họp cần tạo có nội dung gì ạ?" },
+      { key: "date", label: "Ngày", question: "Lịch này diễn ra vào ngày nào ạ?" },
+      { key: "startTime", label: "Giờ bắt đầu", question: "Mời anh/chị cho em giờ bắt đầu, ví dụ 8 giờ 30 ạ." },
+      { key: "endTime", label: "Giờ kết thúc", optional: true, question: "Giờ kết thúc là mấy giờ ạ? Có thể bỏ qua nếu chưa xác định." },
+      { key: "location", label: "Địa điểm", question: "Lịch diễn ra ở đâu ạ?" },
+      { key: "recurrence", label: "Lặp lại", question: "Lịch không lặp lại, lặp hàng ngày hay hàng tuần ạ?" },
+      { key: "reminder", label: "Nhắc lịch", question: "Có bật nhắc lịch công việc không ạ?" },
+      { key: "leaders", label: "Lãnh đạo", optional: true, question: "Chọn lãnh đạo tham dự nếu có; có thể nêu tên, chọn trực tiếp hoặc bỏ qua ạ." },
+      { key: "departments", label: "Phòng chuẩn bị", optional: true, question: "Phòng nào cần chuẩn bị ạ? Có thể nêu tên phòng, chọn trực tiếp hoặc bỏ qua." },
+      { key: "allHands", label: "Phạm vi tham dự", question: "Lịch này áp dụng cho toàn thể hay chỉ những người được chọn ạ?" },
+      { key: "participants", label: "Thành phần tham dự", optional: true, question: "Mời anh/chị nêu tên người tham dự, chọn trực tiếp hoặc bỏ qua ạ." },
+      { key: "note", label: "Ghi chú / nội dung chuẩn bị", optional: true, question: "Có ghi chú hoặc nội dung cần chuẩn bị không ạ? Có thể nói nội dung hoặc bỏ qua." },
+      { key: "conclusion", label: "Kết luận cuộc họp", optional: true, question: "Có kết luận cuộc họp để ghi trước không ạ? Có thể nhập nội dung hoặc bỏ qua." },
+    ].filter((step) => {
+      const field = taskWizardField(step);
+      if (!field) return false;
+      if (["leaders", "departments", "participants"].includes(step.key)) {
+        return field.querySelectorAll('input[type="checkbox"]').length > 0;
+      }
+      return !field.disabled && !field.closest(".is-hidden");
+    });
+  }
+
+  function buildPersonWizardSteps() {
+    const definitions = [
+      { key: "name", label: "Họ và tên", question: "Họ và tên nhân sự cần thêm là gì ạ?" },
+      { key: "gender", label: "Giới tính", optional: true, question: "Nhân sự là nam hay nữ ạ? Có thể bỏ qua nếu chưa cập nhật." },
+      { key: "department", label: "Phòng", question: "Mời {address} chọn phòng làm việc ạ. {manual}" },
+      { key: "role", label: "Vị trí", question: "Mời {address} chọn vị trí công tác ạ. {manual}" },
+      { key: "sectionHead", label: "Trưởng bộ phận/Trưởng nhóm quản lý trực tiếp", optional: true, question: "Có cần chọn Trưởng bộ phận hoặc Trưởng nhóm quản lý trực tiếp không ạ? {manual}" },
+      { key: "contract", label: "Loại hợp đồng", question: "Nhân sự này thuộc biên chế, hợp đồng chuyên môn hay hợp đồng khoán/thời vụ ạ? {manual}" },
+      { key: "qualification", label: "Trình độ chuyên môn", optional: true, question: "Trình độ chuyên môn của nhân sự là gì ạ? Có thể bỏ qua nếu chưa có thông tin." },
+      { key: "contractTerm", label: "Thời hạn hợp đồng", optional: true, question: "Thời hạn hợp đồng là gì ạ? Có thể nói không xác định thời hạn hoặc bỏ qua." },
+      { key: "contractSignedDate", label: "Ngày ký hợp đồng", optional: true, question: "Ngày ký hợp đồng là ngày nào ạ? Có thể bỏ qua." },
+      { key: "phone", label: "Điện thoại", optional: true, question: "Số điện thoại liên hệ là gì ạ? Có thể bỏ qua." },
+      { key: "birthDate", label: "Ngày sinh", optional: true, question: "Ngày sinh của nhân sự là ngày nào ạ? Có thể bỏ qua." },
+      { key: "salaryCoefficient", label: "Hệ số lương", optional: true, question: "Hệ số lương là bao nhiêu ạ? Có thể bỏ qua." },
+      { key: "salaryGrade", label: "Bậc lương", optional: true, question: "Bậc lương là gì ạ? Có thể bỏ qua." },
+      { key: "salaryReviewDate", label: "Thời điểm xét nâng lương", optional: true, question: "Thời điểm xét nâng lương là ngày nào ạ? Có thể bỏ qua." },
+      { key: "address", label: "Địa chỉ cư trú", optional: true, question: "Địa chỉ cư trú là gì ạ? Có thể bỏ qua." },
+      { key: "note", label: "Ghi chú", optional: true, question: "Có ghi chú hoặc phân công đặc thù cần thêm không ạ? Có thể bỏ qua." },
+    ];
+    return definitions.filter((step) => {
+      const field = taskWizardField(step);
+      return field && !field.disabled && !field.closest(".is-hidden");
+    });
+  }
+
   function taskWizardSetStatus(message) {
     if (!taskVoiceWizardStatus) return;
     taskVoiceWizardStatus.textContent = String(message || "");
@@ -1698,6 +1936,10 @@
   }
 
   function taskWizardAnswerSummary(step) {
+    if (taskWizard.mode === "calendar" && ["leaders", "departments", "participants"].includes(step.key)) {
+      return Array.from(taskWizardField(step)?.querySelectorAll('input[type="checkbox"]:checked') || [])
+        .map((checkbox) => checkbox.closest("label")?.textContent?.trim() || checkbox.value).join(", ") || "Không chọn";
+    }
     if (step.key === "collaborators" || step.key === "dependencies") {
       const containerId = step.key === "collaborators" ? "taskCollaborators" : "taskDependencies";
       const selected = Array.from(document.querySelectorAll(`#${containerId} input[type="checkbox"]:checked`));
@@ -1708,12 +1950,13 @@
     }
     const field = taskWizardField(step);
     if (!field) return "Đã cập nhật";
+    if (taskWizard.mode === "calendar" && field.type === "checkbox") return field.checked ? "Có" : "Không";
     if (field.tagName === "SELECT") return field.selectedOptions[0]?.textContent?.trim() || field.value;
     return String(field.value || "").trim() || "Để trống";
   }
 
   function clearTaskWizardHighlight() {
-    document.querySelectorAll("#taskForm [data-luna-current-step], #assignmentTaskForm [data-luna-current-step]")
+    document.querySelectorAll("#taskForm [data-luna-current-step], #calendarForm [data-luna-current-step], #personForm [data-luna-current-step]")
       .forEach((element) => element.removeAttribute("data-luna-current-step"));
   }
 
@@ -1725,14 +1968,20 @@
       return;
     }
     const focusIds = taskWizard.mode === "progress"
-      ? { status: taskWizard.kind === "assigned" ? "assignmentTaskStatus" : "taskStatusChoices" }
-      : { owner: "taskOwnerToggle", collaborators: "taskCollaboratorToggle", status: "taskStatusChoices", dependencies: "taskDependencies" };
+      ? { status: "taskStatusChoices" }
+      : taskWizard.mode === "calendar"
+        ? { leaders: "calendarLeaders", departments: "calendarDepartments", participants: "calendarParticipants" }
+        : taskWizard.mode === "people"
+          ? {}
+        : { owner: "taskOwnerToggle", collaborators: "taskCollaboratorToggle", status: "taskStatusChoices", dependencies: "taskDependencies" };
     const field = document.getElementById(focusIds[step.key] || taskWizardField(step)?.id || "");
     if (!field) return;
-    const container = field.closest("label, .task-owner-field, .task-collaborator-field") || field;
+    const container = field.closest("label, fieldset, .task-owner-field, .task-collaborator-field") || field;
     container.setAttribute("data-luna-current-step", "true");
     const focusTarget = step.key === "status" || step.key === "dependencies"
       ? field.querySelector('input:not(:disabled)') || field
+      : ["leaders", "departments", "participants"].includes(step.key)
+        ? field.querySelector('input:not(:disabled)') || field
       : field;
     focusTarget.focus?.({ preventScroll: true });
     container.scrollIntoView?.({ behavior: "smooth", block: "center" });
@@ -1753,19 +2002,15 @@
 
   function askTaskWizardStep() {
     if (!taskWizard.active) return;
-    const currentAccountId = String(currentAccount()?.id || "");
-    const progressTask = taskWizard.mode === "progress" && taskWizard.taskId
-      ? currentTasks().find((item) => String(item.id) === taskWizard.taskId)
-      : null;
-    const permissionValid = taskWizard.mode === "progress"
-      ? currentAccountId === taskWizard.accountId && (taskWizard.taskId
-        ? !!progressTask && typeof canUpdateTaskProgress === "function" && canUpdateTaskProgress(progressTask)
-        : typeof canViewTasks === "function" && canViewTasks())
-      : !!currentAccount() && typeof canCreateRegularTasks === "function" && canCreateRegularTasks();
-    if (!permissionValid) {
-      exitTaskWizard(taskWizard.mode === "progress"
-        ? "Quyền cập nhật công việc đã thay đổi hoặc công việc không còn khả dụng. Em đã dừng và chưa lưu dữ liệu ạ."
-        : "Quyền tạo công việc không còn khả dụng; em đã dừng hướng dẫn và chưa lưu dữ liệu ạ.");
+    if (!taskWizardCanSave()) {
+      const message = taskWizard.mode === "calendar"
+        ? "Quyền tạo lịch đã thay đổi hoặc máy chủ chưa hỗ trợ lưu lịch. Em đã dừng hướng dẫn và chưa lưu dữ liệu ạ."
+        : taskWizard.mode === "people"
+          ? "Quyền thêm nhân sự đã thay đổi. Em đã dừng hướng dẫn và chưa lưu dữ liệu ạ."
+        : taskWizard.mode === "progress"
+          ? "Quyền cập nhật công việc đã thay đổi hoặc công việc không còn khả dụng. Em đã dừng và chưa lưu dữ liệu ạ."
+          : "Quyền tạo công việc không còn khả dụng; em đã dừng hướng dẫn và chưa lưu dữ liệu ạ.";
+      exitTaskWizard(message);
       return;
     }
     if (taskWizard.index >= taskWizard.steps.length) {
@@ -1782,6 +2027,7 @@
     taskVoiceWizardSkip.classList.toggle("is-hidden", !step.optional);
     taskVoiceWizardSpeak.disabled = false;
     taskWizardSetStatus(step.key === "collaborators" || step.key === "dependencies"
+      || (taskWizard.mode === "calendar" && ["leaders", "departments", "participants"].includes(step.key))
       ? `Có thể chọn nhiều mục; nói “không có” nếu không cần. ${address} cũng có thể bấm Tiếp tục.`
       : step.key === "attachments"
         ? "Chọn tệp trực tiếp hoặc bấm Bỏ qua mục này. Em không tự tạo hay đính kèm hồ sơ."
@@ -1790,12 +2036,12 @@
       : step.key === "note"
         ? "Mục này không bắt buộc; có thể nói nội dung, nhập tay hoặc bỏ qua."
         : step.key === "task"
-          ? "Em chỉ tìm trong công việc anh/chị được phép cập nhật."
+          ? "Có thể nói hoặc gõ tên công việc; nếu có nhiều việc trùng tên, hãy bấm nút “Cập nhật” ngay trên đúng thẻ công việc để em tiếp tục ạ."
           : "Em đang chờ câu trả lời cho mục này; chưa có thông tin nào được lưu.");
     taskWizardReply.placeholder = taskWizard.awaitingConfirmation ? "Nói có để lưu, chưa để giữ bản nháp..." : "Trả lời Luna...";
     taskVoiceWizard.classList.remove("is-condensed");
     taskWizardFocus(step);
-    setAssistantExpression(step.key === "title" ? "happy" : ["project", "category", "blockerStatus"].includes(step.key) ? "research" : "notes", { duration: 5000 });
+    setAssistantExpression(["title", "name"].includes(step.key) ? "happy" : ["project", "category", "department", "role", "blockerStatus", "date", "startTime", "recurrence", "leaders", "departments", "participants"].includes(step.key) ? "research" : "notes", { duration: 5000 });
     positionTaskWizardBubble();
     const spoken = speakLunaText(taskVoiceWizardPrompt.textContent);
     if (!spoken) {
@@ -1807,6 +2053,30 @@
   }
 
   function taskWizardCurrentValue(step) {
+    if (taskWizard.mode === "calendar") {
+      if (["leaders", "departments", "participants", "note", "conclusion"].includes(step.key)) return true;
+      const field = taskWizardField(step);
+      if (!field) return false;
+      if (step.key === "endTime" && !field.value) return true;
+      if (step.key === "title" || step.key === "location") return Boolean(field.value.trim());
+      if (step.key === "date") return Boolean(draftDate(field.value));
+      if (step.key === "startTime") return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(field.value);
+      if (step.key === "endTime") return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(field.value) && field.value > taskWizardField({ key: "startTime" })?.value;
+      if (step.key === "recurrence") return ["none", "daily", "weekly"].includes(field.value);
+      if (field.type === "checkbox") return true;
+      return false;
+    }
+    if (taskWizard.mode === "people") {
+      const field = taskWizardField(step);
+      if (!field) return false;
+      if (step.optional) return true;
+      if (step.key === "name") return Boolean(field.value.trim());
+      if (field.tagName === "SELECT") {
+        const option = field.selectedOptions?.[0];
+        return Boolean(!field.disabled && field.value && option && !option.disabled);
+      }
+      return Boolean(field.value?.trim());
+    }
     if (["collaborators", "dependencies", "attachments", "quality", "followUp", "blockerNote"].includes(step.key)) return true;
     if (step.key === "task") return Boolean(String(taskWizard.suggestedTaskQuery || "").trim());
     if (step.key === "status") {
@@ -1841,7 +2111,18 @@
     if (!taskWizard.active || taskWizard.index >= taskWizard.steps.length) return;
     const step = taskWizard.steps[taskWizard.index];
     if (!taskWizardCurrentValue(step)) {
-      const message = step.key === "owner"
+      const message = taskWizard.mode === "calendar"
+        ? step.key === "title" ? "Mời anh/chị nhập hoặc nói nội dung lịch trước khi tiếp tục ạ."
+          : step.key === "date" ? "Ngày chưa hợp lệ. Anh/chị thử nói ngày hôm nay, ngày mai hoặc ngày/tháng/năm ạ."
+            : step.key === "startTime" || step.key === "endTime" ? "Giờ chưa hợp lệ. Hãy nhập hoặc nói theo dạng 8 giờ 30; giờ kết thúc phải sau giờ bắt đầu ạ."
+              : step.key === "location" ? "Mời anh/chị nhập địa điểm trước khi tiếp tục ạ."
+                : "Mời anh/chị chọn hoặc nhập giá trị hợp lệ trong biểu mẫu lịch ạ."
+        : taskWizard.mode === "people"
+          ? step.key === "name" ? "Mời anh/chị nhập họ và tên nhân sự trước khi tiếp tục ạ."
+            : step.key === "department" ? "Mục này cần chọn phòng làm việc hợp lệ trước khi tiếp tục ạ."
+              : step.key === "role" ? "Mục này cần chọn vị trí công tác hợp lệ trước khi tiếp tục ạ."
+                : "Vui lòng chọn hoặc nhập giá trị hợp lệ trước khi tiếp tục ạ."
+        : step.key === "owner"
         ? "Mục này cần chọn người thực hiện trước khi tiếp tục ạ."
         : step.key === "project" ? "Mục này cần chọn một dự án trong danh sách ạ."
           : step.key === "category" ? "Mục này cần chọn danh mục nhiệm vụ hợp lệ ạ."
@@ -1853,16 +2134,28 @@
     stopLunaSpeech({ resetState: false, resumeWake: false });
     if (recordAnswer) appendTaskWizardMessage("user", `${step.label}: ${taskWizardAnswerSummary(step)}`);
     taskWizard.index += 1;
+    if (taskWizard.mode === "calendar" && ["allHands", "participants"].includes(step.key)
+      && taskWizardField({ key: "allHands" })?.checked) {
+      taskWizard.steps = taskWizard.steps.filter((item) => item.key !== "participants");
+    }
     askTaskWizardStep();
   }
 
   function skipTaskWizardStep() {
     const step = taskWizard.steps[taskWizard.index];
     if (!taskWizard.active || !step?.optional) return;
-    if (["collaborators", "dependencies"].includes(step.key)) {
-      const containerId = step.key === "collaborators" ? "taskCollaborators" : "taskDependencies";
+    if (["collaborators", "dependencies", "leaders", "departments", "participants"].includes(step.key)) {
+      const containerId = taskWizard.mode === "calendar"
+        ? ({ leaders: "calendarLeaders", departments: "calendarDepartments", participants: "calendarParticipants" })[step.key]
+        : step.key === "collaborators" ? "taskCollaborators" : "taskDependencies";
       document.querySelectorAll(`#${containerId} input[type="checkbox"]`).forEach((checkbox) => { checkbox.checked = false; });
       document.getElementById(containerId)?.dispatchEvent(new Event("change", { bubbles: true }));
+    } else if (taskWizard.mode === "calendar" || taskWizard.mode === "people") {
+      const field = taskWizardField(step);
+      if (field && field.type !== "checkbox") {
+        field.value = "";
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+      }
     }
     appendTaskWizardMessage("user", `${step.label}: Bỏ qua`);
     taskWizard.index += 1;
@@ -1875,14 +2168,23 @@
     taskVoiceWizard.classList.remove("is-condensed");
     taskVoiceWizardPrompt.textContent = taskWizard.mode === "progress"
       ? `Em đã điền Trạng thái, Tiến độ và Báo cáo tiến độ vào biểu mẫu. ${taskWizardAddress()}, mình kiểm tra lại rồi xác nhận có lưu cập nhật công việc này không ạ? Nói “có” hoặc bấm Lưu để lưu; nói “chưa” để giữ bản nháp. Em chưa tự lưu ạ.`
-      : `Em đã điền lần lượt các mục vào biểu mẫu. ${taskWizardAddress()}, vui lòng kiểm tra lại thông tin. ${taskWizardAddress()} có muốn lưu công việc này không ạ? Hãy nói “có” để lưu hoặc bấm nút Lưu công việc; nói “chưa” để giữ nguyên bản nháp. Em chưa tự lưu ạ.`;
+      : taskWizard.mode === "calendar"
+        ? `Em đã điền các mục vào biểu mẫu lịch. ${taskWizardAddress()} vui lòng kiểm tra lại nội dung, ngày giờ, người tham dự và xác nhận có lưu lịch này không ạ? Nói “có” hoặc bấm Lưu cuộc họp để lưu; nói “chưa” để giữ bản nháp. Em chưa tự lưu ạ.`
+        : taskWizard.mode === "people"
+          ? `Em đã điền thông tin nhân sự vào biểu mẫu. ${taskWizardAddress()} vui lòng kiểm tra lại họ tên, phòng, vị trí và các thông tin liên quan. ${taskWizardAddress()} có muốn lưu nhân sự này không ạ? Nói “có” hoặc bấm Lưu tài khoản để lưu; nói “chưa” để giữ bản nháp. Em chưa tự lưu ạ.`
+        : `Em đã điền lần lượt các mục vào biểu mẫu. ${taskWizardAddress()}, vui lòng kiểm tra lại thông tin. ${taskWizardAddress()} có muốn lưu công việc này không ạ? Hãy nói “có” để lưu hoặc bấm nút Lưu công việc; nói “chưa” để giữ nguyên bản nháp. Em chưa tự lưu ạ.`;
     taskVoiceWizardCompactPrompt.textContent = taskWizard.mode === "progress"
       ? "Anh/chị xác nhận lưu cập nhật công việc nhé?"
-      : "Anh/chị xác nhận lưu công việc này nhé?";
+      : taskWizard.mode === "calendar" ? "Anh/chị xác nhận lưu lịch này nhé?"
+        : taskWizard.mode === "people" ? "Anh/chị xác nhận lưu nhân sự này nhé?" : "Anh/chị xác nhận lưu công việc này nhé?";
     appendTaskWizardMessage("assistant", taskVoiceWizardPrompt.textContent);
     taskVoiceWizardContinue.classList.add("is-hidden");
     taskVoiceWizardSkip.classList.add("is-hidden");
-    taskWizardSetStatus("Chỉ câu trả lời xác nhận hoặc thao tác bấm Lưu công việc mới gửi dữ liệu qua luồng lưu hiện có.");
+    taskWizardSetStatus(taskWizard.mode === "calendar"
+      ? "Chỉ sau khi xác nhận hoặc bấm Lưu cuộc họp, biểu mẫu mới gửi qua luồng lưu lịch hiện có."
+      : taskWizard.mode === "people"
+        ? "Chỉ sau khi xác nhận hoặc bấm Lưu tài khoản, biểu mẫu mới gửi qua luồng lưu nhân sự hiện có."
+        : "Chỉ câu trả lời xác nhận hoặc thao tác bấm Lưu công việc mới gửi dữ liệu qua luồng lưu hiện có.");
     taskWizardReply.placeholder = "Có để lưu, chưa để giữ bản nháp...";
     taskWizardReply.focus({ preventScroll: true });
     positionTaskWizardBubble();
@@ -1921,7 +2223,11 @@
     taskVoiceWizardSpeak.classList.add("is-hidden");
     taskVoiceWizardContinue.classList.add("is-hidden");
     taskVoiceWizardSkip.classList.add("is-hidden");
-    taskWizardSetStatus("Thông tin vẫn còn trong biểu mẫu. Có thể chỉnh sửa rồi bấm Lưu công việc khi sẵn sàng.");
+    taskWizardSetStatus(taskWizard.mode === "calendar"
+      ? "Thông tin lịch vẫn còn trong biểu mẫu để anh/chị chỉnh sửa hoặc lưu sau."
+      : taskWizard.mode === "people"
+        ? "Thông tin nhân sự vẫn còn trong biểu mẫu. Có thể chỉnh sửa rồi bấm Lưu tài khoản khi sẵn sàng."
+        : "Thông tin vẫn còn trong biểu mẫu. Có thể chỉnh sửa rồi bấm Lưu công việc khi sẵn sàng.");
     appendTaskWizardMessage("assistant", message);
     positionTaskWizardBubble();
     speakLunaText(message);
@@ -1931,7 +2237,9 @@
     if (taskWizard.active) {
       appendTaskWizardMessage("assistant", taskWizard.mode === "progress"
         ? "Dạ, em đang cùng mình cập nhật công việc rồi ạ. Mình trả lời mục đang hiện trên khung hội thoại nhé."
-        : "Dạ, em đang cùng mình tạo công việc rồi ạ. Mình trả lời mục đang hiện trên khung hội thoại nhé.");
+        : taskWizard.mode === "calendar" ? "Dạ, em đang cùng mình tạo lịch rồi ạ. Mình trả lời mục đang hiện trên khung hội thoại nhé."
+          : taskWizard.mode === "people" ? "Dạ, em đang cùng mình thêm nhân sự rồi ạ. Mình trả lời mục đang hiện trên khung hội thoại nhé."
+          : "Dạ, em đang cùng mình tạo công việc rồi ạ. Mình trả lời mục đang hiện trên khung hội thoại nhé.");
       return;
     }
     if (typeof canCreateRegularTasks !== "function" || !canCreateRegularTasks()) {
@@ -1974,6 +2282,90 @@
     }, 90);
   }
 
+  function startCalendarWizard() {
+    if (taskWizard.active) {
+      appendTaskWizardMessage("assistant", "Dạ, em đang đồng hành một biểu mẫu khác. Mình hoàn tất hoặc dừng hướng dẫn hiện tại trước nhé ạ.");
+      return;
+    }
+    const accountId = String(currentAccount()?.id || "");
+    if (!accountId || typeof window.virtualAssistantCanManageCalendar !== "function"
+      || !window.virtualAssistantCanManageCalendar(accountId)) {
+      appendMessage("assistant", "Tài khoản này chưa có quyền tạo lịch công việc hoặc máy chủ hiện chưa hỗ trợ lưu lịch ạ.");
+      return;
+    }
+    if (!panel.classList.contains("is-hidden")) setPanelOpen(false, { restoreFocus: false });
+    const form = window.virtualAssistantOpenCalendarForm?.(accountId);
+    if (!form) {
+      appendMessage("assistant", "Em chưa mở được biểu mẫu Lịch công việc. Em chưa tạo hay lưu dữ liệu nào; anh/chị vui lòng mở lại mục Lịch công việc rồi thử lại ạ.");
+      return;
+    }
+    taskWizard.mode = "calendar";
+    taskWizard.accountId = accountId;
+    taskWizard.taskId = "";
+    taskWizard.kind = "";
+    taskWizard.form = form;
+    taskWizard.steps = buildCalendarWizardSteps();
+    taskWizard.index = 0;
+    taskWizard.active = true;
+    taskWizard.awaitingConfirmation = false;
+    taskWizard.applyingAnswer = false;
+    taskWizardConversation.replaceChildren();
+    taskWizardReply.value = "";
+    taskVoiceWizard.setAttribute("aria-label", "Luna đồng hành tạo lịch công việc");
+    document.getElementById("taskWizardModeLabel").textContent = "Cùng tạo lịch công việc";
+    root.classList.add("is-task-wizard");
+    taskVoiceWizard.classList.remove("is-hidden");
+    taskWizardReplyForm.classList.remove("is-hidden");
+    positionTaskWizardBubble();
+    askTaskWizardStep();
+  }
+
+  function startPeopleWizard() {
+    if (taskWizard.active) {
+      appendTaskWizardMessage("assistant", "Dạ, em đang đồng hành một biểu mẫu khác. Mình hoàn tất hoặc dừng hướng dẫn hiện tại trước nhé ạ.");
+      return;
+    }
+    if (typeof canEditPeople !== "function" || !canEditPeople()) {
+      appendMessage("assistant", "Tài khoản này chưa được cấp quyền thêm nhân sự nên em chưa thể mở hướng dẫn ạ.");
+      return;
+    }
+    const peopleNav = document.querySelector('.nav-item[data-view="people"]');
+    if (peopleNav && !document.getElementById("people")?.classList.contains("is-active")) peopleNav.click();
+    window.setTimeout(() => {
+      if (!currentAccount() || typeof canEditPeople !== "function" || !canEditPeople()) {
+        appendMessage("assistant", "Quyền thêm nhân sự đã thay đổi; em chưa mở biểu mẫu ạ.");
+        return;
+      }
+      const trigger = document.getElementById("openPersonForm");
+      const form = document.getElementById("personForm");
+      if (!trigger || !form || trigger.classList.contains("is-hidden")) {
+        appendMessage("assistant", "Em chưa thể mở biểu mẫu thêm nhân sự lúc này. Anh/chị vui lòng vào mục Nhân sự để thử lại ạ.");
+        return;
+      }
+      if (!panel.classList.contains("is-hidden")) setPanelOpen(false, { restoreFocus: false });
+      trigger.click();
+      taskWizard.mode = "people";
+      taskWizard.accountId = String(currentAccount()?.id || "");
+      taskWizard.taskId = "";
+      taskWizard.kind = "";
+      taskWizard.form = form;
+      taskWizard.steps = buildPersonWizardSteps();
+      taskWizard.index = 0;
+      taskWizard.active = true;
+      taskWizard.awaitingConfirmation = false;
+      taskWizard.applyingAnswer = false;
+      taskWizardConversation.replaceChildren();
+      taskWizardReply.value = "";
+      taskVoiceWizard.setAttribute("aria-label", "Luna đồng hành thêm nhân sự");
+      document.getElementById("taskWizardModeLabel").textContent = "Cùng thêm nhân sự";
+      root.classList.add("is-task-wizard");
+      taskVoiceWizard.classList.remove("is-hidden");
+      taskWizardReplyForm.classList.remove("is-hidden");
+      positionTaskWizardBubble();
+      askTaskWizardStep();
+    }, 90);
+  }
+
   function taskWizardSelectOption(select, answer) {
     const options = Array.from(select.options).filter((option) => option.value && !option.disabled);
     const matched = uniqueDraftMatch(options, answer, (option) => option.textContent || option.label || option.value);
@@ -1987,6 +2379,16 @@
     let answer = String(value || "").trim().replace(/[.!?]+$/g, "");
     const prefixes = {
       title: /^(?:(?:tên|tiêu đề) công việc\s*(?:là)?\s*)/i,
+      date: /^(?:(?:ngày diễn ra|ngày họp|ngày lịch)\s*(?:là)?\s*)/i,
+      startTime: /^(?:(?:giờ bắt đầu|thời gian bắt đầu|bắt đầu lúc)\s*(?:là)?\s*)/i,
+      endTime: /^(?:(?:giờ kết thúc|thời gian kết thúc|kết thúc lúc)\s*(?:là)?\s*)/i,
+      location: /^(?:(?:địa điểm|nơi họp|địa chỉ)\s*(?:là)?\s*)/i,
+      reminder: /^(?:nhắc lịch\s*(?:là)?\s*)/i,
+      allHands: /^(?:(?:phạm vi tham dự|thành phần tham dự)\s*(?:là)?\s*)/i,
+      leaders: /^(?:lãnh đạo\s*(?:tham dự)?\s*(?:là)?\s*)/i,
+      departments: /^(?:(?:phòng chuẩn bị|phòng ban)\s*(?:là)?\s*)/i,
+      participants: /^(?:người tham dự\s*(?:là)?\s*)/i,
+      conclusion: /^(?:kết luận(?: cuộc họp)?\s*(?:là)?\s*)/i,
       project: /^(?:(?:danh mục dự án|dự án)\s*(?:là)?\s*)/i,
       owner: /^(?:(?:người thực hiện|giao cho)\s*(?:là)?\s*)/i,
       category: /^(?:(?:danh mục nhiệm vụ)\s*(?:là)?\s*)/i,
@@ -2003,6 +2405,21 @@
       followUp: /^(?:mốc cập nhật tiếp theo\s*(?:là)?\s*)/i,
       blockerStatus: /^(?:trạng thái trở ngại\s*(?:là)?\s*)/i,
       blockerNote: /^(?:(?:nội dung trở ngại|đề nghị hỗ trợ|ghi chú trở ngại)\s*(?:là)?\s*)/i,
+      name: /^(?:(?:họ và tên|tên nhân sự|tên nhân viên)\s*(?:là)?\s*)/i,
+      gender: /^(?:giới tính\s*(?:là)?\s*)/i,
+      department: /^(?:(?:phòng|phòng ban|đơn vị)\s*(?:là)?\s*)/i,
+      role: /^(?:(?:vị trí|chức vụ)\s*(?:là)?\s*)/i,
+      sectionHead: /^(?:(?:trưởng bộ phận|trưởng nhóm|quản lý trực tiếp)\s*(?:là)?\s*)/i,
+      contract: /^(?:(?:loại hợp đồng|hợp đồng)\s*(?:là)?\s*)/i,
+      qualification: /^(?:(?:trình độ|trình độ chuyên môn)\s*(?:là)?\s*)/i,
+      contractTerm: /^(?:thời hạn hợp đồng\s*(?:là)?\s*)/i,
+      contractSignedDate: /^(?:(?:ngày ký hợp đồng|ngày ký)\s*(?:là)?\s*)/i,
+      phone: /^(?:(?:điện thoại|số điện thoại|số liên hệ)\s*(?:là)?\s*)/i,
+      birthDate: /^(?:ngày sinh\s*(?:là)?\s*)/i,
+      salaryCoefficient: /^(?:hệ số lương\s*(?:là)?\s*)/i,
+      salaryGrade: /^(?:bậc lương\s*(?:là)?\s*)/i,
+      salaryReviewDate: /^(?:(?:thời điểm xét nâng lương|ngày xét nâng lương)\s*(?:là)?\s*)/i,
+      address: /^(?:(?:địa chỉ|địa chỉ cư trú)\s*(?:là)?\s*)/i,
     };
     if (prefixes[key]) answer = answer.replace(prefixes[key], "");
     if (key === "owner") answer = answer.replace(/^(?:anh|chị|ông|bà)\s+/i, "");
@@ -2014,7 +2431,147 @@
     return /^(?:khong|khong can|khong co|chua co|bo qua|de trong|khong can phoi hop|khong co ai(?: phoi hop)?|khong co nguoi phoi hop|khong co cong viec phu thuoc)$/.test(normalized);
   }
 
+  function parseCalendarTime(value) {
+    const source = normalize(value).replace(/^(?:gio bat dau|gio ket thuc|thoi gian bat dau|thoi gian ket thuc)\s*/, "");
+    const numeric = source.match(/\b(\d{1,2})(?:(?:\s*:\s*|\s*h\s*|\s*gio\s*)(\d{1,2})?)?/);
+    const spokenHour = source.match(/^(mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi(?:\s+(?:mot|hai))?)\s+gio\b/);
+    const spokenHours = { mot: 1, hai: 2, ba: 3, bon: 4, tu: 4, nam: 5, sau: 6, bay: 7, tam: 8, chin: 9, muoi: 10, "muoi mot": 11, "muoi hai": 12 };
+    const spokenMinute = spokenHour && source.slice(spokenHour[0].length).match(/^\s+(\d{1,2})\b/);
+    const hour = spokenHour ? spokenHours[spokenHour[1]] : numeric ? Number(numeric[1]) : NaN;
+    let minute = spokenMinute ? Number(spokenMinute[1]) : numeric?.[2] ? Number(numeric[2]) : /\bruoi\b/.test(source) ? 30 : 0;
+    let adjustedHour = hour;
+    if (Number.isFinite(adjustedHour) && adjustedHour >= 1 && adjustedHour <= 11 && /\b(chieu|toi|dem)\b/.test(source)) adjustedHour += 12;
+    if (adjustedHour === 12 && /\bsang\b/.test(source)) adjustedHour = 0;
+    if (!Number.isInteger(adjustedHour) || adjustedHour < 0 || adjustedHour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) return "";
+    return `${String(adjustedHour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+
+  function applyCalendarWizardAnswer(step, transcript) {
+    const answer = cleanTaskWizardAnswer(transcript, step.key);
+    const normalized = normalize(answer);
+    const field = taskWizardField(step);
+    if (!field) return false;
+    const setValue = (target, value, eventName = "input") => {
+      target.value = value;
+      target.dispatchEvent(new Event(eventName, { bubbles: true }));
+      if (eventName !== "change") target.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    if (["leaders", "departments", "participants"].includes(step.key)) {
+      const boxes = Array.from(field.querySelectorAll('input[type="checkbox"]'));
+      if (taskWizardDeclinesOptional(answer)) {
+        boxes.forEach((checkbox) => { checkbox.checked = false; });
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      if (step.key === "participants" && /^(?:toan the|tat ca|toan bo|moi nguoi)$/.test(normalized)) {
+        taskWizardField({ key: "allHands" }).checked = true;
+        boxes.forEach((checkbox) => { checkbox.checked = false; });
+        taskWizardField({ key: "allHands" }).dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      const names = answer.replace(/^(?:lãnh đạo|phòng chuẩn bị|phòng ban|người tham dự|tham dự|là)\s*/i, "")
+        .split(/\s*(?:,|;|\s+và\s+|\s+với\s+)\s*/i)
+        .map((name) => name.trim()).filter(Boolean);
+      if (!names.length) return false;
+      const matches = names.map((name) => uniqueDraftMatch(boxes, name, (checkbox) => checkbox.closest("label")?.textContent || checkbox.value));
+      if (matches.some((checkbox) => !checkbox)) return false;
+      boxes.forEach((checkbox) => { checkbox.checked = matches.includes(checkbox); });
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
+    if (["reminder", "allHands"].includes(step.key)) {
+      const negative = /^(?:khong|khong bat|tat|khong can|bo qua|khong ap dung)(?:\s+.*)?$/.test(normalized);
+      const affirmative = /^(?:co|bat|toan the|tat ca|toan bo|dung|ap dung|vang)(?:\s+.*)?$/.test(normalized);
+      if (!negative && !affirmative) return false;
+      field.checked = affirmative;
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
+    if (step.key === "title" || step.key === "location" || step.key === "note" || step.key === "conclusion") {
+      if (!answer && !step.optional) return false;
+      setValue(field, answer);
+      return step.key !== "title" && step.key !== "location" || Boolean(field.value.trim());
+    }
+    if (step.key === "date") {
+      const date = draftDate(answer);
+      if (!date) return false;
+      setValue(field, date, "change");
+      return true;
+    }
+    if (step.key === "startTime" || step.key === "endTime") {
+      if (step.optional && taskWizardDeclinesOptional(answer)) {
+        setValue(field, "", "change");
+        return true;
+      }
+      const time = parseCalendarTime(answer);
+      if (!time) return false;
+      setValue(field, time, "change");
+      return true;
+    }
+    if (step.key === "recurrence") {
+      const value = /khong lap|khong dinh ky|mot lan/.test(normalized) ? "none"
+        : /hang ngay|moi ngay/.test(normalized) ? "daily"
+          : /hang tuan|moi tuan/.test(normalized) ? "weekly" : "";
+      if (!value) return false;
+      field.value = value;
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
+    return false;
+  }
+
+  function applyPeopleWizardAnswer(step, transcript) {
+    const answer = cleanTaskWizardAnswer(transcript, step.key);
+    const normalized = normalize(answer);
+    const field = taskWizardField(step);
+    if (!field || (!answer && !step.optional)) return false;
+    const setValue = (value, eventName = "input") => {
+      field.value = value;
+      field.dispatchEvent(new Event(eventName, { bubbles: true }));
+      if (eventName !== "change") field.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    if (step.optional && taskWizardDeclinesOptional(answer)) {
+      setValue("", "change");
+      return true;
+    }
+    if (step.key === "gender") {
+      const value = /(?:nu|nữ)/.test(normalized) ? "Nữ" : /nam/.test(normalized) ? "Nam" : "";
+      if (!value) return false;
+      setValue(value, "change");
+      return true;
+    }
+    if (step.key === "contract") {
+      const value = /bien che/.test(normalized) ? "Biên chế"
+        : /chuyen mon/.test(normalized) ? "Hợp đồng chuyên môn"
+          : /khoan|thoi vu/.test(normalized) ? "Hợp đồng khoán/thời vụ" : "";
+      if (!value) return false;
+      setValue(value, "change");
+      return true;
+    }
+    if (["contractSignedDate", "birthDate", "salaryReviewDate"].includes(step.key)) {
+      const date = draftDate(answer);
+      if (!date) return false;
+      setValue(date, "change");
+      return true;
+    }
+    if (step.key === "salaryCoefficient") {
+      const match = answer.match(/\d+(?:[.,]\d{1,2})?/);
+      if (!match) return false;
+      const value = Number(match[0].replace(",", "."));
+      if (!Number.isFinite(value) || value < 0) return false;
+      setValue(String(value));
+      return true;
+    }
+    if (["name", "qualification", "contractTerm", "phone", "salaryGrade", "address", "note"].includes(step.key)) {
+      setValue(answer);
+      return step.key !== "name" || Boolean(field.value.trim());
+    }
+    return taskWizardSelectOption(field, answer);
+  }
+
   function applyTaskWizardAnswer(step, transcript) {
+    if (taskWizard.mode === "calendar") return applyCalendarWizardAnswer(step, transcript);
+    if (taskWizard.mode === "people") return applyPeopleWizardAnswer(step, transcript);
     const answer = cleanTaskWizardAnswer(transcript, step.key);
     const normalized = normalize(answer);
     if (!answer && !step.optional) return false;
@@ -2128,16 +2685,15 @@
     if (taskWizard.awaitingConfirmation) {
       const confirmation = taskWizardConfirmationIntent(answer);
       if (confirmation === "yes") {
-        const task = taskWizard.mode === "progress"
-          ? currentTasks().find((item) => String(item.id) === taskWizard.taskId)
-          : null;
-        const permissionValid = taskWizard.mode === "progress"
-          ? !!task && typeof canUpdateTaskProgress === "function" && canUpdateTaskProgress(task)
-          : typeof canCreateRegularTasks === "function" && canCreateRegularTasks();
-        if (!permissionValid || !taskWizard.form) {
-          exitTaskWizard(taskWizard.mode === "progress"
-            ? "Quyền cập nhật công việc đã thay đổi hoặc công việc không còn khả dụng. Em chưa lưu dữ liệu ạ."
-            : "Quyền tạo công việc không còn khả dụng; em chưa lưu dữ liệu ạ.");
+        if (!taskWizardCanSave() || !taskWizard.form) {
+          const message = taskWizard.mode === "calendar"
+            ? "Quyền tạo lịch đã thay đổi hoặc máy chủ chưa hỗ trợ lưu lịch. Em chưa gửi dữ liệu ạ."
+            : taskWizard.mode === "people"
+              ? "Quyền thêm nhân sự đã thay đổi. Em chưa lưu dữ liệu ạ."
+            : taskWizard.mode === "progress"
+              ? "Quyền cập nhật công việc đã thay đổi hoặc công việc không còn khả dụng. Em chưa lưu dữ liệu ạ."
+              : "Quyền tạo công việc không còn khả dụng; em chưa lưu dữ liệu ạ.";
+          exitTaskWizard(message);
           return false;
         }
         if (!taskWizard.form.reportValidity()) {
@@ -2154,7 +2710,9 @@
         keepTaskWizardDraftUnsaved(`Dạ, em chưa lưu. Biểu mẫu vẫn giữ nguyên để ${taskWizardAddress()} chỉnh sửa hoặc tự lưu sau ạ.`);
         return true;
       }
-      taskWizardSetStatus(`Em chưa nhận được xác nhận rõ ràng. ${taskWizardAddress()} có thể nói “có” để lưu, “chưa” để giữ bản nháp, hoặc bấm nút Lưu công việc ạ.`);
+      const saveAction = taskWizard.mode === "calendar" ? "Lưu cuộc họp"
+        : taskWizard.mode === "people" ? "Lưu tài khoản" : "Lưu công việc";
+      taskWizardSetStatus(`Em chưa nhận được xác nhận rõ ràng. ${taskWizardAddress()} có thể nói “có” để lưu, “chưa” để giữ bản nháp, hoặc bấm nút ${saveAction} ạ.`);
       appendTaskWizardMessage("assistant", taskVoiceWizardStatus.textContent);
       speakLunaText(taskVoiceWizardStatus.textContent);
       return false;
@@ -2166,7 +2724,12 @@
     const applied = applyTaskWizardAnswer(step, answer);
     taskWizard.applyingAnswer = false;
     if (!applied) {
-      const message = taskWizard.mode === "progress" && step.key === "progress"
+      const message = taskWizard.mode === "calendar"
+        ? step.key === "date" ? "Em chưa hiểu ngày cần đặt. Anh/chị thử nói hôm nay, ngày mai hoặc ngày/tháng/năm ạ."
+          : ["startTime", "endTime"].includes(step.key) ? "Em chưa nhận ra giờ. Anh/chị nói theo dạng 8 giờ 30, hoặc chọn giờ trực tiếp trên biểu mẫu ạ."
+            : ["leaders", "departments", "participants"].includes(step.key) ? "Em chưa khớp được tên trong danh sách. Anh/chị kiểm tra tên hoặc chọn trực tiếp trên biểu mẫu ạ."
+              : `Em chưa xác định chắc nội dung cho mục “${step.label}”. Anh/chị nói lại hoặc nhập trực tiếp trên biểu mẫu ạ.`
+        : taskWizard.mode === "progress" && step.key === "progress"
         && normalize(taskWizardField({ key: "status" })?.value) === normalize("Hoàn thành")
         ? "Công việc ở trạng thái Hoàn thành phải có tiến độ 100%. Anh/chị nhập 100% hoặc đổi trạng thái trước khi tiếp tục ạ."
         : `Em chưa xác định chắc câu trả lời cho mục “${step.label}”. Vui lòng nói rõ hơn hoặc chọn mục trực tiếp trên biểu mẫu ạ.`;
@@ -2205,11 +2768,25 @@
       || /^(?:giup toi|cho toi)\s+(?:tao|them)(?:\s+mot)?\s+(?:cong viec|viec)(?:\s+moi)?(?:\s+(?:voi|nhe|nha|di))?$/.test(phrase);
   }
 
+  function isPeopleCreationIntent(text) {
+    const phrase = normalize(text).replace(/[.!?]+$/g, "").replace(/^(?:luna\s+oi\s*[,;:]?\s*)/, "").trim();
+    return /\b(?:tao|them)\b/.test(phrase)
+      && /\b(?:nhan su|nhan vien|can bo|ho so nhan su)\b/.test(phrase)
+      && !/\b(?:mo|xem|truy cap)\b/.test(phrase);
+  }
+
   function taskWizardConfirmationIntent(value) {
     const normalized = normalize(value).replace(/[.,!?;:]+/g, " ").replace(/\s+/g, " ").trim();
     if (/^(?:khong|chua|khong luu|chua luu|de sau|de toi sua|sua lai)(?:\s+.*)?$/.test(normalized)) return "no";
-    if (/^(?:co|dong y|vang|duoc|luu|xac nhan|hay luu|toi dong y)(?:\s+(?:a|nhe|giup toi|giup em|cong viec|ngay|di|em|luon|luu))*$/.test(normalized)) return "yes";
+    if (/^(?:co|dong y|vang|duoc|luu|xac nhan|hay luu|toi dong y)(?:\s+(?:a|nhe|giup toi|giup em|cong viec|lich|cuoc hop|ngay|di|em|luon|luu))*$/.test(normalized)) return "yes";
     return "";
+  }
+
+  function isCalendarCreationIntent(text) {
+    const phrase = normalize(text).replace(/[.!?]+$/g, "").replace(/^luna\s+oi\s*[,;:]?\s*/, "").trim();
+    return /\b(?:tao|them|lap|dat|len)\b/.test(phrase)
+      && /\b(?:lich(?:\s+(?:cong viec|lam viec|hop|moi))?|cuoc hop)\b/.test(phrase)
+      && !/\b(?:mo|xem|truy cap)\s+(?:muc\s+)?lich\b/.test(phrase);
   }
 
   function uniqueDraftMatch(items, query, getName) {
@@ -2411,12 +2988,15 @@
       return false;
     }
     const accountId = String(currentAccount()?.id || "");
+    const previousTaskId = taskWizard.taskId;
+    taskWizard.taskId = String(task.id);
     const opened = window.virtualAssistantOpenProgressForm?.({
       accountId,
       taskId: String(task.id),
       currentProgress: Number(task.progress || 0),
     });
     if (!opened) {
+      taskWizard.taskId = previousTaskId;
       appendMessage("assistant", "Em chưa thể mở biểu mẫu cập nhật an toàn lúc này. Không có dữ liệu nào được thay đổi.");
       return false;
     }
@@ -2507,6 +3087,22 @@
     askTaskWizardStep();
     return true;
   }
+
+  window.virtualAssistantSelectProgressTask = (taskId) => {
+    const currentStep = taskWizard.steps[taskWizard.index];
+    if (!taskWizard.active || taskWizard.mode !== "progress" || taskWizard.taskId || currentStep?.key !== "task") return false;
+    const task = currentTasks().find((item) => String(item.id) === String(taskId || ""));
+    if (!task || typeof canUpdateTaskProgress !== "function" || !canUpdateTaskProgress(task)) {
+      const message = "Công việc vừa chọn không còn khả dụng hoặc tài khoản hiện tại không có quyền cập nhật. Em chưa thay đổi dữ liệu ạ.";
+      taskWizardSetStatus(message);
+      appendTaskWizardMessage("assistant", message);
+      speakLunaText(message);
+      return true;
+    }
+    appendTaskWizardMessage("user", `Chọn cập nhật: ${task.title || "Công việc"}`);
+    startTaskProgressWizard(task, taskWizard.suggestedProgress);
+    return true;
+  };
 
   function aiSourceHtml(payload) {
     const sources = Array.isArray(payload && payload.sources) ? payload.sources.slice(0, 8) : [];
@@ -2712,6 +3308,16 @@
       } else {
         appendMessage("assistant", "Mẫu văn bản chưa sẵn sàng. Anh/chị thử tải lại trang giúp em ạ.");
       }
+      return;
+    }
+
+    if (isCalendarCreationIntent(raw)) {
+      startCalendarWizard();
+      return;
+    }
+
+    if (isPeopleCreationIntent(raw)) {
+      startPeopleWizard();
       return;
     }
 
@@ -3162,6 +3768,7 @@
     else if (mode === "task-wizard") handleTaskWizardTranscript(transcript, accountId);
     else submitVoiceTranscript(transcript, accountId);
     if (called === null) flushPendingSpeech();
+    if (wakeListeningEnabled && !document.hidden) scheduleWakeListener(1600);
   }
 
   taskWizardReplyForm.addEventListener("submit", submitTaskWizardReply);
@@ -3169,13 +3776,24 @@
   taskVoiceWizardSpeak.addEventListener("click", () => startVoiceCapture("task-wizard"));
   taskVoiceWizardContinue.addEventListener("click", () => advanceTaskWizardStep());
   taskVoiceWizardSkip.addEventListener("click", () => skipTaskWizardStep());
-  taskVoiceWizardCancel.addEventListener("click", () => exitTaskWizard(`Dạ, em đã dừng hướng dẫn. Biểu mẫu vẫn giữ nguyên, chưa được lưu. ${taskWizardAddress()} có thể chỉnh sửa hoặc tự lưu khi sẵn sàng ạ.`));
+  taskVoiceWizardCancel.addEventListener("click", () => exitTaskWizard(taskWizard.mode === "calendar"
+    ? `Dạ, em đã dừng hướng dẫn tạo lịch. Biểu mẫu vẫn giữ nguyên, chưa được lưu; ${taskWizardAddress()} có thể chỉnh sửa hoặc lưu sau ạ.`
+    : taskWizard.mode === "people"
+      ? `Dạ, em đã dừng hướng dẫn thêm nhân sự. Biểu mẫu vẫn giữ nguyên, chưa được lưu; ${taskWizardAddress()} có thể chỉnh sửa hoặc lưu sau ạ.`
+    : `Dạ, em đã dừng hướng dẫn. Biểu mẫu vẫn giữ nguyên, chưa được lưu. ${taskWizardAddress()} có thể chỉnh sửa hoặc tự lưu khi sẵn sàng ạ.`));
   document.getElementById("resetTaskForm")?.addEventListener("click", () => exitTaskWizard());
   document.getElementById("closeTaskForm")?.addEventListener("click", () => exitTaskWizard());
   document.getElementById("taskFormDialog")?.addEventListener("click", (event) => {
     if (event.target?.id === "taskFormDialog") exitTaskWizard();
   });
-  const wizardForms = [taskForm, document.getElementById("assignmentTaskForm")].filter(Boolean);
+  document.getElementById("resetPersonForm")?.addEventListener("click", () => exitTaskWizard());
+  document.getElementById("closePersonForm")?.addEventListener("click", () => exitTaskWizard());
+  document.getElementById("personFormDialog")?.addEventListener("click", (event) => {
+    if (event.target?.id === "personFormDialog") exitTaskWizard();
+  });
+  const calendarForm = document.getElementById("calendarForm");
+  const personForm = document.getElementById("personForm");
+  const wizardForms = [taskForm, calendarForm, personForm].filter(Boolean);
   wizardForms.forEach((form) => {
     form.addEventListener("input", (event) => {
       if (!taskWizard.active || taskWizard.form !== form || taskWizard.awaitingConfirmation || taskWizard.applyingAnswer) return;
@@ -3190,10 +3808,14 @@
       if (!taskWizard.active || taskWizard.form !== form || taskWizard.awaitingConfirmation || taskWizard.applyingAnswer) return;
       const step = taskWizard.steps[taskWizard.index];
       const field = taskWizardField(step);
-      const isMultiChoice = ["collaborators", "dependencies"].includes(step?.key) && event.target?.matches?.('input[type="checkbox"]');
+      const isCalendarMultiChoice = taskWizard.mode === "calendar"
+        && ["leaders", "departments", "participants"].includes(step?.key)
+        && event.target?.matches?.('input[type="checkbox"]');
+      const isMultiChoice = (["collaborators", "dependencies"].includes(step?.key) && event.target?.matches?.('input[type="checkbox"]'))
+        || isCalendarMultiChoice;
       const isStatusChoice = step?.key === "status" && event.target?.matches?.('input[type="radio"][name="taskStatusChoice"]');
       if (event.target !== field && !isMultiChoice && !isStatusChoice) return;
-      if (["collaborators", "dependencies"].includes(step?.key)) {
+      if (["collaborators", "dependencies", "leaders", "departments", "participants"].includes(step?.key)) {
         taskWizardSetStatus("Đã cập nhật lựa chọn. Có thể chọn thêm mục rồi bấm “Tiếp tục” ạ.");
         return;
       }
@@ -3238,6 +3860,12 @@
   document.querySelector("#taskFormDialog .task-form-modal")?.addEventListener("scroll", () => {
     if (taskWizard.active) window.requestAnimationFrame(positionTaskWizardBubble);
   }, { passive: true });
+  document.querySelector("#calendarDialog .calendar-modal")?.addEventListener("scroll", () => {
+    if (taskWizard.active && taskWizard.mode === "calendar") window.requestAnimationFrame(positionTaskWizardBubble);
+  }, { passive: true });
+  document.querySelector("#personFormDialog .person-form-modal")?.addEventListener("scroll", () => {
+    if (taskWizard.active && taskWizard.mode === "people") window.requestAnimationFrame(positionTaskWizardBubble);
+  }, { passive: true });
   document.querySelector("#taskDetailDialog .task-detail-modal")?.addEventListener("scroll", () => {
     if (taskWizard.active) window.requestAnimationFrame(positionTaskWizardBubble);
   }, { passive: true });
@@ -3251,9 +3879,26 @@
   if (taskDetailDialog) {
     new MutationObserver(() => {
       if (!taskWizard.active || taskWizard.mode !== "progress") return;
+      if (!taskWizard.taskId && taskWizard.steps[taskWizard.index]?.key === "task") return;
       if (!taskDetailDialog.classList.contains("is-hidden") && taskDetailDialog.contains(taskWizard.form)) return;
       exitTaskWizard("Dạ, em đã dừng cập nhật vì biểu mẫu đã đóng. Thông tin chưa được lưu ạ.");
     }).observe(taskDetailDialog, { attributes: true, attributeFilter: ["class"], childList: true, subtree: true });
+  }
+  const calendarDialog = document.getElementById("calendarDialog");
+  if (calendarDialog) {
+    new MutationObserver(() => {
+      if (!taskWizard.active || taskWizard.mode !== "calendar") return;
+      if (!calendarDialog.classList.contains("is-hidden") && calendarDialog.contains(taskWizard.form)) return;
+      exitTaskWizard("Dạ, biểu mẫu lịch đã đóng nên em dừng hướng dẫn. Nội dung chưa được lưu ạ.");
+    }).observe(calendarDialog, { attributes: true, attributeFilter: ["class"] });
+  }
+  const personFormDialog = document.getElementById("personFormDialog");
+  if (personFormDialog) {
+    new MutationObserver(() => {
+      if (!taskWizard.active || taskWizard.mode !== "people") return;
+      if (!personFormDialog.classList.contains("is-hidden") && personFormDialog.contains(taskWizard.form)) return;
+      exitTaskWizard("Dạ, biểu mẫu nhân sự đã đóng nên em dừng hướng dẫn. Thông tin chưa được lưu ạ.");
+    }).observe(personFormDialog, { attributes: true, attributeFilter: ["class"] });
   }
 
   document.addEventListener("keydown", (event) => {
@@ -3328,6 +3973,28 @@
   });
 
   window.virtualAssistantSetExpression = (expression, options) => setAssistantExpression(expression, options);
+  window.virtualAssistantPersonWizardSaved = (personId) => {
+    if (!taskWizard.active || taskWizard.mode !== "people" || !taskWizard.awaitingConfirmation || !personId) return false;
+    taskWizard.active = false;
+    taskWizard.awaitingConfirmation = false;
+    clearTaskWizardHighlight();
+    taskWizardReplyForm.classList.add("is-hidden");
+    taskVoiceWizardSpeak.classList.add("is-hidden");
+    taskVoiceWizardContinue.classList.add("is-hidden");
+    taskVoiceWizardSkip.classList.add("is-hidden");
+    taskWizardSetStatus("Đã lưu thành công.");
+    const message = "Dạ, thông tin nhân sự đã được lưu thành công ạ.";
+    appendTaskWizardMessage("assistant", message);
+    speakLunaText(message);
+    window.setTimeout(() => {
+      if (!taskWizard.active && !taskVoiceWizard.classList.contains("is-hidden")) {
+        taskVoiceWizard.classList.add("is-hidden");
+        root.classList.remove("is-task-wizard");
+        taskWizardConversation.replaceChildren();
+      }
+    }, 4500);
+    return true;
+  };
   window.virtualAssistantTaskWizardSaved = (taskId) => {
     if (!taskWizard.active || !taskWizard.awaitingConfirmation) return false;
     if (taskWizard.mode === "progress" && String(taskWizard.taskId) !== String(taskId)) return false;
@@ -3353,6 +4020,31 @@
     }, 4500);
     return true;
   };
+  window.virtualAssistantCalendarWizardSaved = (eventId) => {
+    if (!taskWizard.active || taskWizard.mode !== "calendar" || !taskWizard.awaitingConfirmation || !eventId) return false;
+    taskWizard.active = false;
+    taskWizard.awaitingConfirmation = false;
+    clearTaskWizardHighlight();
+    taskWizardReplyForm.classList.add("is-hidden");
+    taskVoiceWizardSpeak.classList.add("is-hidden");
+    taskVoiceWizardContinue.classList.add("is-hidden");
+    taskVoiceWizardSkip.classList.add("is-hidden");
+    taskWizardSetStatus("Lịch đã được lưu qua biểu mẫu hiện có.");
+    const message = "Dạ, lịch công việc đã được lưu thành công ạ.";
+    appendTaskWizardMessage("assistant", message);
+    speakLunaText(message);
+    window.setTimeout(() => {
+      if (!taskWizard.active && !taskVoiceWizard.classList.contains("is-hidden")) {
+        taskVoiceWizard.classList.add("is-hidden");
+        root.classList.remove("is-task-wizard");
+        taskWizardConversation.replaceChildren();
+      }
+    }, 4500);
+    return true;
+  };
+  document.addEventListener("person-record-saved", (event) => {
+    window.virtualAssistantPersonWizardSaved?.(event.detail?.personId);
+  });
   applyAssistantCharacterImage();
   setState("idle", "Sẵn sàng hỗ trợ");
   syncAccountAccess();

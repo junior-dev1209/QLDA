@@ -6,19 +6,20 @@
   <title>Quản lý hiệu quả công việc - BQLDA ĐT-HT xã Phúc Thịnh</title>
   <meta name="theme-color" content="#0f2d3a">
   <meta name="application-name" content="KPI Phúc Thịnh">
-  <meta name="application-version" content="3.4.140">
+  <meta name="application-version" content="3.4.151">
   <meta name="copyright" content="© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="KPI Phúc Thịnh">
-  <link rel="manifest" href="manifest.webmanifest?v=3.4.140">
-  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.4.140" type="image/png">
-  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.4.140">
-  <script src="supabase-config.js?v=3.4.140"></script>
-  <script src="auth-bootstrap.js?v=3.4.140"></script>
-  <link rel="stylesheet" href="styles.css?v=3.4.140">
-  <link rel="stylesheet" href="work-calendar.css?v=3.4.140">
-  <link rel="stylesheet" href="virtual-assistant.css?v=3.4.140">
-  <link rel="stylesheet" href="document-templates.css?v=3.4.140">
+  <link rel="manifest" href="manifest.webmanifest?v=3.4.151">
+  <link rel="icon" href="app-icon-phuc-thinh.png?v=3.4.151" type="image/png">
+  <link rel="apple-touch-icon" href="app-icon-phuc-thinh.png?v=3.4.151">
+  <script src="supabase-config.js?v=3.4.151"></script>
+  <script src="auth-bootstrap.js?v=3.4.151"></script>
+  <link rel="stylesheet" href="styles.css?v=3.4.151">
+  <link rel="stylesheet" href="work-calendar.css?v=3.4.151">
+  <link rel="stylesheet" href="virtual-assistant.css?v=3.4.151">
+  <link rel="stylesheet" href="document-templates.css?v=3.4.151">
+  <link rel="stylesheet" href="public-investment-projects.css?v=3.4.151">
 </head>
 <body>
   <section id="loginScreen" class="login-screen">
@@ -40,7 +41,7 @@
         <p class="login-identity" aria-label="Thông tin phiên bản và bản quyền">
           <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh</span>
           <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-          <strong data-app-version>Phiên bản 3.4.140</strong>
+          <strong data-app-version>Phiên bản 3.4.151</strong>
         </p>
       </form>
     </div>
@@ -48,7 +49,7 @@
 
   <header class="topbar">
     <div class="topbar-brand">
-      <img class="topbar-logo" src="app-icon-phuc-thinh.png?v=3.4.140" alt="Biểu trưng Ban Quản lý Dự án đầu tư - hạ tầng xã Phúc Thịnh" width="42" height="42" decoding="async">
+      <img class="topbar-logo" src="app-icon-phuc-thinh.png?v=3.4.151" alt="Biểu trưng Ban Quản lý Dự án đầu tư - hạ tầng xã Phúc Thịnh" width="42" height="42" decoding="async">
       <div class="topbar-brand-copy">
         <p class="unit">
           <span>BAN QUẢN LÝ DỰ ÁN ĐẦU TƯ - HẠ TẦNG</span>
@@ -58,7 +59,7 @@
       </div>
     </div>
     <div class="topbar-visual" aria-hidden="true">
-      <img id="topbarVisualScene" class="topbar-visual-scene" src="assets/topbar-wide-infrastructure-scene.jpg?v=3.4.140" alt="" decoding="async">
+      <img id="topbarVisualScene" class="topbar-visual-scene" src="assets/topbar-wide-infrastructure-scene.jpg?v=3.4.151" alt="" decoding="async">
     </div>
     <div class="top-actions">
       <div class="user-chip notification-account-chip" id="notificationAccountChip">
@@ -67,7 +68,7 @@
           <span id="currentUserMeta"></span>
         </div>
         <button id="notificationBell" class="notification-bell" type="button" aria-label="Mở thông báo của Luna" aria-haspopup="dialog" aria-expanded="false" title="Thông báo từ Luna">
-        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.140" alt="" aria-hidden="true" decoding="async">
+        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.151" alt="" aria-hidden="true" decoding="async">
           <span id="notificationUnreadCount" class="notification-bell-count is-hidden" aria-label="0 thông báo chưa đọc">0</span>
         </button>
       </div>
@@ -130,7 +131,7 @@
   </section>
 
   <button id="birthdayDayBanner" class="birthday-day-banner is-hidden" type="button" aria-live="polite" aria-atomic="true" aria-expanded="true" aria-label="Thu gọn lời chúc sinh nhật">
-    <img class="birthday-day-banner-image" data-birthday-asset="bouquet" src="assets/birthday-bouquet.png" alt="" aria-hidden="true">
+    <img class="birthday-day-banner-image" data-birthday-asset="bouquet" src="assets/birthday-bouquet.png" alt="" aria-hidden="true" loading="lazy" decoding="async">
     <div>
       <strong id="birthdayDayBannerName">Chúc mừng sinh nhật</strong>
       <span>Chúc bạn một ngày nhiều niềm vui và thành công.</span>
@@ -169,6 +170,7 @@
     <symbol id="icon-people" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20v-1.2A5.8 5.8 0 0 1 8.3 13h1.4a5.8 5.8 0 0 1 5.8 5.8V20zM16 4.8a3.5 3.5 0 0 1 0 6.5M17 14h.8a4.7 4.7 0 0 1 4.7 4.7v.8h-5"/></g></symbol>
     <symbol id="icon-tasks" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m7 9 1.5 1.5L11 8M13.5 9H17M7 16l1.5 1.5L11 15M13.5 16H17"/></g></symbol>
     <symbol id="icon-appraisal" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M14 3v5h5M8 12h7M8 16h4"/><circle cx="17.5" cy="16.5" r="3.5"/><path d="m20 19 2 2"/></g></symbol>
+    <symbol id="icon-public-project" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18M5 20V8l7-4 7 4v12M9 20v-5h6v5M8 10h.01M12 10h.01M16 10h.01"/><path d="m16.5 5.8 2-2 2 2"/></g></symbol>
     <symbol id="icon-calendar" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M7 3v4M17 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01"/></g></symbol>
     <symbol id="icon-department-kpi" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V11h4v9M10 20V5h4v15M16 20v-8h4v8M2 20h20"/></g></symbol>
     <symbol id="icon-personal-kpi" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h17M7 15l4-4 3 2 5-6"/><path d="M16 7h3v3"/></g></symbol>
@@ -195,7 +197,7 @@
         <button class="nav-item" data-view="archive" type="button" title="Lưu Trữ"><svg class="nav-icon" aria-hidden="true"><use href="#icon-archive"></use></svg><span class="nav-label">Lưu Trữ</span></button>
         <button class="nav-item" data-view="people" type="button" title="Nhân sự"><svg class="nav-icon" aria-hidden="true"><use href="#icon-people"></use></svg><span class="nav-label">Nhân sự</span></button>
         <button class="nav-item" data-view="tasks" type="button" title="Công việc"><svg class="nav-icon" aria-hidden="true"><use href="#icon-tasks"></use></svg><span class="nav-label">Công việc</span></button>
-        <button class="nav-item" data-view="public-investment-appraisal" type="button" title="Thẩm định dự án đầu tư công"><svg class="nav-icon" aria-hidden="true"><use href="#icon-appraisal"></use></svg><span class="nav-label">Thẩm định dự án</span></button>
+        <button class="nav-item" data-view="public-investment-projects" type="button" title="Quản lý dự án đầu tư công"><svg class="nav-icon" aria-hidden="true"><use href="#icon-public-project"></use></svg><span class="nav-label">Dự án đầu tư công</span></button>
         <button class="nav-item" data-view="calendar" type="button" title="Lịch công việc"><svg class="nav-icon" aria-hidden="true"><use href="#icon-calendar"></use></svg><span class="nav-label">Lịch công việc</span></button>
         <button class="nav-item" data-view="department-evaluations" type="button" title="KPI phòng"><svg class="nav-icon" aria-hidden="true"><use href="#icon-department-kpi"></use></svg><span class="nav-label">KPI phòng</span></button>
         <button class="nav-item" data-view="evaluations" type="button" title="KPI cá nhân"><svg class="nav-icon" aria-hidden="true"><use href="#icon-personal-kpi"></use></svg><span class="nav-label">KPI cá nhân</span></button>
@@ -1067,11 +1069,179 @@
         </div>
       </section>
 
-      <section id="public-investment-appraisal" class="view">
+      <section id="public-investment-projects" class="view">
+        <div class="section-head public-investment-hub-head">
+          <div>
+            <p class="eyebrow">Đầu tư công</p>
+            <h2>Dự án đầu tư công</h2>
+            <p class="section-note">Quản lý thực hiện và thẩm định dự án trên cùng một nguồn dữ liệu xuyên suốt.</p>
+          </div>
+        </div>
+        <div class="public-investment-hub-tabs" role="tablist" aria-label="Nội dung dự án đầu tư công">
+          <button class="is-active" type="button" role="tab" aria-selected="true" data-public-investment-workspace="projects"><svg aria-hidden="true"><use href="#icon-public-project"></use></svg><span>Quản lý dự án</span></button>
+          <button type="button" role="tab" aria-selected="false" data-public-investment-workspace="appraisal"><svg aria-hidden="true"><use href="#icon-appraisal"></use></svg><span>Thẩm định dự án</span></button>
+        </div>
+
+        <section class="public-investment-workspace-panel is-active" data-public-investment-workspace-panel="projects">
+          <div class="section-head public-project-page-head">
+            <div>
+              <p class="eyebrow">Hồ sơ dự án số</p>
+              <h3>Quản lý thực hiện dự án</h3>
+              <p class="section-note">Theo dõi pháp lý, giai đoạn, tiến độ, vướng mắc và dữ liệu liên quan của từng dự án.</p>
+            </div>
+            <button id="openPublicInvestmentProjectForm" type="button">Khởi tạo hồ sơ dự án</button>
+          </div>
+          <div id="publicInvestmentProjectMetrics" class="public-project-metrics" aria-live="polite"></div>
+          <div class="filter-row public-project-toolbar">
+            <input id="publicInvestmentProjectSearch" type="search" placeholder="Tìm mã, tên dự án, chủ đầu tư..." aria-label="Tìm hồ sơ dự án">
+            <select id="publicInvestmentProjectPhaseFilter" aria-label="Lọc theo giai đoạn"><option value="">Tất cả giai đoạn</option></select>
+            <select id="publicInvestmentProjectStatusFilter" aria-label="Lọc theo trạng thái">
+              <option value="">Tất cả trạng thái</option>
+              <option value="draft">Đang thiết lập</option>
+              <option value="active">Đang thực hiện</option>
+              <option value="on-hold">Tạm dừng</option>
+              <option value="completed">Đã kết thúc</option>
+            </select>
+          </div>
+          <div id="publicInvestmentProjectList" class="public-project-list"></div>
+
+        <section id="publicInvestmentProjectDialog" class="modal-backdrop is-hidden" aria-hidden="true">
+          <div class="modal-card public-project-modal" role="dialog" aria-modal="true" aria-labelledby="publicInvestmentProjectDialogTitle">
+            <div class="section-head public-project-dialog-head">
+              <div>
+                <p class="eyebrow">Hồ sơ dự án số</p>
+                <h2 id="publicInvestmentProjectDialogTitle">Khởi tạo hồ sơ dự án</h2>
+                <p id="publicInvestmentProjectDialogNote" class="section-note">Một nguồn dữ liệu xuyên suốt vòng đời dự án.</p>
+              </div>
+              <button id="closePublicInvestmentProjectForm" class="ghost" type="button">Đóng</button>
+            </div>
+            <form id="publicInvestmentProjectForm" class="public-project-form">
+              <input id="publicInvestmentProjectId" type="hidden">
+              <div class="public-project-tabs" role="tablist" aria-label="Nội dung hồ sơ dự án">
+                <button class="is-active" type="button" role="tab" data-public-project-tab="overview">Tổng quan</button>
+                <button type="button" role="tab" data-public-project-tab="stages">Giai đoạn</button>
+                <button type="button" role="tab" data-public-project-tab="legal">Pháp lý</button>
+                <button type="button" role="tab" data-public-project-tab="schedule">Tiến độ</button>
+                <button type="button" role="tab" data-public-project-tab="links">Liên kết</button>
+                <button type="button" role="tab" data-public-project-tab="risks">Vướng mắc</button>
+                <button type="button" role="tab" data-public-project-tab="history">Lịch sử</button>
+              </div>
+
+              <section class="public-project-panel is-active" data-public-project-panel="overview">
+                <div class="form-grid public-project-overview-grid">
+                  <label class="wide">Dự án trong danh mục
+                    <select id="publicInvestmentProjectCatalogId" required><option value="">Chọn dự án</option></select>
+                  </label>
+                  <label>Mã dự án
+                    <input id="publicInvestmentProjectCode" required maxlength="80" placeholder="DA-2026-001">
+                  </label>
+                  <label>Trạng thái
+                    <select id="publicInvestmentProjectStatus"><option value="draft">Đang thiết lập</option><option value="active">Đang thực hiện</option><option value="on-hold">Tạm dừng</option><option value="completed">Đã kết thúc</option></select>
+                  </label>
+                  <label>Nhóm dự án
+                    <select id="publicInvestmentProjectGroup"><option value="A">Nhóm A</option><option value="B">Nhóm B</option><option value="C" selected>Nhóm C</option><option value="other">Khác</option></select>
+                  </label>
+                  <label>Lĩnh vực
+                    <input id="publicInvestmentProjectSector" maxlength="160" placeholder="Giao thông, hạ tầng kỹ thuật...">
+                  </label>
+                  <label class="wide">Chủ đầu tư
+                    <input id="publicInvestmentProjectInvestor" maxlength="240" placeholder="Cơ quan, đơn vị làm chủ đầu tư">
+                  </label>
+                  <label>Cấp quyết định đầu tư
+                    <input id="publicInvestmentProjectAuthority" maxlength="200" placeholder="Cấp có thẩm quyền">
+                  </label>
+                  <label>Nguồn vốn
+                    <input id="publicInvestmentProjectCapitalSource" maxlength="240" placeholder="Ngân sách, vốn đầu tư công...">
+                  </label>
+                  <label>Tổng mức đầu tư (đồng)
+                    <input id="publicInvestmentProjectTotalInvestment" type="number" min="0" step="1000" inputmode="numeric">
+                  </label>
+                  <label>Số quyết định đầu tư
+                    <input id="publicInvestmentProjectDecisionNo" maxlength="120">
+                  </label>
+                  <label>Ngày quyết định
+                    <input id="publicInvestmentProjectDecisionDate" type="date">
+                  </label>
+                  <label>Ngày bắt đầu kế hoạch
+                    <input id="publicInvestmentProjectPlannedStart" type="date">
+                  </label>
+                  <label>Ngày kết thúc kế hoạch
+                    <input id="publicInvestmentProjectPlannedEnd" type="date">
+                  </label>
+                  <label>Người phụ trách
+                    <select id="publicInvestmentProjectManagerId" required><option value="">Chọn người phụ trách</option></select>
+                  </label>
+                  <label>Người phối hợp
+                    <select id="publicInvestmentProjectParticipantIds" multiple size="5" aria-label="Người phối hợp dự án"></select>
+                  </label>
+                  <label class="wide">Mục tiêu và phạm vi dự án
+                    <textarea id="publicInvestmentProjectObjective" rows="4" maxlength="6000" placeholder="Mục tiêu, quy mô, kết quả đầu ra chính..."></textarea>
+                  </label>
+                </div>
+              </section>
+
+              <section class="public-project-panel" data-public-project-panel="stages">
+                <div class="public-project-panel-head"><div><h3>Cổng kiểm soát giai đoạn</h3><p>Chỉ hoàn thành giai đoạn khi các điều kiện pháp lý bắt buộc đã đạt.</p></div></div>
+                <div id="publicInvestmentProjectStages" class="public-project-stages"></div>
+              </section>
+
+              <section class="public-project-panel" data-public-project-panel="legal">
+                <div class="public-project-panel-head"><div><h3>Checklist pháp lý</h3><p>Ghi nhận tình trạng, căn cứ và hồ sơ cho từng điều kiện kiểm soát.</p></div></div>
+                <div id="publicInvestmentProjectChecklist" class="public-project-checklist"></div>
+              </section>
+
+              <section class="public-project-panel" data-public-project-panel="schedule">
+                <div class="public-project-panel-head"><div><h3>Mốc tiến độ</h3><p>Mốc quản trị chính, người chịu trách nhiệm và kết quả thực tế.</p></div></div>
+                <div class="public-project-composer public-project-milestone-composer">
+                  <input id="publicInvestmentProjectMilestoneTitle" maxlength="240" placeholder="Tên mốc tiến độ">
+                  <select id="publicInvestmentProjectMilestoneStage" aria-label="Giai đoạn của mốc"></select>
+                  <select id="publicInvestmentProjectMilestoneOwner" aria-label="Người phụ trách mốc"><option value="">Người phụ trách</option></select>
+                  <input id="publicInvestmentProjectMilestoneDue" type="date" aria-label="Thời hạn mốc">
+                  <button id="addPublicInvestmentProjectMilestone" class="ghost" type="button">Thêm mốc</button>
+                </div>
+                <div id="publicInvestmentProjectMilestones" class="public-project-milestones"></div>
+              </section>
+
+              <section class="public-project-panel" data-public-project-panel="links">
+                <div class="public-project-panel-head"><div><h3>Dữ liệu liên kết</h3><p>Số liệu được tổng hợp trực tiếp theo mã dự án, không nhập lại.</p></div></div>
+                <div id="publicInvestmentProjectLinks" class="public-project-links"></div>
+                <label class="public-project-archive-field">Hồ sơ trong Lưu trữ
+                  <select id="publicInvestmentProjectArchiveIds" multiple size="7" aria-label="Hồ sơ lưu trữ liên quan"></select>
+                </label>
+              </section>
+
+              <section class="public-project-panel" data-public-project-panel="risks">
+                <div class="public-project-panel-head"><div><h3>Vướng mắc và rủi ro</h3><p>Theo dõi mức độ ảnh hưởng, trách nhiệm và hạn xử lý.</p></div></div>
+                <div class="public-project-composer public-project-risk-composer">
+                  <input id="publicInvestmentProjectRiskTitle" maxlength="300" placeholder="Nội dung vướng mắc / rủi ro">
+                  <select id="publicInvestmentProjectRiskLevel"><option value="low">Thấp</option><option value="medium" selected>Trung bình</option><option value="high">Cao</option><option value="critical">Nghiêm trọng</option></select>
+                  <select id="publicInvestmentProjectRiskOwner"><option value="">Người xử lý</option></select>
+                  <input id="publicInvestmentProjectRiskDue" type="date" aria-label="Hạn xử lý">
+                  <button id="addPublicInvestmentProjectRisk" class="ghost" type="button">Thêm vướng mắc</button>
+                </div>
+                <div id="publicInvestmentProjectRisks" class="public-project-risks"></div>
+              </section>
+
+              <section class="public-project-panel" data-public-project-panel="history">
+                <div class="public-project-panel-head"><div><h3>Nhật ký dự án</h3><p>Dấu vết được ghi tự động khi hồ sơ được lưu.</p></div></div>
+                <div id="publicInvestmentProjectHistory" class="public-project-history"></div>
+              </section>
+
+              <div class="form-actions public-project-form-actions">
+                <button id="savePublicInvestmentProject" type="submit">Lưu hồ sơ dự án</button>
+                <button id="printPublicInvestmentProject" class="ghost is-hidden" type="button">In / Lưu PDF</button>
+                <button id="resetPublicInvestmentProject" class="ghost" type="button">Làm mới</button>
+              </div>
+            </form>
+          </div>
+        </section>
+        </section>
+
+      <section id="publicInvestmentAppraisalWorkspace" class="public-investment-workspace-panel" data-public-investment-workspace-panel="appraisal">
         <div class="section-head appraisal-page-head">
           <div>
-            <p class="eyebrow">Đầu tư công / Thẩm định</p>
-            <h2>Thẩm định dự án đầu tư công</h2>
+            <p class="eyebrow">Hồ sơ thẩm định</p>
+            <h3>Thẩm định dự án đầu tư công</h3>
             <p class="section-note">Quản lý hồ sơ, checklist, ý kiến phối hợp và kết luận thẩm định theo đúng phạm vi được phân quyền.</p>
           </div>
           <button id="openPublicInvestmentAppraisalForm" type="button">Tạo hồ sơ thẩm định</button>
@@ -1201,6 +1371,7 @@
             </form>
           </div>
         </section>
+      </section>
       </section>
 
       <section id="department-evaluations" class="view">
@@ -2124,7 +2295,7 @@
   <footer class="app-footer" aria-label="Thông tin bản quyền hệ thống">
     <span>© 2026 Ban Quản lý Dự án Đầu tư - Hạ tầng xã Phúc Thịnh. Bảo lưu mọi quyền.</span>
     <span class="app-creator">Nhà sáng tạo và phát triển hệ thống: Trần Duy Tùng</span>
-    <strong data-app-version>Phiên bản 3.4.140</strong>
+    <strong data-app-version>Phiên bản 3.4.151</strong>
   </footer>
 
   <section id="birthdayCelebration" class="birthday-celebration is-hidden" aria-hidden="true" aria-labelledby="birthdayCelebrationTitle">
@@ -2138,8 +2309,8 @@
       <h2 id="birthdayCelebrationTitle">Chúc mừng sinh nhật</h2>
       <p id="birthdayCelebrationMessage" class="birthday-celebration-message"></p>
       <div class="birthday-celebration-visual" aria-hidden="true">
-        <img class="birthday-cake-image" data-birthday-asset="cake" src="assets/birthday-cake.png" alt="">
-        <img class="birthday-bouquet-image" data-birthday-asset="bouquet" src="assets/birthday-bouquet.png" alt="">
+        <img class="birthday-cake-image" data-birthday-asset="cake" src="assets/birthday-cake.png" alt="" loading="lazy" decoding="async">
+        <img class="birthday-bouquet-image" data-birthday-asset="bouquet" src="assets/birthday-bouquet.png" alt="" loading="lazy" decoding="async">
       </div>
       <button id="dismissBirthdayCelebration" type="button">Tiếp tục làm việc</button>
     </div>
@@ -2554,7 +2725,7 @@
         <span id="mobileUserMeta">Chức vụ / Phòng ban</span>
       </div>
       <button type="button" class="mobile-notification-bell" data-notification-toggle aria-label="Mở thông báo của Luna" title="Thông báo từ Luna">
-        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.140" alt="" aria-hidden="true" decoding="async">
+        <img class="notification-bell-shape" src="assets/notification-bell-glass.png?v=3.4.151" alt="" aria-hidden="true" decoding="async">
         <span id="mobileNotificationUnreadCount" class="notification-bell-count is-hidden">0</span>
       </button>
       <button type="button" id="closeMobileMenuBtn" class="mobile-close-btn">✕</button>
@@ -2572,9 +2743,9 @@
         <span class="mobile-menu-text">Lưu Trữ</span>
       </button>
 
-      <button type="button" class="mobile-menu-item" data-view="public-investment-appraisal">
-        <svg class="nav-icon mobile-menu-icon" aria-hidden="true"><use href="#icon-appraisal"></use></svg>
-        <span class="mobile-menu-text">Thẩm định dự án</span>
+      <button type="button" class="mobile-menu-item" data-view="public-investment-projects">
+        <svg class="nav-icon mobile-menu-icon" aria-hidden="true"><use href="#icon-public-project"></use></svg>
+        <span class="mobile-menu-text">Dự án đầu tư công</span>
       </button>
 
       <button type="button" class="mobile-menu-item" data-view="department-evaluations">
@@ -2775,14 +2946,14 @@
     </aside>
     <button id="assistantLauncher" class="assistant-launcher" type="button" aria-label="Mở trợ lý Luna" aria-expanded="false" aria-controls="assistantPanel" title="Trên màn hình lớn, kéo hoặc dùng phím mũi tên để di chuyển">
       <span class="assistant-launcher-signal" aria-hidden="true"></span>
-      <img class="assistant-launcher-pose assistant-launcher-pose--idle" src="assets/luna-outfit-field.png?v=3.4.140" alt="" aria-hidden="true" draggable="false" decoding="async">
-      <img class="assistant-launcher-pose assistant-launcher-pose--listening" data-src="assets/virtual-assistant-listening.png?v=3.4.140" alt="" aria-hidden="true" draggable="false" decoding="async">
-      <img class="assistant-launcher-pose assistant-launcher-pose--thinking" data-src="assets/luna-research.webp?v=3.4.140" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img class="assistant-launcher-pose assistant-launcher-pose--idle" src="assets/luna-outfit-field.png?v=3.4.151" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img class="assistant-launcher-pose assistant-launcher-pose--listening" data-src="assets/virtual-assistant-listening.png?v=3.4.151" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img class="assistant-launcher-pose assistant-launcher-pose--thinking" data-src="assets/luna-research.webp?v=3.4.151" alt="" aria-hidden="true" draggable="false" decoding="async">
       <span class="assistant-launcher-name">Luna</span>
     </button>
     <button id="assistantMinimize" class="assistant-minimize" type="button" aria-label="Thu nhỏ trợ lý" title="Thu nhỏ trợ lý">×</button>
     <button id="assistantRestore" class="assistant-restore is-hidden" type="button" aria-label="Mở lại Luna" title="Mở lại Luna">
-      <img data-assistant-mini-src="assets/luna-outfit-field.png?v=3.4.140" alt="" aria-hidden="true" draggable="false" decoding="async">
+      <img data-assistant-mini-src="assets/luna-outfit-field.png?v=3.4.151" alt="" aria-hidden="true" draggable="false" decoding="async">
     </button>
     <section id="assistantPanel" class="assistant-panel is-hidden" data-placement="above" role="dialog" aria-modal="false" aria-labelledby="assistantTitle" aria-hidden="true">
       <header class="assistant-panel-head">
@@ -2956,11 +3127,12 @@
   </section>
 
   <!-- System data must load before the application runtime. -->
-  <script src="people-data.js?v=3.4.140"></script>
-  <script src="gpmb-workflow-data.js?v=3.4.140"></script>
-  <script src="work-calendar.js?v=3.4.140"></script>
-  <script src="virtual-assistant.js?v=3.4.140"></script>
-  <script src="script.js?v=3.4.140"></script>
-  <script src="document-templates.js?v=3.4.140"></script>
+  <script src="people-data.js?v=3.4.151"></script>
+  <script src="gpmb-workflow-data.js?v=3.4.151"></script>
+  <script src="work-calendar.js?v=3.4.151"></script>
+  <script src="virtual-assistant.js?v=3.4.151"></script>
+  <script src="public-investment-projects.js?v=3.4.151"></script>
+  <script src="script.js?v=3.4.151"></script>
+  <script src="document-templates.js?v=3.4.151"></script>
 </body>
 </html>
