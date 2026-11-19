@@ -1132,17 +1132,6 @@ function clearMandatoryPasswordChangeFlags(state: JsonRecord): number {
   return changed;
 }
 
-// Read-only metadata: do not deserialize or repair the large JSON snapshot.
-async function snapshotMetadata(): Promise<{ revision: number; updatedAt: string }> {
-  const { data, error } = await admin
-    .from("kpi_shared_state")
-    .select("revision, updated_at")
-    .eq("id", stateId)
-    .maybeSingle();
-  if (error) throw error;
-  return { revision: Number(data?.revision) || 0, updatedAt: String(data?.updated_at || "") };
-}
-
 async function snapshot(repair = true): Promise<StateSnapshot> {
   const { data, error } = await admin
     .from("kpi_shared_state")
