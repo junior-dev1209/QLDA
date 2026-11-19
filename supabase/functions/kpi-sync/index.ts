@@ -21,7 +21,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.11.18.2";
+const deploymentVersion = "2026.11.19.3-cpu-read";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -1130,6 +1130,17 @@ function clearMandatoryPasswordChangeFlags(state: JsonRecord): number {
     changed += 1;
   });
   return changed;
+}
+
+// Read-only metadata: do not deserialize or repair the large JSON snapshot.
+async function snapshotMetadata(): Promise<{ revision: number; updatedAt: string }> {
+  const { data, error } = await admin
+    .from("kpi_shared_state")
+    .select("revision, updated_at")
+    .eq("id", stateId)
+    .maybeSingle();
+  if (error) throw error;
+  return { revision: Number(data?.revision) || 0, updatedAt: String(data?.updated_at || "") };
 }
 
 async function snapshot(repair = true): Promise<StateSnapshot> {
@@ -6191,7 +6202,8 @@ Deno.serve(async (request) => {
       return json(request, { deploymentVersion });
     }
     if (action === "status") {
-      const current = await snapshot();
+      // Status must not load, repair, or rewrite the full shared state.
+      const current = await snapshotMetadata();
       let recordProjection = await recordProjectionHealth(current.revision);
       // Do not repair large projections synchronously in the status GET handler.
       // Status remains read-only and exposes recordProjection.synchronized for diagnostics.
