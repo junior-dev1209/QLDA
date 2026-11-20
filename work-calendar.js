@@ -272,6 +272,8 @@ function openCalendarDialog(id = "", mode = id ? "detail" : "edit") {
   if (id && !event) return;
   if (!canManageCalendarEvent()) return;
   calendarUi.editId = id;
+  calendarUi.generation = (calendarUi.generation || 0) + 1;
+  calendarUi.createId = event ? "" : uid("meeting");
   calendarUi.mode = "edit";
   calendarUi.editBase = event ? JSON.stringify(event) : "";
   calendarUi.returnFocus = document.activeElement;
@@ -306,6 +308,8 @@ function openCalendarDialog(id = "", mode = id ? "detail" : "edit") {
 }
 
 function closeCalendarDialog({ restoreFocus = true } = {}) {
+  calendarUi.generation = (calendarUi.generation || 0) + 1;
+  calendarUi.mode = "closed";
   closeModal("calendarDialog");
   if (restoreFocus) calendarUi.returnFocus?.focus?.();
 }
@@ -373,29 +377,50 @@ function normalizeCalendarTitleInput() {
   if (Number.isInteger(start) && Number.isInteger(end)) input.setSelectionRange(start, end);
 }
 
-function saveCalendarEvent(event) {
+async function saveCalendarEvent(event) {
   event.preventDefault();
-  const existing = (state.calendarEvents || []).find((item) => item.id === calendarUi.editId);
+  if (calendarUi.saving || byId("calendarDialog").classList.contains("is-hidden")) return;
+  const existing = (state.calendarEvents || []).find((item) => item.id === (calendarUi.editId || calendarUi.createId));
   const error = byId("calendarFormError");
+  if (!isOfflineFileRuntime() && usingSupabaseSync() && typeof confirmRecordMutationOnline !== "function") {
+    error.textContent = "Các tệp giao diện chưa đồng bộ phiên bản. Nội dung vẫn được giữ; hãy tải lại trang trước khi lưu lịch.";
+    return;
+  }
   if (calendarUi.mode !== "edit" || !canManageCalendarEvent(existing) || (calendarUi.editId && !existing)) { error.textContent = "Không thể lưu: quyền truy cập hoặc cuộc họp đã thay đổi."; return; }
-  if (existing && JSON.stringify(existing) !== calendarUi.editBase) { error.textContent = "Cuộc họp đã được cập nhật ở nơi khác. Nội dung đang nhập được giữ nguyên; đóng và mở lại cuộc họp để kiểm tra bản mới trước khi sửa."; return; }
+  if (existing && calendarUi.editId && JSON.stringify(existing) !== calendarUi.editBase) { error.textContent = "Cuộc họp đã được cập nhật ở nơi khác. Nội dung đang nhập được giữ nguyên; đóng và mở lại cuộc họp để kiểm tra bản mới trước khi sửa."; return; }
   const values = calendarReadForm();
   error.textContent = WorkCalendar.validate(values);
   if (error.textContent) return;
-  const record = applyRecordAudit({ ...existing, ...values, id: existing?.id || uid("meeting") }, existing);
-  const previous = state.calendarEvents || [], previousLog = state.activityLog;
-  state.calendarEvents = existing ? previous.map((item) => item.id === record.id ? record : item) : [...previous, record];
-  const calendarAuditIsServerOwned = typeof usingSupabaseSync === "function" && usingSupabaseSync()
-    && typeof sharedSync !== "undefined" && sharedSync.session
-    && typeof deploymentVersionAtLeast === "function"
-    && deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.10.27.2");
-  if (!calendarAuditIsServerOwned) {
-    logActivity({ action: existing ? "Cập nhật cuộc họp" : "Thêm cuộc họp", module: "Lịch công việc", targetType: "calendar-event", targetId: record.id, title: record.title, departmentId: record.departmentIds[0] || "", details: `${formatDate(record.date)} ${record.time} · ${record.location}` });
-  }
-  try { saveState(); } catch { state.calendarEvents = previous; state.activityLog = previousLog; error.textContent = "Chưa lưu được dữ liệu trên thiết bị. Nội dung đang nhập được giữ lại."; return; }
-  calendarUi.week = WorkCalendar.weekStart(record.date);
-  closeCalendarDialog(); renderCalendarView(); checkCalendarReminders();
-  window.virtualAssistantCalendarWizardSaved?.(record.id);
+  calendarUi.saving = true;
+  const generation = calendarUi.generation;
+  const actorId = String(currentAccount()?.id || "");
+  const isCurrent = () => calendarUi.generation === generation && actorId === String(currentAccount()?.id || "");
+  try {
+    const record = applyRecordAudit({ ...existing, ...values, id: existing?.id || (calendarUi.createId ||= uid("meeting")) }, existing);
+    const previous = state.calendarEvents || [], previousLog = state.activityLog;
+    state.calendarEvents = existing ? previous.map((item) => item.id === record.id ? record : item) : [...previous, record];
+    const calendarAuditIsServerOwned = typeof usingSupabaseSync === "function" && usingSupabaseSync()
+      && typeof sharedSync !== "undefined" && sharedSync.session
+      && typeof deploymentVersionAtLeast === "function"
+      && deploymentVersionAtLeast(sharedSync.deploymentVersion, "2026.10.27.2");
+    if (!calendarAuditIsServerOwned) {
+      logActivity({ action: existing ? "Cập nhật cuộc họp" : "Thêm cuộc họp", module: "Lịch công việc", targetType: "calendar-event", targetId: record.id, title: record.title, departmentId: record.departmentIds[0] || "", details: `${formatDate(record.date)} ${record.time} · ${record.location}` });
+    }
+    try { saveState(); } catch { state.calendarEvents = previous; state.activityLog = previousLog; error.textContent = "Chưa lưu được dữ liệu trên thiết bị. Nội dung đang nhập được giữ lại."; return; }
+    if (typeof confirmRecordMutationOnline === "function" && !await confirmRecordMutationOnline("calendarEvents", record.id)) return;
+    if (!isCurrent()) return;
+    calendarUi.editId = record.id;
+    calendarUi.editBase = JSON.stringify((state.calendarEvents || []).find((item) => item.id === record.id) || record);
+    calendarUi.formBase = JSON.stringify(values);
+    if (JSON.stringify(calendarReadForm()) !== JSON.stringify(values)) {
+      byId("calendarDialogTitle").textContent = "Cập nhật cuộc họp";
+      error.textContent = "Bản vừa gửi đã được lưu. Nội dung nhập thêm vẫn được giữ để anh/chị tiếp tục cập nhật, không tạo lịch mới.";
+      return;
+    }
+    calendarUi.week = WorkCalendar.weekStart(record.date);
+    closeCalendarDialog(); renderCalendarView(); checkCalendarReminders();
+    window.virtualAssistantCalendarWizardSaved?.(record.id);
+  } finally { calendarUi.saving = false; }
 }
 
 function deleteCalendarEvent() {
@@ -429,16 +454,6 @@ function exportCalendarExcel() {
     : events.map((event) => [...common(event), event.allHands ? "Toàn thể" : WorkCalendar.ids(event.participantIds).map(calendarPersonName).join(", "), event.note || "", event.conclusion || ""]);
   downloadDashboardPopupExcel({ title, sheetName: "Lich cong viec", fileName: `lich-cong-viec-${calendarUi.week}.xls`, subtitle: `${formatDate(calendarUi.week)} - ${formatDate(WorkCalendar.addDays(calendarUi.week, 6))}`,
     headers: [...headers, ...(calendarUi.tab === "conclusions" ? ["Công việc từ kết luận", "Người thực hiện", "Trạng thái", "Tiến độ", "Hạn hoàn thành"] : ["Thành phần tham dự", "Ghi chú", "Kết luận"])], rows });
-}
-
-function syncTaskStatusChoices() {
-  const select = byId("taskStatus");
-  byId("taskStatusChoices")?.querySelectorAll("input").forEach((input) => { input.checked = input.value === select.value; input.disabled = select.disabled; });
-}
-
-function editableTaskStatus(task) {
-  const value = normalizeTaskStatus(task?.status);
-  return value === "Quá hạn" ? (Number(task?.progress) > 0 ? "Đang thực hiện" : TASK_STATUS_PREPARING) : value;
 }
 
 const calendarReminders = { accountId: "", visible: [], notifications: [], delivered: {} };
@@ -502,14 +517,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const dialog = byId("calendarDialog");
     return !dialog.classList.contains("is-hidden") ? byId("calendarForm") : null;
   };
-  byId("taskStatusChoices").addEventListener("change", (event) => {
-    const input = event.target.closest("input");
-    if (!input || byId("taskStatus").disabled) return;
-    byId("taskStatus").value = input.value;
-    byId("taskStatus").dispatchEvent(new Event("change", { bubbles: true }));
-    syncTaskStatusChoices();
-  });
-  syncTaskStatusChoices();
   byId("calendarPrev").addEventListener("click", () => { calendarUi.week = WorkCalendar.addDays(calendarUi.week, -7); renderCalendarView(); });
   byId("calendarNext").addEventListener("click", () => { calendarUi.week = WorkCalendar.addDays(calendarUi.week, 7); renderCalendarView(); });
   byId("calendarToday").addEventListener("click", () => { calendarUi.week = WorkCalendar.weekStart(WorkCalendar.dateKey(new Date())); renderCalendarView(); });
@@ -570,10 +577,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (canManageCalendarEvent(event) && JSON.stringify(calendarReadForm()) !== calendarUi.formBase) {
       byId("calendarFormError").textContent = "Lưu thay đổi cuộc họp trước khi tạo công việc từ kết luận."; return;
     }
-    closeCalendarDialog(); switchView("tasks"); openNewTaskFormDialog();
-    calendarTaskSourceId = event.id;
-    byId("taskTitle").value = `Kết luận: ${event.title}`;
-    byId("taskNote").value = event.conclusion || "";
+    closeCalendarDialog(); switchView("tasks");
+    openNewTaskFormDialog({ calendarEventId: event.id });
   });
   byId("calendarExcel").addEventListener("click", exportCalendarExcel);
   byId("calendarIcs").addEventListener("click", () => {

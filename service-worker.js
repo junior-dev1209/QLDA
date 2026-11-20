@@ -1,4 +1,4 @@
-const RELEASE_VERSION = "3.4.151";
+const RELEASE_VERSION = "3.4.160";
 const CACHE_NAME = `phuc-thinh-kpi-v${RELEASE_VERSION.replace(/\D/g, "")}`;
 const APP_SHELL = [
   "index.html",
@@ -16,6 +16,14 @@ const APP_SHELL = [
   "gpmb-workflow-data.js",
   "supabase-config.js",
   "script.js",
+  "feature-modules.js",
+  "frontend/tasks-board.js",
+  "frontend/tasks-details.js",
+  "frontend/tasks-editor.js",
+  "frontend/tasks-import.js",
+  "frontend/tasks-form.js",
+  "frontend/tasks-catalog.js",
+  "frontend/tasks-reader.js",
   "task-command-transport.js",
   "manifest.webmanifest",
   "app-icon-phuc-thinh.png",

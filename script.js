@@ -1,6 +1,11 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.151";
+const APP_VERSION = "3.4.160";
+if (window.QldaFeatures) window.QldaFeatures.configure(APP_VERSION, document.baseURI);
+const taskFeatureGenerations = new Map();
+const taskFeatureWrites = new Set();
+let taskSurfaceGeneration = 0;
+let taskFormGeneration = 0;
 const ACTIVE_VIEW_KEY_PREFIX = "phuc-thinh-active-view-v1";
 const SIDEBAR_COLLAPSED_KEY = "phuc-thinh-sidebar-collapsed-v1";
 const CUSTOMIZE_MODE_KEY = "phuc-thinh-customize-mode-v1";
@@ -1734,6 +1739,8 @@ let lunaRealtimeModulePromise = null;
 let lunaRealtimeClient = null;
 let lunaRealtimeChannel = null;
 let lunaRealtimeConnectPromise = null;
+let lunaRealtimeDisconnectPromise = Promise.resolve();
+let lunaRealtimeGeneration = 0;
 let lunaRealtimeRetryTimer = 0;
 let lunaAnnouncementRefreshTimer = 0;
 let lunaAnnouncementWakeTimer = 0;
@@ -1755,6 +1762,7 @@ let archiveFileDraft = [];
 let bulletinResizeRefreshQueued = false;
 let taskAttachmentDraft = [];
 let taskBulkImportState = { rows: [], errors: [], fileName: "" };
+let taskBulkImportReadGeneration = 0;
 let taskDetailInlineEditor = null;
 let personDetailInlineEditor = null;
 let employeeHandoverDraft = null;
@@ -1827,6 +1835,7 @@ const sharedSync = {
   baseState: null,
   serverBaseState: null,
   deploymentVersion: "",
+  taskQuerySupported: false,
   calendarEventsSupported: false,
   notificationsSupported: false,
   lunaBroadcastSupported: false,
@@ -4568,6 +4577,7 @@ async function probeSharedSync({ force = false } = {}) {
     sharedSync.available = response.ok && payload?.available === true;
     sharedSync.initialized = sharedSync.available ? Boolean(payload?.initialized) : null;
     sharedSync.deploymentVersion = sharedSync.available ? String(payload?.deploymentVersion || "") : "";
+    sharedSync.taskQuerySupported = sharedSync.available && payload?.taskQueries === "task-page-v1";
     sharedSync.calendarEventsSupported = sharedSync.available && payload?.calendarEvents === true;
     sharedSync.notificationsSupported = sharedSync.available && payload?.notifications === true;
     sharedSync.lunaBroadcastSupported = sharedSync.available && payload?.lunaBroadcast === true;
@@ -4587,10 +4597,12 @@ function stopLunaAnnouncementRealtime() {
   const channel = lunaRealtimeChannel;
   const client = lunaRealtimeClient;
   lunaRealtimeChannel = null;
-  lunaRealtimeClient = null;
+  lunaRealtimeGeneration += 1;
   if (channel && client) {
-    void client.removeChannel(channel).catch(() => {});
-    client.realtime.disconnect();
+    lunaRealtimeDisconnectPromise = lunaRealtimeDisconnectPromise.then(async () => {
+      try { await client.removeChannel(channel); } catch { /* Polling remains available. */ }
+      client.realtime.disconnect();
+    });
   }
 }
 
@@ -4607,28 +4619,40 @@ async function ensureLunaAnnouncementRealtimeConnection() {
     stopLunaAnnouncementRealtime();
     return;
   }
-  if (lunaRealtimeChannel || lunaRealtimeConnectPromise) return;
+  if (lunaRealtimeChannel) return;
+  if (lunaRealtimeConnectPromise) return await lunaRealtimeConnectPromise;
+  const generation = lunaRealtimeGeneration;
+  const actorId = String(currentAccount()?.id || "");
+  const sessionToken = sharedSync.sessionToken;
+  const isCurrent = () => generation === lunaRealtimeGeneration
+    && actorId === String(currentAccount()?.id || "") && sharedSync.session
+    && sessionToken === sharedSync.sessionToken && sharedSync.lunaBroadcastSupported === true;
   lunaRealtimeConnectPromise = (async () => {
     const config = supabaseSyncConfig();
     if (!config) return;
-    lunaRealtimeModulePromise ||= import("https://esm.sh/@supabase/supabase-js@2.107.0?bundle");
+    lunaRealtimeModulePromise ||= import("https://esm.sh/@supabase/supabase-js@2.107.0?bundle").catch((error) => {
+      lunaRealtimeModulePromise = null;
+      throw error;
+    });
     const { createClient } = await lunaRealtimeModulePromise;
-    if (!currentAccount() || !sharedSync.session || sharedSync.lunaBroadcastSupported !== true) return;
-    const client = createClient(config.projectUrl, config.publishableKey, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    await lunaRealtimeDisconnectPromise;
+    if (!isCurrent()) return;
+    const client = lunaRealtimeClient ||= createClient(config.projectUrl, config.publishableKey, {
+      auth: { storageKey: "qlda-luna-realtime", persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
       realtime: { params: { eventsPerSecond: 2 } },
     });
     const channel = client.channel(LUNA_ANNOUNCEMENT_TOPIC, {
       config: { private: true, broadcast: { self: false } },
     });
     channel.on("broadcast", { event: "announcement" }, ({ payload }) => {
+      if (!isCurrent() || lunaRealtimeChannel !== channel) return;
       const announcementId = String(payload?.announcementId || "");
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(announcementId)) return;
       queueLunaAnnouncementRefresh();
     });
-    lunaRealtimeClient = client;
     lunaRealtimeChannel = channel;
     channel.subscribe((status) => {
+      if (!isCurrent() || lunaRealtimeChannel !== channel) return;
       if (status === "SUBSCRIBED") {
         if (lunaRealtimeRetryTimer) window.clearTimeout(lunaRealtimeRetryTimer);
         lunaRealtimeRetryTimer = 0;
@@ -4638,10 +4662,14 @@ async function ensureLunaAnnouncementRealtimeConnection() {
       }
     });
   })().catch(() => {
+    if (!isCurrent()) return;
     stopLunaAnnouncementRealtime();
     scheduleLunaAnnouncementRealtimeRetry();
   }).finally(() => {
     lunaRealtimeConnectPromise = null;
+    if (!lunaRealtimeChannel && currentAccount() && sharedSync.session && sharedSync.lunaBroadcastSupported === true) {
+      scheduleLunaAnnouncementRealtimeRetry();
+    }
   });
   await lunaRealtimeConnectPromise;
 }
@@ -6941,8 +6969,13 @@ async function ensureTaskMutationContractSupported() {
   return false;
 }
 
-async function confirmTaskMutationOnline(taskId) {
-  if (isOfflineFileRuntime() || !sharedSync.session) return true;
+async function confirmRecordMutationOnline(collection, recordId) {
+  if (isOfflineFileRuntime()) return true;
+  if (!sharedSync.session) return !usingSupabaseSync();
+  const actorId = String(currentAccount()?.id || "");
+  if (!actorId) return false;
+  const token = sharedSync.sessionToken;
+  const sameSession = () => sharedSync.session && token === sharedSync.sessionToken && actorId === String(currentAccount()?.id || "");
   let result = await flushSharedStateSync();
   if (result?.reason === "in-flight") {
     const deadline = Date.now() + 8000;
@@ -6951,20 +6984,33 @@ async function confirmTaskMutationOnline(taskId) {
     }
     if (!sharedSync.inFlight && (sharedSync.pending || sharedSync.dirty)) result = await flushSharedStateSync();
   }
-  const taskDenied = Array.isArray(result?.denied)
-    && result.denied.some((change) => change?.scope === "tasks" && String(change?.id || "") === String(taskId || ""));
-  if (taskDenied || result?.conflict) {
+  if (!sameSession()) return false;
+  const recordDenied = Array.isArray(result?.denied)
+    && result.denied.some((change) => change?.scope === collection && String(change?.id || "") === String(recordId || ""));
+  if (recordDenied || result?.conflict) {
     renderAll();
     return false;
   }
-  if (!result?.ok && result?.pending) {
+  const accepted = (sharedSync.serverBaseState?.[collection] || []).some((item) => String(item.id) === String(recordId));
+  if (accepted && (result?.ok || result?.synced)) return true;
+  if (result?.ok) {
+    try {
+      const latest = await sharedJsonRequest("state");
+      if (sameSession() && latest.response.ok && (latest.payload?.state?.[collection] || []).some((item) => String(item.id) === String(recordId))) return true;
+    } catch { /* An uncertain outcome keeps the same draft ID. */ }
+  }
+  if (sameSession()) {
     showSystemToast(
-      "Đang chờ đồng bộ công việc",
-      "Thay đổi đã được giữ an toàn trên thiết bị và sẽ tự gửi lại khi kết nối máy chủ ổn định.",
+      "Chưa xác nhận lưu trên máy chủ",
+      "Biểu mẫu vẫn giữ nguyên mã và nội dung. Hãy chờ đồng bộ hoặc thử lưu lại bản nháp này; không cần tạo bản ghi mới.",
       { tone: "warning", duration: 8000 },
     );
   }
-  return true;
+  return false;
+}
+
+async function confirmTaskMutationOnline(taskId) {
+  return confirmRecordMutationOnline("tasks", taskId);
 }
 
 function taskCommandReportId(previous, next) {
@@ -7022,6 +7068,82 @@ async function acceptTaskCommandState(remote, sentLocal, changeVersion) {
 }
 
 let taskCommandTransportPromise = null;
+function taskServerReadsEnabled() {
+  return !isOfflineFileRuntime() && (typeof navigator === "undefined" || navigator.onLine !== false)
+    && usingSupabaseSync() && sharedSync.session && sharedSync.taskQuerySupported === true;
+}
+
+function runTaskFeature(id, method, args) {
+  const actorId = String(currentAccount()?.id || "");
+  if (!actorId || !canAccessView("tasks") || (id === "tasks-import" && !isAdmin())) return false;
+  const writing = ["saveTaskRecord", "reviewTaskCompletion", "reviewTaskDeadlineExtension", "deleteTaskRecord", "importTaskBulkRows"].includes(method);
+  const key = `${actorId}:${id}:${method}`;
+  const writeKey = `${key}:${String(args[0]?.id || args[0] || "batch")}`;
+  if (writing && taskFeatureWrites.has(writeKey)) return false;
+  if (method === "saveTaskRecord") args = [args[0], { files: Array.from(args[1]?.files || []) }, [...(args[2] || [])], ...args.slice(3)];
+  const generation = (taskFeatureGenerations.get(key) || 0) + 1;
+  taskFeatureGenerations.set(key, generation);
+  const opening = method.startsWith("open") || method === "copyTaskToForm" || method === "showTaskFormDialog";
+  const surfaceGeneration = opening ? ++taskSurfaceGeneration : taskSurfaceGeneration;
+  const initialView = activeViewId();
+  const openingSessionToken = sharedSync.sessionToken;
+  const openingFormGeneration = taskFormGeneration;
+  const isCurrent = () => String(currentAccount()?.id || "") === actorId && canAccessView("tasks")
+    && (writing || taskFeatureGenerations.get(key) === generation)
+    && (!opening || (activeViewId() === initialView && taskSurfaceGeneration === surfaceGeneration));
+  const invoke = (api) => {
+    if (String(currentAccount()?.id || "") !== actorId || !canAccessView("tasks") || (id === "tasks-import" && !isAdmin())) return false;
+    if (!writing && taskFeatureGenerations.get(key) !== generation) return false;
+    if (opening && (activeViewId() !== initialView || taskSurfaceGeneration !== surfaceGeneration)) return false;
+    if (typeof api?.[method] !== "function") throw new Error("Task feature action is unavailable.");
+    api.initialize?.();
+    const rowOpen = ["openTaskDetailDialog","openTaskDetailInlineEditor","openTaskEditForm","openTaskCompletionReviewDialog","openTaskDeadlineExtensionReviewDialog","copyTaskToForm","deleteTaskRecord"].includes(method);
+    const taskId = String(args[0]?.id || args[0] || "");
+    if (rowOpen && taskId && taskServerReadsEnabled()) {
+      return window.QldaFeatures.load("tasks-reader").then(async (reader) => {
+        if (!isCurrent()) return false;
+        const ready = await reader.readForOpen(taskId);
+        if (!ready || !isCurrent() || sharedSync.sessionToken !== openingSessionToken || taskFormGeneration !== openingFormGeneration) return false;
+        const nextArgs = method === "copyTaskToForm" ? [state.tasks.find((task) => String(task.id) === taskId),...args.slice(1)] : args;
+        return api[method](...nextArgs);
+      });
+    }
+    return api[method](...args);
+  };
+  const failed = () => {
+    if (String(currentAccount()?.id || "") !== actorId) return false;
+    if (!writing && taskFeatureGenerations.get(key) !== generation) return false;
+    if (method === "renderTaskBoard") {
+      const host = byId("taskBoard");
+      if (host) {
+        const message = document.createElement("p"); message.className = "muted";
+        message.textContent = "Chưa tải được mục Công việc. Dữ liệu và nội dung đang nhập không bị thay đổi.";
+        const retry = document.createElement("button"); retry.type = "button"; retry.className = "ghost"; retry.textContent = "Thử lại";
+        retry.addEventListener("click", () => runTaskFeature(id, method, args));
+        host.replaceChildren(message, retry);
+      }
+    } else showSystemToast("Chưa tải được chức năng Công việc", "Nội dung đang nhập vẫn được giữ. Hãy thử lại khi kết nối ổn định.", { tone: "warning", duration: 8000 });
+    return false;
+  };
+  if (writing) taskFeatureWrites.add(writeKey);
+  try {
+    const ready = window.QldaFeatures?.get(id);
+    if (ready && !writing) {
+      const result = invoke(ready);
+      return result && typeof result.then === "function" ? result.catch(failed) : result;
+    }
+    if (method === "renderTaskBoard" && !byId("taskBoard").hasChildNodes()) {
+      byId("taskBoard").innerHTML = '<p class="muted" role="status">Đang tải công việc...</p>';
+    }
+    const result = ready ? invoke(ready) : window.QldaFeatures?.load(id).then(invoke);
+    if (!result && !ready) throw new Error("Feature loader unavailable.");
+    return Promise.resolve(result).catch(failed).finally(() => { if (writing) taskFeatureWrites.delete(writeKey); });
+  } catch {
+    if (writing) taskFeatureWrites.delete(writeKey);
+    return failed();
+  }
+}
+
 function loadTaskCommandTransport() {
   if (window.TaskCommandTransport) return Promise.resolve(window.TaskCommandTransport);
   if (!taskCommandTransportPromise) {
@@ -7039,7 +7161,11 @@ function loadTaskCommandTransport() {
 
 async function submitTaskCommandOnline(previous, candidate, command) {
   if (isOfflineFileRuntime() || !sharedSync.session || !usingSupabaseSync()) return { ok: true, task: candidate, remote: false };
+  const actorId = String(currentAccount()?.id || "");
+  const sessionToken = sharedSync.sessionToken;
+  const sameSession = () => sharedSync.session && sharedSync.sessionToken === sessionToken && String(currentAccount()?.id || "") === actorId;
   if (!await ensureTaskMutationContractSupported()) return { ok: false, reason: "unsupported-server" };
+  if (!sameSession()) return { ok: false, reason: "session-changed" };
   const commandId = taskCommandReportId(previous, candidate);
   if (!commandId) {
     showSystemToast(
@@ -7053,11 +7179,13 @@ async function submitTaskCommandOnline(previous, candidate, command) {
   const waitUntil = Date.now() + 20000;
   while (sharedSync.inFlight && Date.now() < waitUntil) {
     await new Promise((resolve) => window.setTimeout(resolve, 80));
+    if (!sameSession()) return { ok: false, reason: "session-changed" };
   }
   if (sharedSync.inFlight || ((sharedSync.dirty || sharedSync.pending) && !(await flushSharedStateSync())?.ok)) {
     showSystemToast("Chưa thể gửi cập nhật", "Thay đổi trước đó chưa đồng bộ xong. Nội dung đang nhập vẫn được giữ; hãy thử lại sau khi kết nối ổn định.");
     return { ok: false, reason: "pending-sync" };
   }
+  if (!sameSession()) return { ok: false, reason: "session-changed" };
   sharedSync.inFlight = true;
   const sentLocal = cloneStatePayload(state);
   const changeVersion = sharedSync.localChangeVersion;
@@ -7066,7 +7194,11 @@ async function submitTaskCommandOnline(previous, candidate, command) {
   try {
     await attachSharedFileKeys([candidate], [serverCandidate], "attachments");
     const transport = await loadTaskCommandTransport();
-    const { response, payload } = await transport.send(sharedJsonRequest, {
+    if (!sameSession()) return { ok: false, reason: "session-changed" };
+    const request = (action, options) => sameSession()
+      ? sharedJsonRequest(action, options)
+      : Promise.reject(new Error("session-changed"));
+    const { response, payload } = await transport.send(request, {
       taskId: String(candidate.id || ""),
       command,
       commandId,
@@ -7075,6 +7207,7 @@ async function submitTaskCommandOnline(previous, candidate, command) {
       baseTask: previous,
       task: serverCandidate,
     });
+    if (!sameSession()) return { ok: false, reason: "session-changed" };
     if (response.status === 401) {
       handleSharedSessionUnauthorized();
       return { ok: false, reason: "session-verification" };
@@ -7082,18 +7215,23 @@ async function submitTaskCommandOnline(previous, candidate, command) {
     let remoteState = taskStateFromCommandResponse(payload);
     if (response.ok && payload?.task && !remoteState) {
       const latest = await sharedJsonRequest("state");
+      if (!sameSession()) return { ok: false, reason: "session-changed" };
       if (latest.response.ok && latest.payload?.state) {
         remoteState = latest.payload.state;
         payload.revision = latest.payload.revision;
       }
     }
     if (!response.ok || !remoteState || !payload?.task) {
-      const reason = String(payload?.error || `server-${response.status}`);
+      const resourceLimited = response.status === 546;
+      const reason = resourceLimited ? "worker-resource-limit" : String(payload?.error || payload?.message || `server-${response.status}`);
+      const diagnostic = response.status === 422
+        ? `${payload?.message || "Máy chủ không chấp nhận nội dung cập nhật. Nội dung đang nhập vẫn được giữ; hãy kiểm tra lại trạng thái, thời hạn và dữ liệu công việc."} (422${payload?.code ? ` · ${payload.code}` : ""}${payload?.deploymentVersion ? ` · ${payload.deploymentVersion}` : ""})`
+        : reason;
       showSystemToast(
-        response.status === 409 ? "Dữ liệu công việc đã thay đổi" : "Máy chủ từ chối cập nhật công việc",
+        resourceLimited ? "Máy chủ vượt giới hạn xử lý" : response.status === 409 ? "Dữ liệu công việc đã thay đổi" : "Máy chủ từ chối cập nhật công việc",
         response.status === 409
           ? "Hệ thống đã giữ phiên bản mới nhất trên máy chủ. Hãy kiểm tra lại công việc trước khi cập nhật tiếp."
-          : reason,
+          : resourceLimited ? "Máy chủ online đã dừng xử lý do vượt giới hạn CPU hoặc bộ nhớ (546). Nội dung đang nhập vẫn được giữ; chưa hiển thị thành công khi chưa có xác nhận. Hệ thống không tự gửi lặp lệnh gây quá tải." : diagnostic,
         { tone: "warning", duration: 9000 },
       );
       if (remoteState) {
@@ -7108,6 +7246,7 @@ async function submitTaskCommandOnline(previous, candidate, command) {
     const committedTask = state.tasks.find((task) => String(task.id) === String(candidate.id));
     return { ok: true, task: committedTask || payload.task, remote: true, idempotent: payload.idempotent === true };
   } catch (error) {
+    if (!sameSession()) return { ok: false, reason: "session-changed" };
     showSystemToast(
       "Chưa thể xác nhận cập nhật công việc",
       error?.name === "AbortError"
@@ -7117,8 +7256,10 @@ async function submitTaskCommandOnline(previous, candidate, command) {
     );
     return { ok: false, reason: error?.message || "network-error" };
   } finally {
-    sharedSync.inFlight = false;
-    if (sharedSync.pending || sharedSync.dirty) queueSharedStateSync();
+    if (sameSession()) {
+      sharedSync.inFlight = false;
+      if (sharedSync.pending || sharedSync.dirty) queueSharedStateSync();
+    }
   }
 }
 
@@ -7789,19 +7930,7 @@ function taskParticipantPersonId(value) {
   return matches.length === 1 ? matches[0].id : id;
 }
 
-function ensureTaskOwnerOption(task) {
-  const select = byId("taskOwner");
-  const ownerId = String(task?.ownerId || "").trim();
-  if (!select || !ownerId || Array.from(select.options).some((option) => option.value === ownerId)) return;
-  const person = personById(ownerId) || personById(taskParticipantPersonId(ownerId));
-  const label = person
-    ? `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`
-    : String(task?.ownerName || "Người thực hiện hiện tại");
-  const option = document.createElement("option");
-  option.value = ownerId;
-  option.textContent = label;
-  select.append(option);
-}
+
 
 function taskParticipantIds(task) {
   return uniquePersonIds([taskParticipantPersonId(task?.ownerId), ...taskCollaboratorIds(task)]);
@@ -7826,138 +7955,31 @@ function taskCollaboratorNames(task) {
     .filter(Boolean);
 }
 
-function selectedTaskCollaboratorIds() {
-  return uniquePersonIds(
-    Array.from(byId("taskCollaborators")?.querySelectorAll('input[type="checkbox"]:checked') || []).map((input) => input.value),
-  ).filter((id) => id !== byId("taskOwner").value);
+function selectedTaskCollaboratorIds(...args) {
+  return runTaskFeature("tasks-form", "selectedTaskCollaboratorIds", args);
 }
 
-function updateTaskCollaboratorSummary() {
-  const summary = byId("taskCollaboratorSummary");
-  const container = byId("taskCollaborators");
-  if (!summary || !container) return;
-  const selectedIds = selectedTaskCollaboratorIds();
-  const optionCount = container.querySelectorAll('input[type="checkbox"]').length;
-  if (!optionCount) {
-    summary.textContent = "Không có người phối hợp phù hợp";
-    return;
-  }
-  summary.textContent = selectedIds.length ? `Đã chọn ${selectedIds.length} người phối hợp` : "Chọn người phối hợp";
-}
 
-function updateTaskOwnerSummary() {
-  const select = byId("taskOwner");
-  const summary = byId("taskOwnerSummary");
-  if (!select || !summary) return;
-  const option = Array.from(select.options).find((item) => item.value === select.value);
-  summary.textContent = option?.value ? option.textContent || "Chọn người thực hiện" : "Chọn người thực hiện";
-}
 
-function filterTaskOwnerOptions() {
-  const container = byId("taskOwnerOptions");
-  const searchInput = byId("taskOwnerSearch");
-  const emptyState = byId("taskOwnerSearchEmpty");
-  if (!container || !searchInput) return;
-  const query = normalizeSearchText(searchInput.value);
-  let visibleCount = 0;
-  container.querySelectorAll(".task-owner-option").forEach((option) => {
-    const visible = !query || normalizeSearchText(option.textContent).includes(query);
-    option.classList.toggle("is-hidden", !visible);
-    if (visible) visibleCount += 1;
-  });
-  emptyState?.classList.toggle("is-hidden", !query || visibleCount > 0);
-}
 
-function resetTaskOwnerSearch() {
-  const input = byId("taskOwnerSearch");
-  if (input) input.value = "";
-  filterTaskOwnerOptions();
-}
 
-function isTaskOwnerPickerOpen() {
-  const panel = byId("taskOwnerPanel");
-  return !!panel && !panel.classList.contains("is-hidden");
-}
 
-function setTaskOwnerPickerOpen(open) {
-  const picker = byId("taskOwnerPicker");
-  const panel = byId("taskOwnerPanel");
-  const toggle = byId("taskOwnerToggle");
-  if (!picker || !panel || !toggle) return;
-  const shouldOpen = Boolean(open) && !picker.classList.contains("is-disabled");
-  picker.classList.toggle("is-open", shouldOpen);
-  panel.classList.toggle("is-hidden", !shouldOpen);
-  toggle.setAttribute("aria-expanded", String(shouldOpen));
-  if (!shouldOpen) {
-    resetTaskOwnerSearch();
-    return;
-  }
-  setTaskCollaboratorPickerOpen(false);
-  requestAnimationFrame(() => byId("taskOwnerSearch")?.focus());
-}
 
-function updateTaskOwnerOptions() {
-  const select = byId("taskOwner");
-  const container = byId("taskOwnerOptions");
-  if (!select || !container) return;
-  const selectedId = String(select.value || "");
-  const options = Array.from(select.options)
-    .filter((option) => option.value)
-    .map((option) => ({ value: option.value, label: option.textContent || "Nhân sự" }));
-  container.classList.toggle("is-empty", !options.length);
-  container.innerHTML = options.length
-    ? options.map((option) => `
-        <label class="checkbox-option task-owner-option">
-          <input type="radio" name="taskOwnerChoice" value="${escapeHtml(option.value)}" ${option.value === selectedId ? "checked" : ""}>
-          <span>${escapeHtml(option.label)}</span>
-        </label>
-      `).join("")
-    : "<span>Không có nhân sự phù hợp.</span>";
-  updateTaskOwnerSummary();
-  filterTaskOwnerOptions();
-}
 
-function filterTaskCollaboratorOptions() {
-  const container = byId("taskCollaborators");
-  const searchInput = byId("taskCollaboratorSearch");
-  const emptyState = byId("taskCollaboratorSearchEmpty");
-  if (!container || !searchInput) return;
-  const query = normalizeSearchText(searchInput.value);
-  let visibleCount = 0;
-  container.querySelectorAll(".checkbox-option").forEach((option) => {
-    const visible = !query || normalizeSearchText(option.textContent).includes(query);
-    option.classList.toggle("is-hidden", !visible);
-    if (visible) visibleCount += 1;
-  });
-  emptyState?.classList.toggle("is-hidden", !query || visibleCount > 0);
-}
 
-function resetTaskCollaboratorSearch() {
-  const input = byId("taskCollaboratorSearch");
-  if (input) input.value = "";
-  filterTaskCollaboratorOptions();
-}
 
-function isTaskCollaboratorPickerOpen() {
-  const panel = byId("taskCollaboratorPanel");
-  return !!panel && !panel.classList.contains("is-hidden");
-}
 
-function setTaskCollaboratorPickerOpen(open) {
-  const picker = byId("taskCollaboratorPicker");
-  const panel = byId("taskCollaboratorPanel");
-  const toggle = byId("taskCollaboratorToggle");
-  if (!picker || !panel || !toggle) return;
-  const shouldOpen = Boolean(open) && !picker.classList.contains("is-disabled");
-  picker.classList.toggle("is-open", shouldOpen);
-  panel.classList.toggle("is-hidden", !shouldOpen);
-  toggle.setAttribute("aria-expanded", String(shouldOpen));
-  if (!shouldOpen) {
-    resetTaskCollaboratorSearch();
-    return;
-  }
-  requestAnimationFrame(() => byId("taskCollaboratorSearch")?.focus());
-}
+
+
+
+
+
+
+
+
+
+
+
 
 function samePersonIdList(first = [], second = []) {
   const a = uniquePersonIds(first);
@@ -8014,13 +8036,13 @@ function editableTaskStatus(task) {
     : rawStatus;
 }
 
-function getDueStatus(task) {
+function getDueStatus(task, now = new Date()) {
   const status = editableTaskStatus(task);
   if (status === TASK_STATUS_CLOSED || status === TASK_STATUS_RECURRENCE_STOPPED) return status;
   if (status === TASK_STATUS_COMPLETED) return status;
   if (!task.due) return status;
   const due = taskDeadlineDate(task);
-  return due && due < new Date() ? "Quá hạn" : status;
+  return due && due < now ? "Quá hạn" : status;
 }
 
 function taskPeriod(task) {
@@ -8680,27 +8702,7 @@ function taskCategoryOptionsForPerson(personId) {
   return [...new Set(roleCriteria)];
 }
 
-function updateTaskCategoryOptions(selectedValue, ownerSelectId = "taskOwner", categorySelectId = "taskCategory") {
-  const select = byId(categorySelectId);
-  const ownerId = byId(ownerSelectId).value;
-  const options = taskCategoryOptionsForPerson(ownerId);
-  const selectedCandidates = [selectedValue, select.value].filter((value) => value && !String(value).startsWith("Chọn người được giao"));
-  const requested = selectedCandidates[0] || "";
-  const optionRows = options.map((category) => ({ value: category, label: category }));
-  const preserveLegacyCategory = Boolean(byId("taskId")?.value);
-  if (preserveLegacyCategory && requested && !options.some((category) => normalizeSearchText(category) === normalizeSearchText(requested))) {
-    optionRows.unshift({ value: requested, label: `${requested} (danh mục cũ, chưa có mục thay thế)` });
-  }
-  if (!optionRows.length) {
-    optionRows.push({
-      value: "",
-      label: ownerId ? "Chức vụ chưa có danh mục nhiệm vụ được cấu hình" : "Chọn người được giao để lấy danh mục nhiệm vụ",
-    });
-  }
-  const selected = requested && optionRows.some((option) => option.value === requested) ? requested : options[0] || "";
-  fillSelect(select, optionRows, selected);
-  if (!options.length && select.options[0]) select.options[0].disabled = true;
-}
+
 
 function migrateTaskCategoriesForCatalogChange(previousRoles = [], nextRoles = []) {
   if (!isAdmin()) return 0;
@@ -8725,60 +8727,13 @@ function migrateTaskCategoriesForCatalogChange(previousRoles = [], nextRoles = [
   return changed;
 }
 
-function updateTaskCollaboratorOptions(selectedValues = []) {
-  const container = byId("taskCollaborators");
-  updateTaskOwnerOptions();
-  const ownerId = byId("taskOwner").value;
-  const selectedIds = uniquePersonIds(selectedValues.length ? selectedValues : selectedTaskCollaboratorIds()).filter((id) => id !== ownerId);
-  const taskPeople = visiblePeopleForTasks();
-  const peopleWithSelected = [...taskPeople];
-  selectedIds.forEach((personId) => {
-    const person = personById(personId);
-    if (person && !peopleWithSelected.some((item) => item.id === person.id)) {
-      peopleWithSelected.unshift(person);
-    }
-  });
-  const options = peopleWithSelected
-    .filter((person) => person.id !== ownerId)
-    .map((person) => ({
-      value: person.id,
-      label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
-    }));
-  container.classList.toggle("is-empty", !options.length);
-  container.innerHTML = options.length
-    ? options
-        .map(
-          (option) => `
-            <label class="checkbox-option">
-              <input type="checkbox" value="${escapeHtml(option.value)}" ${selectedIds.includes(String(option.value)) ? "checked" : ""}>
-              <span>${escapeHtml(option.label)}</span>
-            </label>
-          `,
-        )
-        .join("")
-    : '<span>Không có nhân sự phối hợp phù hợp.</span>';
-  updateTaskCollaboratorSummary();
-  filterTaskCollaboratorOptions();
-}
+
 
 function renderPersonOptions() {
-  const currentTaskOwner = byId("taskOwner").value;
-  const currentTaskCollaborators = selectedTaskCollaboratorIds();
-  const editingTask = state.tasks.find((task) => task.id === byId("taskId").value);
-  const taskPeople = visiblePeopleForTasks();
-  const taskPeopleWithSelected =
-    currentTaskOwner && !taskPeople.some((person) => person.id === currentTaskOwner)
-      ? [personById(currentTaskOwner), ...taskPeople].filter(Boolean)
-      : taskPeople;
-  const taskSelectOptions = taskPeopleWithSelected.map((person) => ({
-    value: person.id,
-    label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
-  }));
   const evaluationOptions = visiblePeopleForEvaluation().map((person) => ({
     value: person.id,
     label: `${person.name} - ${roleById(person.roleId)?.name || "Chưa rõ vị trí"}`,
   }));
-  const personPlaceholder = [{ value: "", label: taskSelectOptions.length ? "Chọn nhân sự" : "Chưa có nhân sự" }];
   const evaluationPlaceholder = [{ value: "", label: evaluationOptions.length ? "Chọn nhân sự" : "Không có nhân sự thuộc diện đánh giá KPI" }];
   const currentEvalPerson = byId("evalPerson").value;
   const selectedEvalPerson = evaluationOptions.some((option) => option.value === currentEvalPerson)
@@ -8788,30 +8743,9 @@ function renderPersonOptions() {
       : !canViewAllData() && evaluationOptions.length === 1
       ? evaluationOptions[0].value
       : "";
-  const currentTaskPerson = currentPerson();
-  const selectedTaskOwner =
-    isEmployee() && currentTaskPerson && taskSelectOptions.some((option) => option.value === currentTaskPerson.id)
-      ? currentTaskPerson.id
-      : taskSelectOptions.some((option) => option.value === currentTaskOwner)
-        ? currentTaskOwner
-        : taskSelectOptions.length === 1
-          ? taskSelectOptions[0].value
-          : "";
-  fillSelect(
-    byId("taskOwner"),
-    personPlaceholder.concat(taskSelectOptions),
-    selectedTaskOwner,
-  );
-  if (editingTask) {
-    // Online data for a collaborator can omit the owner's personnel record.
-    // Keep the original owner in the disabled edit form so progress updates remain valid.
-    ensureTaskOwnerOption(editingTask);
-    byId("taskOwner").value = String(editingTask.ownerId || "");
-  }
-  updateTaskCollaboratorOptions(currentTaskCollaborators);
-  updateTaskCategoryOptions(byId("taskCategory").value);
   fillSelect(byId("evalPerson"), evaluationPlaceholder.concat(evaluationOptions), selectedEvalPerson);
   byId("evalPerson").disabled = isEmployee();
+  window.QldaFeatures?.get("tasks-form")?.renderTaskPersonOptions();
 }
 
 function renderAccountOptions() {
@@ -9028,98 +8962,35 @@ function taskProjectOptions() {
     .map((project) => ({ value: project.id, label: project.name }));
 }
 
-function renderTaskProjectOptions() {
-  const options = [{ value: "", label: "Chưa chọn danh mục dự án" }, ...taskProjectOptions()];
-  ["taskProjectId"].forEach((selectId) => {
-    const select = byId(selectId);
-    if (!select) return;
-    const selected = select.value;
-    fillSelect(select, options, selected);
-  });
+function renderTaskProjectOptions(...args) {
+  return window.QldaFeatures?.get("tasks-form")?.renderTaskProjectOptions(...args);
 }
 
-function renderTaskDependencyOptions(selectedIds = [], currentTaskId = byId("taskId")?.value || "") {
-  const list = byId("taskDependencies");
-  if (!list) return;
-  const selected = new Set((Array.isArray(selectedIds) ? selectedIds : []).map((id) => String(id || "")));
-  const currentId = String(currentTaskId || "");
-  const disabled = list.classList.contains("is-disabled");
-  const options = state.tasks
-    .filter((task) => String(task.id || "") !== currentId && canViewTaskRecord(task))
-    .slice()
-    .sort((left, right) => String(left.due || "9999-12-31").localeCompare(String(right.due || "9999-12-31")) || String(left.title || "").localeCompare(String(right.title || ""), "vi"));
-  list.innerHTML = options.length
-    ? options.map((task) => {
-      const taskId = String(task.id || "");
-      const checked = selected.has(taskId) ? " checked" : "";
-      const inputDisabled = disabled ? " disabled" : "";
-      const label = `${task.title || "Công việc chưa đặt tên"} · ${formatTaskDeadline(task) || "chưa có hạn"}`;
-      return `<label class="task-dependency-option"><input type="checkbox" value="${escapeHtml(taskId)}"${checked}${inputDisabled}><span>${escapeHtml(label)}</span></label>`;
-    }).join("")
-    : '<p class="task-dependency-empty">Chưa có công việc phù hợp để liên kết.</p>';
+
+
+function selectedTaskDependencyIds(...args) {
+  return runTaskFeature("tasks-form", "selectedTaskDependencyIds", args);
 }
 
-function selectedTaskDependencyIds() {
-  const list = byId("taskDependencies");
-  return list ? [...list.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value).filter(Boolean) : [];
-}
-
-function resetTaskProjectCatalogForm() {
-  const form = byId("taskProjectCatalogForm");
-  if (!form) return;
-  form.reset();
+function resetTaskProjectCatalogForm(...args) {
+  const catalog = window.QldaFeatures?.get("tasks-catalog");
+  if (catalog) return catalog.resetTaskProjectCatalogForm(...args);
+  byId("taskProjectCatalogForm")?.reset();
   byId("taskProjectCatalogId").value = "";
 }
 
-function renderTaskProjectCatalog() {
-  renderTaskProjectOptions();
-  const panel = byId("taskProjectCatalogPanel");
-  if (!panel) return;
-  const canManage = canManageProjectCatalog();
-  const canView = canViewProjectCatalog();
-  panel.classList.toggle("is-hidden", !canView);
-  byId("openTaskProjectCatalog").textContent = canManage ? "Quản lý dự án" : "Danh mục dự án";
-  byId("taskProjectCatalogForm").classList.toggle("is-hidden", !canManage);
-  if (!canView) return;
-  const projects = taskProjectOptions();
-  const search = normalizeSearchText(byId("taskProjectCatalogSearch")?.value || "");
-  const visibleProjects = search
-    ? projects.filter((project) => normalizeSearchText(project.label).includes(search))
-    : projects;
-  byId("taskProjectCatalogDialogTitle").textContent = canManage ? "Quản lý tên dự án" : "Danh mục dự án";
-  byId("taskProjectCatalogNote").textContent = projects.length
-    ? `${projects.length} dự án đang được dùng làm tên chuẩn cho công việc.`
-    : "Chưa có dự án. Thêm dự án để liên kết khi tạo công việc.";
-  byId("taskProjectCatalogList").innerHTML = visibleProjects.length
-    ? visibleProjects
-        .map(
-          (project) => `
-            <div class="project-catalog-item">
-              <button class="project-catalog-project-link" type="button" data-open-project-tasks="${escapeHtml(project.value)}" title="Xem công việc thuộc dự án ${escapeHtml(project.label)}">${escapeHtml(project.label)}</button>
-              ${canManage ? `<div class="project-catalog-actions">
-                <button class="ghost" type="button" data-edit-task-project="${escapeHtml(project.value)}">Sửa</button>
-                <button class="ghost project-catalog-delete" type="button" data-delete-task-project="${escapeHtml(project.value)}" title="Xóa dự án" aria-label="Xóa dự án ${escapeHtml(project.label)}">X</button>
-              </div>` : ""}
-            </div>
-          `,
-        )
-        .join("")
-    : search
-      ? '<p class="muted">Không tìm thấy dự án phù hợp.</p>'
-      : '<p class="muted">Chưa có tên dự án trong danh mục.</p>';
+function renderTaskProjectCatalog(...args) {
+  return runTaskFeature("tasks-catalog", "renderTaskProjectCatalog", args);
 }
 
-function openTaskProjectCatalogDialog() {
-  if (!canViewProjectCatalog()) return;
-  byId("taskProjectCatalogSearch").value = "";
-  renderTaskProjectCatalog();
-  const dialog = byId("taskProjectCatalogDialog");
-  dialog.classList.remove("is-hidden");
-  dialog.setAttribute("aria-hidden", "false");
-  (canManageProjectCatalog() ? byId("taskProjectCatalogName") : byId("taskProjectCatalogSearch")).focus();
+function openTaskProjectCatalogDialog(...args) {
+  if (!canAccessView("tasks")) return false;
+  if (activeViewId() !== "tasks") switchView("tasks");
+  return runTaskFeature("tasks-catalog", "openTaskProjectCatalogDialog", args);
 }
 
 function closeTaskProjectCatalogDialog() {
+  taskSurfaceGeneration++;
   const dialog = byId("taskProjectCatalogDialog");
   if (!dialog) return;
   dialog.classList.add("is-hidden");
@@ -9142,116 +9013,19 @@ function openProjectTaskList(projectId) {
   byId("taskBoard").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function editTaskProjectCatalog(projectId) {
-  if (!canManageProjectCatalog()) return;
-  const project = projectById(projectId);
-  if (!project) return;
-  byId("taskProjectCatalogId").value = project.id;
-  byId("taskProjectCatalogName").value = project.name;
-  byId("taskProjectCatalogName").focus();
-  byId("taskProjectCatalogName").scrollIntoView({ behavior: "smooth", block: "center" });
-}
 
-function deleteTaskProjectCatalog(projectId) {
-  if (!canManageProjectCatalog()) {
-    alert("Tài khoản hiện tại không có quyền xóa dự án trong danh mục.");
-    return;
-  }
-  const project = projectById(projectId);
-  if (!project) return;
-  const linkedAppraisalCount = (state.publicInvestmentAppraisals || []).filter((record) => record.projectId === project.id).length;
-  if (linkedAppraisalCount) {
-    alert(`Không thể xóa dự án đang được liên kết với ${linkedAppraisalCount} hồ sơ thẩm định. Hãy chuyển hoặc xóa hồ sơ thẩm định trước.`);
-    return;
-  }
-  const linkedManagementCount = (state.publicInvestmentProjects || []).filter((record) => record.projectId === project.id).length;
-  if (linkedManagementCount) {
-    alert(`Không thể xóa dự án đang có hồ sơ quản lý thực hiện. Hãy xử lý hồ sơ dự án số trước.`);
-    return;
-  }
-  const linkedTaskCount = state.tasks.filter((task) => projectIdForTask(task) === project.id).length;
-  const linkedTaskNote = linkedTaskCount
-    ? ` ${linkedTaskCount} công việc đã liên kết vẫn được giữ nguyên để tra cứu lịch sử.`
-    : "";
-  if (!confirm(`Xóa dự án "${project.name}" khỏi danh mục?${linkedTaskNote}`)) return;
-  registerDeletedId(project.id);
-  state.projectCatalog = state.projectCatalog.filter((item) => item.id !== project.id);
-  logActivity({
-    action: "Xóa dự án khỏi danh mục",
-    module: "Công việc",
-    targetType: "project-catalog",
-    targetId: project.id,
-    title: project.name,
-    details: linkedTaskCount
-      ? `Xóa khỏi danh mục; giữ lại ${linkedTaskCount} công việc đã liên kết để tra cứu.`
-      : "Xóa khỏi danh mục dự án.",
-  });
-  saveState();
-  resetTaskProjectCatalogForm();
-  renderAll();
-}
 
-function saveTaskProjectCatalog(event) {
-  event.preventDefault();
-  if (!canManageProjectCatalog()) {
-    alert("Tài khoản hiện tại không có quyền cập nhật danh mục dự án.");
-    return;
-  }
-  const projectId = String(byId("taskProjectCatalogId").value || "").trim();
-  const name = normalizedProjectCatalogName(byId("taskProjectCatalogName").value);
-  if (!name) return;
-  const duplicate = (state.projectCatalog || []).find(
-    (project) => project.id !== projectId && projectCatalogNameKey(project.name) === projectCatalogNameKey(name),
-  );
-  if (duplicate) {
-    alert("Tên dự án này đã có trong danh mục.");
-    return;
-  }
-  const actor = currentActorInfo();
-  const timestamp = new Date().toISOString();
-  const existing = projectId ? projectById(projectId) : null;
-  const savedProject = existing
-    ? {
-        ...existing,
-        name,
-        updatedAt: timestamp,
-        updatedById: actor.id,
-        updatedByName: actor.name,
-      }
-    : {
-        id: uid("project"),
-        name,
-        createdAt: timestamp,
-        createdById: actor.id,
-        createdByName: actor.name,
-        updatedAt: timestamp,
-        updatedById: actor.id,
-        updatedByName: actor.name,
-      };
-  state.projectCatalog = existing
-    ? state.projectCatalog.map((project) => (project.id === existing.id ? savedProject : project))
-    : [...state.projectCatalog, savedProject];
-  logActivity({
-    action: existing ? "Cập nhật danh mục dự án" : "Thêm dự án vào danh mục",
-    module: "Công việc",
-    targetType: "project-catalog",
-    targetId: savedProject.id,
-    title: savedProject.name,
-    details: existing ? `Đổi tên dự án thành ${savedProject.name}.` : `Thêm dự án ${savedProject.name}.`,
-  });
-  saveState();
-  resetTaskProjectCatalogForm();
-  renderAll();
-}
 
-function renderTaskProjectFilterOptions() {
+
+
+
+function renderTaskProjectFilterOptions(visibleTasks = null) {
   const select = byId("taskProjectFilter");
   if (!select) return;
   const selected = select.value;
   const projects = [...new Set(
     [
-      ...state.tasks
-        .filter((task) => canViewTaskRecord(task))
+      ...(visibleTasks || state.tasks.filter((task) => canViewTaskRecord(task)))
         .map((task) => projectNameForTask(task))
         .filter(Boolean),
       ...taskProjectOptions().map((project) => project.label),
@@ -9264,7 +9038,7 @@ function renderTaskProjectFilterOptions() {
   select.value = projects.includes(selected) ? selected : "";
 }
 
-function renderTaskDepartmentFilterOptions() {
+function renderTaskDepartmentFilterOptions(visibleTasks = null) {
   const select = byId("taskDepartmentFilter");
   if (!select) return;
   const canUseFilter = canViewAllData();
@@ -9276,8 +9050,7 @@ function renderTaskDepartmentFilterOptions() {
   }
   const selected = currentTaskDepartmentFilter();
   const departmentIds = new Set(
-    state.tasks
-      .filter((task) => canViewTaskRecord(task))
+    (visibleTasks || state.tasks.filter((task) => canViewTaskRecord(task)))
       .flatMap((task) => taskParticipantIds(task))
       .map((personId) => personById(personId)?.departmentId || "")
       .filter(Boolean),
@@ -9291,6 +9064,7 @@ function renderTaskDepartmentFilterOptions() {
 }
 
 function resetTaskBulkImport() {
+  taskBulkImportReadGeneration++;
   taskBulkImportState = { rows: [], errors: [], fileName: "" };
   const input = byId("taskBulkImportFile");
   if (input) input.value = "";
@@ -9301,12 +9075,10 @@ function resetTaskBulkImport() {
   byId("confirmTaskBulkImport").disabled = true;
 }
 
-function openTaskBulkImportDialog() {
-  if (!isAdmin()) return;
-  resetTaskBulkImport();
-  const dialog = byId("taskBulkImportDialog");
-  dialog.classList.remove("is-hidden");
-  dialog.setAttribute("aria-hidden", "false");
+function openTaskBulkImportDialog(...args) {
+  if (!canAccessView("tasks")) return false;
+  if (activeViewId() !== "tasks") switchView("tasks");
+  return runTaskFeature("tasks-import", "openTaskBulkImportDialog", args);
 }
 
 function closeTaskBulkImportDialog() {
@@ -9317,498 +9089,52 @@ function closeTaskBulkImportDialog() {
   resetTaskBulkImport();
 }
 
-function normalizeTaskBulkImportKey(value) {
-  return normalizeSearchText(value).replace(/[^a-z0-9]+/g, " ").trim();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+async function handleTaskBulkImportFile(...args) {
+  return runTaskFeature("tasks-import", "handleTaskBulkImportFile", args);
 }
 
-function taskBulkImportColumnMap(headers) {
-  const normalizedHeaders = headers.map((header) => normalizeTaskBulkImportKey(header));
-  return Object.fromEntries(
-    Object.entries(taskBulkImportHeaders).map(([field, aliases]) => [
-      field,
-      normalizedHeaders.findIndex((header) => aliases.some((alias) => header === normalizeTaskBulkImportKey(alias))),
-    ]),
-  );
+function downloadTaskBulkImportTemplate(...args) {
+  return runTaskFeature("tasks-import", "downloadTaskBulkImportTemplate", args);
 }
 
-function taskBulkImportCell(row, columns, field) {
-  const index = Number(columns[field]);
-  return index >= 0 ? String(row[index] ?? "").trim() : "";
-}
-
-function parseTaskBulkImportCsv(text) {
-  const source = String(text || "").replace(/^\uFEFF/, "");
-  const firstLine = source.split(/\r?\n/, 1)[0] || "";
-  const delimiter = [";", ",", "\t"].reduce(
-    (selected, candidate) => (firstLine.split(candidate).length > firstLine.split(selected).length ? candidate : selected),
-    ";",
-  );
-  const rows = [];
-  let row = [];
-  let cell = "";
-  let quoted = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (quoted && character === '"' && source[index + 1] === '"') {
-      cell += '"';
-      index += 1;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (!quoted && character === delimiter) {
-      row.push(cell.trim());
-      cell = "";
-      continue;
-    }
-    if (!quoted && (character === "\n" || character === "\r")) {
-      if (character === "\r" && source[index + 1] === "\n") index += 1;
-      row.push(cell.trim());
-      if (row.some((value) => value)) rows.push(row);
-      row = [];
-      cell = "";
-      continue;
-    }
-    cell += character;
-  }
-  row.push(cell.trim());
-  if (row.some((value) => value)) rows.push(row);
-  if (quoted) throw new Error("Tệp CSV có dấu nháy kép chưa được đóng.");
-  return rows;
-}
-
-function readTaskBulkImportZipEntries(buffer) {
-  const data = new Uint8Array(buffer);
-  const view = new DataView(buffer);
-  let endOffset = -1;
-  for (let offset = Math.max(0, data.length - 65557); offset <= data.length - 22; offset += 1) {
-    if (view.getUint32(offset, true) === 0x06054b50) endOffset = offset;
-  }
-  if (endOffset < 0) throw new Error("Tệp Excel không có cấu trúc ZIP hợp lệ.");
-  const entryCount = view.getUint16(endOffset + 10, true);
-  let offset = view.getUint32(endOffset + 16, true);
-  const entries = new Map();
-  const decoder = new TextDecoder();
-  for (let index = 0; index < entryCount; index += 1) {
-    if (view.getUint32(offset, true) !== 0x02014b50) throw new Error("Tệp Excel có danh mục ZIP không hợp lệ.");
-    const method = view.getUint16(offset + 10, true);
-    const compressedSize = view.getUint32(offset + 20, true);
-    const nameLength = view.getUint16(offset + 28, true);
-    const extraLength = view.getUint16(offset + 30, true);
-    const commentLength = view.getUint16(offset + 32, true);
-    const localOffset = view.getUint32(offset + 42, true);
-    const name = decoder.decode(data.slice(offset + 46, offset + 46 + nameLength));
-    entries.set(name, { method, compressedSize, localOffset });
-    offset += 46 + nameLength + extraLength + commentLength;
-  }
-  return { data, view, entries };
-}
-
-async function readTaskBulkImportZipText(archive, name) {
-  const entry = archive.entries.get(name);
-  if (!entry) return "";
-  const { data, view } = archive;
-  if (view.getUint32(entry.localOffset, true) !== 0x04034b50) throw new Error("Tệp Excel có dữ liệu ZIP không hợp lệ.");
-  const nameLength = view.getUint16(entry.localOffset + 26, true);
-  const extraLength = view.getUint16(entry.localOffset + 28, true);
-  const start = entry.localOffset + 30 + nameLength + extraLength;
-  const compressed = data.slice(start, start + entry.compressedSize);
-  let output;
-  if (entry.method === 0) {
-    output = compressed;
-  } else if (entry.method === 8 && typeof DecompressionStream === "function") {
-    const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-    output = new Uint8Array(await new Response(stream).arrayBuffer());
-  } else {
-    throw new Error("Trình duyệt không hỗ trợ đọc định dạng nén của tệp Excel này. Hãy lưu lại dưới dạng .xlsx hoặc .csv.");
-  }
-  return new TextDecoder().decode(output);
-}
-
-function taskBulkImportColumnIndex(cellReference) {
-  const letters = String(cellReference || "").match(/[A-Z]+/i)?.[0] || "A";
-  return [...letters.toUpperCase()].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0) - 1;
-}
-
-function taskBulkImportExcelDate(value) {
-  const serial = Number(value);
-  if (!Number.isFinite(serial) || serial < 20000 || serial > 90000) return "";
-  const date = new Date((Math.floor(serial) - 25569) * 86400000);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
-}
-
-async function parseTaskBulkImportXlsx(buffer) {
-  const archive = readTaskBulkImportZipEntries(buffer);
-  const sharedStringsXml = await readTaskBulkImportZipText(archive, "xl/sharedStrings.xml");
-  const sharedStrings = sharedStringsXml
-    ? Array.from(new DOMParser().parseFromString(sharedStringsXml, "application/xml").getElementsByTagName("si")).map((item) =>
-        Array.from(item.getElementsByTagName("t")).map((text) => text.textContent || "").join(""),
-      )
-    : [];
-  const sheetName = [...archive.entries.keys()]
-    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
-    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))[0];
-  if (!sheetName) throw new Error("Không tìm thấy trang dữ liệu trong tệp Excel.");
-  const sheetXml = await readTaskBulkImportZipText(archive, sheetName);
-  const documentXml = new DOMParser().parseFromString(sheetXml, "application/xml");
-  if (documentXml.getElementsByTagName("parsererror").length) throw new Error("Không đọc được nội dung XML của tệp Excel.");
-  return Array.from(documentXml.getElementsByTagName("row")).map((row) => {
-    const values = [];
-    Array.from(row.getElementsByTagName("c")).forEach((cell) => {
-      const index = taskBulkImportColumnIndex(cell.getAttribute("r"));
-      const type = cell.getAttribute("t") || "";
-      const valueNode = cell.getElementsByTagName("v")[0];
-      const inlineText = Array.from(cell.getElementsByTagName("t")).map((item) => item.textContent || "").join("");
-      const raw = valueNode?.textContent || inlineText || "";
-      values[index] = type === "s" ? sharedStrings[Number(raw)] || "" : type === "inlineStr" ? inlineText : raw;
-    });
-    return values.map((value) => String(value ?? "").trim());
-  }).filter((row) => row.some((value) => value));
-}
-
-function normalizeTaskBulkImportDate(value) {
-  const text = String(value ?? "").trim();
-  const excelDate = taskBulkImportExcelDate(text);
-  if (excelDate) return excelDate;
-  const iso = text.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/);
-  const vietnam = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
-  const parts = iso ? [iso[1], iso[2], iso[3]] : vietnam ? [vietnam[3], vietnam[2], vietnam[1]] : null;
-  if (!parts) return "";
-  const result = `${parts[0]}-${padDatePart(parts[1])}-${padDatePart(parts[2])}`;
-  const date = new Date(`${result}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === result ? result : "";
-}
-
-function taskBulkImportPerson(reference) {
-  const raw = String(reference || "").trim();
-  if (!raw) return null;
-  const byId = personById(raw);
-  if (byId) return byId;
-  const normalized = normalizeSearchText(raw);
-  const directMatches = state.people.filter((person) => normalizeSearchText(person.name) === normalized);
-  if (directMatches.length === 1) return directMatches[0];
-  const accountMatches = state.accounts
-    .filter((account) => normalizeSearchText(account.username) === normalized || normalizeSearchText(account.displayName) === normalized)
-    .map((account) => personById(account.personId))
-    .filter(Boolean);
-  return accountMatches.length === 1 ? accountMatches[0] : null;
-}
-
-function taskBulkImportWorkType(value) {
-  const normalized = normalizeSearchText(value);
-  if (!normalized || normalized === "routine" || normalized.includes("thuong xuyen")) return TASK_WORK_TYPE_ROUTINE;
-  if (normalized === "arising" || normalized.includes("phat sinh")) return TASK_WORK_TYPE_ARISING;
-  return "";
-}
-
-function taskBulkImportRecurrence(value) {
-  const normalized = normalizeSearchText(value);
-  if (!normalized || normalized === "none" || normalized.includes("khong dinh ky")) return TASK_RECURRENCE_NONE;
-  if (normalized === "daily" || normalized.includes("hang ngay")) return TASK_RECURRENCE_DAILY;
-  if (normalized === "weekly" || normalized.includes("hang tuan")) return TASK_RECURRENCE_WEEKLY;
-  if (normalized === "monthly" || normalized.includes("hang thang")) return TASK_RECURRENCE_MONTHLY;
-  if (normalized === "quarterly" || normalized.includes("hang quy")) return TASK_RECURRENCE_QUARTERLY;
-  return "";
-}
-
-function taskBulkImportStatus(value) {
-  const normalized = normalizeSearchText(value);
-  if (!normalized || normalized.includes("chuan bi") || normalized.includes("chua bat dau")) return TASK_STATUS_PREPARING;
-  if (normalized.includes("dang thuc hien")) return "Đang thực hiện";
-  if (normalized.includes("hoan thanh")) return TASK_STATUS_COMPLETED;
-  // "Quá hạn" is calculated from the deadline, never accepted as a manually-set status.
-  if (normalized.includes("qua han")) return "Đang thực hiện";
-  return "";
-}
-
-function taskBulkImportSignature(row) {
-  return [normalizeSearchText(row.title), row.ownerId, projectCatalogNameKey(row.projectName), row.startDate, row.due].join("|");
-}
-
-function validateTaskBulkImportRows(rows) {
-  if (!rows.length) throw new Error("Tệp chưa có dòng dữ liệu.");
-  const [headers, ...dataRows] = rows;
-  const columns = taskBulkImportColumnMap(headers);
-  const missingHeaders = ["title", "project", "owner", "category", "startDate", "due"].filter((field) => columns[field] < 0);
-  if (missingHeaders.length) {
-    const labels = {
-      title: "Tên công việc",
-      project: "Danh mục dự án",
-      owner: "Người thực hiện",
-      category: "Danh mục nhiệm vụ",
-      startDate: "Ngày bắt đầu",
-      due: "Ngày hoàn thành",
-    };
-    throw new Error(`Thiếu cột bắt buộc: ${missingHeaders.map((field) => labels[field]).join(", ")}.`);
-  }
-  if (dataRows.length > TASK_BULK_IMPORT_MAX_ROWS) throw new Error(`Mỗi lần chỉ nhập tối đa ${TASK_BULK_IMPORT_MAX_ROWS} công việc.`);
-
-  const existingSignatures = new Set(
-    state.tasks.map((task) => taskBulkImportSignature({
-      title: task.title,
-      ownerId: task.ownerId,
-      projectName: projectNameForTask(task),
-      startDate: task.startDate || "",
-      due: task.due || "",
-    })),
-  );
-  const importedSignatures = new Set();
-  const validatedRows = [];
-  const errors = [];
-
-  dataRows.forEach((source, index) => {
-    const line = index + 2;
-    const messages = [];
-    const title = taskBulkImportCell(source, columns, "title");
-    const projectName = normalizedProjectCatalogName(taskBulkImportCell(source, columns, "project"));
-    const ownerReference = taskBulkImportCell(source, columns, "owner");
-    const owner = taskBulkImportPerson(ownerReference);
-    const categorySource = taskBulkImportCell(source, columns, "category");
-    const startDate = normalizeTaskBulkImportDate(taskBulkImportCell(source, columns, "startDate"));
-    const due = normalizeTaskBulkImportDate(taskBulkImportCell(source, columns, "due"));
-    if (!title) messages.push("Thiếu tên công việc");
-    if (!projectName) messages.push("Thiếu danh mục dự án");
-    if (!owner) messages.push(`Không tìm thấy hoặc trùng người thực hiện: ${ownerReference || "trống"}`);
-    if (!startDate) messages.push("Ngày bắt đầu không hợp lệ");
-    if (!due) messages.push("Ngày hoàn thành không hợp lệ");
-    if (startDate && due && startDate > due) messages.push("Ngày bắt đầu phải trước hoặc bằng ngày hoàn thành");
-    const category = owner
-      ? taskCategoryOptionsForPerson(owner.id).find((option) => normalizeSearchText(option) === normalizeSearchText(categorySource)) || ""
-      : "";
-    if (!category) messages.push(`Tiêu chí KPI không đúng với người thực hiện: ${categorySource || "trống"}`);
-    const workType = taskBulkImportWorkType(taskBulkImportCell(source, columns, "workType"));
-    if (!workType) messages.push("Loại công việc không hợp lệ");
-    const recurrence = taskBulkImportRecurrence(taskBulkImportCell(source, columns, "recurrence"));
-    if (!recurrence) messages.push("Định kỳ không hợp lệ");
-    const status = taskBulkImportStatus(taskBulkImportCell(source, columns, "status"));
-    if (!status) messages.push("Trạng thái không hợp lệ");
-    const progressText = taskBulkImportCell(source, columns, "progress");
-    const progress = progressText === "" ? (status === TASK_STATUS_COMPLETED ? 100 : 0) : Number(String(progressText).replace(",", "."));
-    if (!Number.isFinite(progress) || progress < 0 || progress > 100) messages.push("Tiến độ phải từ 0 đến 100");
-    if (status === TASK_STATUS_COMPLETED && Number(progress) < 100) messages.push("Công việc Hoàn thành cần tiến độ 100%");
-
-    const collaboratorIds = [];
-    const collaboratorSource = taskBulkImportCell(source, columns, "collaborators");
-    collaboratorSource
-      .split(/[;|,\n]+/)
-      .map((value) => value.trim())
-      .filter(Boolean)
-      .forEach((reference) => {
-        const collaborator = taskBulkImportPerson(reference);
-        if (!collaborator) {
-          messages.push(`Không tìm thấy hoặc trùng người phối hợp: ${reference}`);
-        } else if (collaborator.id !== owner?.id && !collaboratorIds.includes(collaborator.id)) {
-          collaboratorIds.push(collaborator.id);
-        }
-      });
-
-    const record = {
-      line,
-      title,
-      projectName,
-      ownerId: owner?.id || "",
-      ownerName: owner?.name || ownerReference,
-      collaboratorIds,
-      category,
-      workType,
-      recurrence,
-      startDate,
-      due,
-      status,
-      progress: Number.isFinite(progress) ? progress : 0,
-      note: taskBulkImportCell(source, columns, "note"),
-      errors: messages,
-    };
-    const signature = taskBulkImportSignature(record);
-    if (!messages.length && (existingSignatures.has(signature) || importedSignatures.has(signature))) {
-      record.errors.push("Trùng công việc đã có hoặc trùng một dòng khác trong tệp");
-    }
-    if (!record.errors.length) importedSignatures.add(signature);
-    if (record.errors.length) errors.push({ line, messages: record.errors });
-    validatedRows.push(record);
-  });
-  return { rows: validatedRows, errors };
-}
-
-function renderTaskBulkImportPreview() {
-  const rows = taskBulkImportState.rows;
-  const errors = taskBulkImportState.errors;
-  const validCount = rows.filter((row) => !row.errors.length).length;
-  const existingProjectKeys = new Set((state.projectCatalog || []).map((project) => projectCatalogNameKey(project.name)));
-  const safeNewProjectCount = new Set(
-    rows.filter((row) => !row.errors.length).map((row) => projectCatalogNameKey(row.projectName)).filter((key) => !existingProjectKeys.has(key)),
-  ).size;
-  byId("taskBulkImportSummary").textContent = taskBulkImportState.fileName
-    ? `${taskBulkImportState.fileName}: ${rows.length} dòng dữ liệu · ${validCount} hợp lệ · ${errors.length} lỗi · ${safeNewProjectCount} dự án mới sẽ được thêm.`
-    : "Chưa chọn tệp để kiểm tra.";
-  byId("confirmTaskBulkImport").disabled = !validCount || Boolean(errors.length);
-  byId("taskBulkImportPreview").innerHTML = rows.length
-    ? rows.slice(0, 50).map((row) => `
-        <tr>
-          <td>${row.line}</td>
-          <td>${escapeHtml(row.title || "-")}</td>
-          <td>${escapeHtml(row.projectName || "-")}</td>
-          <td>${escapeHtml(row.ownerName || "-")}</td>
-          <td>${escapeHtml(row.category || "-")}</td>
-          <td>${escapeHtml(row.startDate ? `${formatDate(row.startDate)} - ${formatDate(row.due)}` : "-")}</td>
-          <td>${row.errors.length ? `<span class="badge bad">${escapeHtml(row.errors.join("; "))}</span>` : '<span class="badge good">Hợp lệ</span>'}</td>
-        </tr>
-      `).join("")
-    : '<tr><td colspan="7" class="empty-cell">Chưa có dữ liệu xem trước.</td></tr>';
-  const errorBox = byId("taskBulkImportErrors");
-  errorBox.classList.toggle("is-hidden", !errors.length);
-  errorBox.innerHTML = errors.length
-    ? `<strong>Cần sửa ${errors.length} dòng trước khi nhập:</strong><ul>${errors.slice(0, 12).map((error) => `<li>Dòng ${error.line}: ${escapeHtml(error.messages.join("; "))}</li>`).join("")}${errors.length > 12 ? `<li>... và ${errors.length - 12} dòng khác.</li>` : ""}</ul>`
-    : "";
-}
-
-async function parseTaskBulkImportFile(file) {
-  if (!file) return [];
-  if (Number(file.size) > TASK_BULK_IMPORT_MAX_FILE_BYTES) {
-    throw new Error("Tệp nhập công việc không được vượt quá 10 MB.");
-  }
-  const name = String(file.name || "").toLowerCase();
-  if (name.endsWith(".csv")) return parseTaskBulkImportCsv(await file.text());
-  if (name.endsWith(".xlsx")) return parseTaskBulkImportXlsx(await file.arrayBuffer());
-  throw new Error("Chỉ hỗ trợ tệp .xlsx hoặc .csv.");
-}
-
-async function handleTaskBulkImportFile(file) {
-  if (!isAdmin() || !file) return;
-  resetTaskBulkImport();
-  byId("taskBulkImportSummary").textContent = "Đang đọc và kiểm tra tệp Excel...";
-  try {
-    const rows = await parseTaskBulkImportFile(file);
-    const validated = validateTaskBulkImportRows(rows);
-    taskBulkImportState = { ...validated, fileName: file.name || "Tệp Excel" };
-    renderTaskBulkImportPreview();
-  } catch (error) {
-    taskBulkImportState = { rows: [], errors: [], fileName: "" };
-    byId("taskBulkImportSummary").textContent = error?.message || "Không thể đọc tệp Excel.";
-    byId("taskBulkImportPreview").innerHTML = '<tr><td colspan="7" class="empty-cell">Không có dữ liệu hợp lệ để xem trước.</td></tr>';
-  }
-}
-
-function downloadTaskBulkImportTemplate() {
-  const headers = ["Tên công việc", "Danh mục dự án", "Người thực hiện", "Người phối hợp", "Danh mục nhiệm vụ", "Loại công việc", "Định kỳ", "Ngày bắt đầu", "Ngày hoàn thành", "Trạng thái", "Tiến độ (%)", "Nội dung công việc / Báo cáo tiến độ"];
-  const content = `\uFEFF${headers.join(";")}\n`;
-  const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = "mau-nhap-cong-viec.csv";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-function importTaskBulkRows() {
-  if (!isAdmin()) return;
-  const rows = taskBulkImportState.rows.filter((row) => !row.errors.length);
-  if (!rows.length || taskBulkImportState.errors.length) return;
-  if (!confirm(`Nhập ${rows.length} công việc mới vào hệ thống? Dữ liệu sẽ được đồng bộ với các tài khoản khác.`)) return;
-  const previous = {
-    tasks: state.tasks,
-    projectCatalog: state.projectCatalog,
-    evaluations: state.evaluations,
-    activityLog: state.activityLog,
-  };
-  const timestamp = new Date().toISOString();
-  const actor = currentActorInfo();
-  const projectsByName = new Map((state.projectCatalog || []).map((project) => [projectCatalogNameKey(project.name), project]));
-  const newProjects = [];
-  rows.forEach((row) => {
-    const key = projectCatalogNameKey(row.projectName);
-    if (projectsByName.has(key)) return;
-    const project = applyRecordAudit({ id: uid("project"), name: row.projectName }, null);
-    projectsByName.set(key, project);
-    newProjects.push(project);
-  });
-  const importedTasks = rows.map((row) => {
-    const project = projectsByName.get(projectCatalogNameKey(row.projectName));
-    const completed = row.status === TASK_STATUS_COMPLETED;
-    return applyRecordAudit({
-      id: uid("task"),
-      kind: TASK_KIND_REGULAR,
-      title: row.title,
-      projectId: project?.id || "",
-      projectName: project?.name || row.projectName,
-      ownerId: row.ownerId,
-      collaboratorIds: row.collaboratorIds,
-      collaboratorId: "",
-      category: row.category,
-      workType: row.workType,
-      recurrence: row.recurrence,
-      startDate: row.startDate,
-      due: row.due,
-      dueTime: "",
-      status: row.status,
-      progress: row.progress,
-      qualityPercent: "",
-      attachments: [],
-      note: row.note,
-      customFields: {},
-      completionReviewStatus: completed ? "pending" : "",
-      completionReviewedAt: "",
-      completionReviewedById: "",
-      completionReviewedByName: "",
-      completionReviewNote: "",
-      completedAt: completed ? timestamp : "",
-      completedById: completed ? actor.id : "",
-      completedByName: completed ? actor.name : "",
-      progressReports: row.note ? [{
-        id: uid("task-report"),
-        progress: row.progress,
-        status: row.status,
-        previousStatus: "",
-        action: "Nhập hàng loạt từ Excel",
-        note: row.note,
-        createdAt: timestamp,
-        createdById: actor.id,
-        createdBy: actor.name,
-      }] : [],
-    }, null);
-  });
-  try {
-    state.projectCatalog = [...(state.projectCatalog || []), ...newProjects];
-    state.tasks = [...(state.tasks || []), ...importedTasks];
-    importedTasks.forEach((task) => {
-      syncPersonalEvaluationTaskScoresForTask(task);
-      const owner = personById(task.ownerId);
-      logActivity({
-        action: "Nhập hàng loạt từ Excel",
-        module: "Công việc",
-        targetType: "task",
-        targetId: task.id,
-        personId: task.ownerId,
-        departmentId: owner?.departmentId || "",
-        period: taskPeriod(task),
-        title: task.title,
-        details: `${task.projectName} · ${taskOwnerName(task, "Chưa rõ người thực hiện")} · ${task.category} · ${normalizeTaskStatus(task.status)}`,
-        score: `${formatScore(task.progress)}%`,
-      });
-    });
-    newProjects.forEach((project) => logActivity({
-      action: "Thêm dự án từ Excel",
-      module: "Công việc",
-      targetType: "project-catalog",
-      targetId: project.id,
-      title: project.name,
-      details: "Tự tạo khi nhập hàng loạt công việc.",
-    }));
-    saveState();
-    closeTaskBulkImportDialog();
-    renderAll();
-    alert(`Đã nhập ${importedTasks.length} công việc${newProjects.length ? ` và thêm ${newProjects.length} dự án mới` : ""}.`);
-  } catch (error) {
-    state.tasks = previous.tasks;
-    state.projectCatalog = previous.projectCatalog;
-    state.evaluations = previous.evaluations;
-    state.activityLog = previous.activityLog;
-    alert(error?.message || "Không thể lưu dữ liệu nhập từ Excel.");
-  }
+function importTaskBulkRows(...args) {
+  return runTaskFeature("tasks-import", "importTaskBulkRows", args);
 }
 
 function taskFilterDate(task) {
@@ -9845,19 +9171,26 @@ function clearTaskTimeFilter() {
   byId("taskDateTo").value = "";
 }
 
-function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter(), projectFilter = currentTaskProjectFilter(), departmentId = currentTaskDepartmentFilter()) {
-  const keyword = (search || "").trim().toLowerCase();
-  const personId = currentTaskPersonFilter();
+function taskViewRecords(now = new Date()) {
   return state.tasks
-    .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
-    .filter((task) => canViewTaskRecord(task))
-    .filter((task) => taskMatchesDisplayScope(task))
-    .filter((task) => taskMatchesStatusFilter(task, status))
-    .filter((task) => taskMatchesTimeFilter(task, timeFilter))
-    .filter((task) => taskMatchesProjectFilter(task, projectFilter))
-    .filter((task) => taskMatchesDepartmentFilter(task, departmentId))
-    .filter((task) => !personId || taskParticipantIds(task).includes(personId))
-    .filter((task) => !keyword || indexedTaskBoardSearchText(task).includes(keyword));
+    .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task, now) }))
+    .filter((task) => canViewTaskRecord(task));
+}
+
+function filterTaskViewRecords(rows, { search = "", status = "", timeFilter = currentTaskTimeFilter(),
+  projectFilter = currentTaskProjectFilter(), departmentId = currentTaskDepartmentFilter(), personId = currentTaskPersonFilter() } = {}) {
+  const keyword = (search || "").trim().toLowerCase();
+  return rows.filter((task) => taskMatchesDisplayScope(task)
+    && taskMatchesStatusFilter(task, status)
+    && taskMatchesTimeFilter(task, timeFilter)
+    && taskMatchesProjectFilter(task, projectFilter)
+    && taskMatchesDepartmentFilter(task, departmentId)
+    && (!personId || taskParticipantIds(task).includes(personId))
+    && (!keyword || indexedTaskBoardSearchText(task).includes(keyword)));
+}
+
+function visibleTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter(), projectFilter = currentTaskProjectFilter(), departmentId = currentTaskDepartmentFilter()) {
+  return filterTaskViewRecords(taskViewRecords(), { search, status, timeFilter, projectFilter, departmentId });
 }
 
 function visibleRegularTaskRecords(search = "", status = "", timeFilter = currentTaskTimeFilter()) {
@@ -9878,16 +9211,8 @@ function pendingTaskCompletionRecords(filterOptions = {}) {
   const departmentId = filterOptions.departmentId ?? currentTaskDepartmentFilter();
   const personId = filterOptions.personId ?? currentTaskPersonFilter();
   // The panel has its own fixed status: completed work waiting for review.
-  return state.tasks
-    .map((task) => ({ ...task, status: normalizeTaskStatus(task.status), computedStatus: getDueStatus(task) }))
-    .filter((task) => taskMatchesDisplayScope(task))
-    .filter((task) => canViewTaskRecord(task))
-    .filter(taskCompletionNeedsReview)
-    .filter((task) => taskMatchesTimeFilter(task, timeFilter))
-    .filter((task) => taskMatchesProjectFilter(task, projectFilter))
-    .filter((task) => taskMatchesDepartmentFilter(task, departmentId))
-    .filter((task) => !personId || taskParticipantIds(task).includes(personId))
-    .filter((task) => !search || indexedTaskBoardSearchText(task).includes(search))
+  return filterTaskViewRecords(taskViewRecords(), { search, status: TASK_STATUS_PENDING_REVIEW,
+    timeFilter, projectFilter, departmentId, personId })
     .sort(compareTaskRecords);
 }
 
@@ -9909,235 +9234,26 @@ function pendingTaskCompletionFilterSummary() {
   return parts.join(" · ");
 }
 
-function renderTaskCompletionPendingList() {
-  const list = byId("taskCompletionPendingList");
-  if (!list) return;
-  const tasks = pendingTaskCompletionRecords();
-  const filterSummary = pendingTaskCompletionFilterSummary();
-  byId("taskCompletionPendingCount").textContent = String(tasks.length);
-  list.classList.toggle("empty-state", !tasks.length);
-  list.innerHTML = tasks.length
-    ? tasks.map((task) => {
-        const owner = taskOwnerName(task, "Chưa cập nhật");
-        const collaborators = taskCollaboratorNames(task);
-        const canReview = canReviewTaskCompletion(task);
-        return `
-          <article class="task-completion-pending-item">
-            <div class="task-completion-pending-main">
-              <button class="task-completion-pending-title" type="button" data-open-pending-task="${escapeHtml(task.id)}">${escapeHtml(task.title || "Công việc")}</button>
-              <div class="task-completion-pending-meta">
-                <span>${escapeHtml(projectNameForTask(task) || "Chưa gắn dự án")}</span>
-                <span>Hoàn thành ${escapeHtml(formatTaskDeadline(task) || "chưa cập nhật")}</span>
-                <span>Tiến độ ${formatScore(task.progress || 0)}%</span>
-              </div>
-              <p>${escapeHtml(owner)}${collaborators.length ? ` · ${escapeHtml(collaborators.join(", "))}` : ""}</p>
-            </div>
-            <div class="task-completion-pending-actions">
-              ${canReview ? `<button type="button" data-review-pending-task="${escapeHtml(task.id)}">Đánh giá</button>` : ""}
-              <button class="ghost" type="button" data-open-pending-task="${escapeHtml(task.id)}">Mở</button>
-            </div>
-          </article>
-        `;
-      }).join("")
-    : `Không có công việc chờ phê duyệt${filterSummary ? " theo điều kiện đang lọc" : ""}.`;
+
+
+function openTaskCompletionPendingDetailDialog(...args) {
+  return runTaskFeature("tasks-board", "openTaskCompletionPendingDetailDialog", args);
 }
 
-function openTaskCompletionPendingDetailDialog() {
-  const tasks = pendingTaskCompletionRecords();
-  const filterSummary = pendingTaskCompletionFilterSummary();
-  openTaskStatusDetailDialog(TASK_STATUS_PENDING_REVIEW, {
-    tasks,
-    title: "Chờ phê duyệt hoàn thành",
-    subtitle: `Danh sách công việc hoàn thành đang chờ đánh giá trong phạm vi ${taskDisplayScopeLabel()}${filterSummary ? ` · ${filterSummary}` : ""}.`,
-  });
+
+
+function renderTaskBoard(...args) {
+  return runTaskFeature("tasks-board", "renderTaskBoard", args);
 }
 
-function renderTaskPersonFilterNote() {
-  const note = byId("taskPersonFilterNote");
-  if (!note) return;
-  const person = personById(currentTaskPersonFilter());
-  note.classList.toggle("is-hidden", !person);
-  note.innerHTML = person
-    ? `<span>Đang xem công việc có liên quan tới <strong>${escapeHtml(person.name)}</strong>.</span><button class="ghost" data-clear-task-person-filter type="button">Bỏ lọc</button>`
-    : "";
-}
 
-function renderTaskBoard(options = {}) {
-  syncTaskDisplayScopeControls();
-  byId("openTaskForm")?.classList.toggle("is-hidden", !canCreateRegularTasks());
-  byId("openTaskBulkImport")?.classList.toggle("is-hidden", !isAdmin());
-  renderTaskProjectFilterOptions();
-  renderTaskDepartmentFilterOptions();
-  renderTaskCompletionPendingList();
-  renderTaskPersonFilterNote();
-  const search = byId("taskSearch").value.trim().toLowerCase();
-  const filter = byId("taskStatusFilter").value;
-  const timeFilter = currentTaskTimeFilter();
-  const projectFilter = currentTaskProjectFilter();
-  const departmentId = currentTaskDepartmentFilter();
-  const nextRenderSignature = [currentTaskDisplayScope(), search, filter, timeFilter.from, timeFilter.to, projectFilter, departmentId, currentTaskPersonFilter()].join("|");
-  if (taskBoardRenderSignature !== nextRenderSignature) {
-    taskBoardRenderSignature = nextRenderSignature;
-    taskBoardVisibleLimits.clear();
-  }
-  const tasks = visibleTaskRecords(search, filter, timeFilter, projectFilter, departmentId);
 
-  const renderTaskColumns = () => {
-    const boardStatuses = filter === TASK_STATUS_PENDING_REVIEW
-      ? [TASK_STATUS_PENDING_REVIEW]
-      : filter === TASK_STATUS_RECURRENCE_STOPPED ? [TASK_STATUS_RECURRENCE_STOPPED] : taskStatuses;
-    return boardStatuses
-      .map((status) => {
-        const statusTasks = tasks.filter((task) => taskMatchesStatusFilter(task, status));
-        const count = statusTasks.length;
-        const displayLimit = taskBoardVisibleLimits.get(status) || TASK_BOARD_INITIAL_RENDER_LIMIT;
-        const renderedTasks = statusTasks.slice(0, displayLimit);
-        const cards = renderedTasks
-          .map((task) => {
-            const collaboratorNames = taskCollaboratorNames(task);
-            const taskKind = normalizeTaskKind(task);
-            const editable = canEditTaskDetails(task) && !isRecurrenceStoppedTask(task);
-            const deletable = canDeleteTask(task);
-            const copyable = canCopyTask(task);
-            const reportable = canUpdateTaskProgress(task);
-            const reviewable = canReviewTaskCompletion(task);
-            const attachments = task.attachments || [];
-            const latestReport = latestTaskProgressReport(task);
-            const violations = taskViolationReasons(task);
-            const reportText = latestReport
-              ? `${formatScore(latestReport.progress)}% · ${formatDateTime(latestReport.createdAt)}`
-              : "Chưa có cập nhật tiến độ";
-            const attachmentList = attachments.length
-              ? `<div class="task-attachments">${attachments
-                  .map((file) => taskAttachmentLinkHtml(file))
-                  .join("")}</div>`
-              : "";
-            return `
-              <article class="task-card task-card-clickable" data-open-task-detail="${escapeHtml(task.id)}">
-                <h4>${escapeHtml(task.title)}</h4>
-                ${projectNameForTask(task) ? `<div class="task-meta">Dự án: ${escapeHtml(projectNameForTask(task))}</div>` : ""}
-                <div class="task-meta">Người thực hiện ${escapeHtml(taskOwnerName(task))} · bắt đầu ${escapeHtml(formatTaskStartDate(task) || "chưa có")} · hoàn thành ${escapeHtml(formatTaskDeadline(task) || "chưa có")}</div>
-                ${collaboratorNames.length ? `<div class="task-meta">Người phối hợp: ${escapeHtml(collaboratorNames.join(", "))}</div>` : ""}
-                <div class="task-meta">${escapeHtml(taskWorkMeta(task))}</div>
-                <span class="badge ${status === "Quá hạn" ? "bad" : status === "Hoàn thành" ? "good" : "warn"}">${escapeHtml(taskKindLabels[taskKind] || "Công việc")}: ${escapeHtml(task.category)}</span>
-                <div class="task-status-grid">
-                  <span><strong>Cập nhật:</strong> ${escapeHtml(reportText)}</span>
-                  ${taskDeadlineExtensionPending(task) ? `<span class="task-extension-pending"><strong>Chờ duyệt gia hạn:</strong> ${escapeHtml(formatDate(task.deadlineExtensionRequestedDue) || "")}</span>` : ""}
-                  ${taskCompletionReviewStatus(task) ? `<span><strong>Đánh giá hoàn thành:</strong> ${taskCompletionReviewValueHtml(task)}</span>` : ""}
-                  <span><strong>Chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))} · Thực hiện KPI ${formatScore(taskKpiActualScore(task))}</span>
-                </div>
-                <div class="progress" aria-label="Tiến độ ${task.progress}%"><span style="width:${clamp(task.progress, 0, 100)}%"></span></div>
-                ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
-                ${attachmentList}
-                <div class="row-actions task-card-actions">
-                  ${reportable ? `<button class="task-progress-update-button" data-respond-task="${task.id}" type="button" title="Cập nhật" aria-label="Cập nhật"><span>Cập nhật</span></button>` : ""}
-                  ${editable ? `<button class="ghost task-icon-button" data-edit-task="${task.id}" type="button" title="Sửa công việc" aria-label="Sửa công việc"><span aria-hidden="true">&#9998;</span></button>` : ""}
-                  ${copyable ? `<button class="ghost task-icon-button" data-copy-task="${task.id}" type="button" title="Sao chép công việc" aria-label="Sao chép công việc"><span aria-hidden="true">&#9112;</span></button>` : ""}
-                  ${reviewable ? `<button class="ghost task-icon-button task-icon-approve" data-review-task="${task.id}" type="button" title="Duyệt hoàn thành" aria-label="Duyệt hoàn thành"><span aria-hidden="true">&#10003;</span></button>` : ""}
-                  ${deletable ? `<button class="ghost task-icon-button task-icon-delete" data-delete-task="${task.id}" type="button" title="Xóa công việc" aria-label="Xóa công việc"><span aria-hidden="true">&times;</span></button>` : ""}
-                  ${editable || copyable || deletable || reportable || reviewable ? "" : "<span class=\"muted\">Chỉ xem</span>"}
-                </div>
-              </article>
-            `;
-          })
-          .join("");
-        const remaining = Math.max(0, count - renderedTasks.length);
-        return `
-          <section class="task-column">
-            <button class="task-column-head" data-open-task-status="${escapeHtml(status)}" type="button" aria-label="Xem tất cả công việc trạng thái ${escapeHtml(status)}">
-              <span>${escapeHtml(status)}</span>
-              <strong>${count}</strong>
-            </button>
-            ${cards || "<div class=\"empty-state\">Không có công việc.</div>"}
-            ${remaining ? `<button class="ghost task-column-load-more" data-load-more-task-status="${escapeHtml(status)}" type="button">Hiển thị thêm ${Math.min(TASK_BOARD_RENDER_STEP, remaining)} công việc (${remaining} còn lại)</button>` : ""}
-          </section>
-        `;
-      })
-      .join("");
-  };
-
-  byId("taskBoard").innerHTML = `<div class="task-columns">${renderTaskColumns()}</div>`;
-  scheduleVisibleViewWork("tasks", () => hydrateTaskAttachmentLinks(byId("taskBoard")));
-  if (options.applyCustomization !== false) applyFieldCustomizations();
-}
-
-function renderTaskStatusDetailItem(task) {
-  const collaboratorNames = taskCollaboratorNames(task);
-  const status = task.computedStatus || getDueStatus(task);
-  const latestReport = latestTaskProgressReport(task);
-  const violations = taskViolationReasons(task);
-  const attachments = task.attachments || [];
-  const canOpen = canOpenTask(task);
-  return `
-    <article class="kpi-task-detail-item">
-      <div class="section-head">
-        <div>
-          <span class="badge ${taskStatusBadgeClass(status)}">${escapeHtml(status)}</span>
-          <h3>${escapeHtml(task.title)}</h3>
-        </div>
-        ${canOpen ? `<button class="ghost" data-open-status-task="${escapeHtml(task.id)}" type="button">Mở công việc</button>` : "<span class=\"muted\">Chỉ xem</span>"}
-      </div>
-      <div class="kpi-task-detail-meta">
-        <span><strong>Người thực hiện:</strong> ${escapeHtml(taskOwnerName(task))}</span>
-        <span><strong>Người phối hợp:</strong> ${escapeHtml(collaboratorNames.length ? collaboratorNames.join(", ") : "Không chọn")}</span>
-        <span><strong>Tên dự án:</strong> ${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
-        <span><strong>Nhóm công việc:</strong> ${escapeHtml(taskKindLabels[normalizeTaskKind(task)] || "Công việc")}</span>
-        <span><strong>Danh mục KPI:</strong> ${escapeHtml(task.category || "Chưa phân loại")}</span>
-        <span><strong>Loại công việc:</strong> ${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)])}</span>
-        <span><strong>Định kỳ:</strong> ${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)])}</span>
-        <span><strong>Ngày bắt đầu:</strong> ${escapeHtml(formatTaskStartDate(task) || "Chưa có")}</span>
-        <span><strong>Ngày hoàn thành:</strong> ${escapeHtml(formatTaskDeadline(task) || "Chưa có")}</span>
-        <span><strong>Tiến độ:</strong> ${formatScore(task.progress)}%</span>
-        <span><strong>Đánh giá hoàn thành:</strong> ${taskCompletionReviewValueHtml(task)}</span>
-        <span><strong>Đánh giá chất lượng:</strong> ${escapeHtml(taskQualityLabel(task))}</span>
-        <span><strong>Điểm thực hiện KPI:</strong> ${formatScore(taskKpiActualScore(task))}</span>
-        <span><strong>Cập nhật gần nhất:</strong> ${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% - ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
-        <span><strong>Hồ sơ:</strong> ${attachments.length ? `${attachments.length} tệp` : "Chưa có"}</span>
-      </div>
-      ${task.note ? `<p class="kpi-task-detail-note"><strong>Nội dung/Báo cáo:</strong> ${escapeHtml(task.note)}</p>` : ""}
-      ${latestReport?.note && latestReport.note !== task.note ? `<p class="kpi-task-detail-note"><strong>Báo cáo gần nhất:</strong> ${escapeHtml(latestReport.note)}</p>` : ""}
-      ${taskProgressReportListHtml(task)}
-      ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
-    </article>
-  `;
-}
-
-function openTaskStatusDetailDialog(status, options = {}) {
-  const search = byId("taskSearch").value.trim();
-  const timeFilter = currentTaskTimeFilter();
-  const tasks = Array.isArray(options.tasks)
-    ? [...options.tasks].sort(compareTaskRecords)
-    : visibleTaskRecords(search, status, timeFilter).sort(compareTaskRecords);
-  const averageProgress = tasks.length ? tasks.reduce((sum, task) => sum + Number(task.progress || 0), 0) / tasks.length : 0;
-  const nextDeadlineTask = tasks.find((task) => taskDeadlineDate(task));
-  const rangeLabel = [
-    timeFilter.from && `từ ${formatDate(timeFilter.from)}`,
-    timeFilter.to && `đến ${formatDate(timeFilter.to)}`,
-  ].filter(Boolean).join(" ");
-  const reportTitle = options.title || status || "Tất cả trạng thái";
-  const reportSubtitle = options.subtitle || [
-    "Danh sách công việc",
-    `phạm vi ${taskDisplayScopeLabel()}`,
-    search && `đang lọc theo "${search}"`,
-    rangeLabel && `ngày hoàn thành ${rangeLabel}`,
-  ].filter(Boolean).join(" · ");
-  byId("taskStatusDetailTitle").textContent = `${reportTitle} (${tasks.length})`;
-  byId("taskStatusDetailSubtitle").textContent = reportSubtitle;
-  byId("taskStatusDetailContext").innerHTML = options.contextHtml || `
-    <span><strong>${tasks.length}</strong> công việc</span>
-    <span><strong>${formatScore(averageProgress)}%</strong> tiến độ bình quân</span>
-    <span><strong>${nextDeadlineTask ? formatTaskDeadline(nextDeadlineTask) : "Chưa có"}</strong> mốc hoàn thành gần nhất</span>
-  `;
-  byId("taskStatusDetailList").innerHTML = tasks.length
-    ? tasks.map(renderTaskStatusDetailItem).join("")
-    : `<div class="empty-state">Không có công việc thuộc trạng thái này.</div>`;
-  taskStatusDetailExport = taskStatusDetailExportData({ title: reportTitle, subtitle: reportSubtitle, tasks });
-  byId("exportTaskStatusDetailExcel").disabled = !tasks.length;
-  byId("taskStatusDetailDialog").classList.remove("is-hidden");
-  byId("taskStatusDetailDialog").setAttribute("aria-hidden", "false");
+function openTaskStatusDetailDialog(...args) {
+  return runTaskFeature("tasks-board", "openTaskStatusDetailDialog", args);
 }
 
 function closeTaskStatusDetailDialog() {
+  taskSurfaceGeneration++;
   byId("taskStatusDetailDialog").classList.add("is-hidden");
   byId("taskStatusDetailDialog").setAttribute("aria-hidden", "true");
 }
@@ -10159,6 +9275,7 @@ function closeDashboardDetailDialog() {
 }
 
 function closeTaskCompletionReviewDialog() {
+  taskSurfaceGeneration++;
   byId("taskCompletionReviewDialog").classList.add("is-hidden");
   byId("taskCompletionReviewDialog").setAttribute("aria-hidden", "true");
   byId("taskCompletionReviewForm").reset();
@@ -10191,213 +9308,27 @@ function updateTaskCompletionReviewQualityField() {
   timing.textContent = previewLabel ? `Kết quả Đạt sẽ được ghi nhận: ${previewLabel}` : "";
 }
 
-function openTaskCompletionReviewDialog(taskId) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task || !canReviewTaskCompletion(task)) return;
-  const currentStatus = getDueStatus(task);
-  byId("taskCompletionReviewTaskId").value = task.id;
-  byId("taskCompletionReviewStatus").value = taskCompletionIsApproved(task) ? "passed" : "";
-  byId("taskCompletionReviewQualityPercent").value = normalizeTaskQualityInput(task.qualityPercent);
-  byId("taskCompletionReviewNote").value = "";
-  updateTaskCompletionReviewQualityField();
-  byId("taskCompletionReviewTitle").textContent = `Duyệt hoàn thành: ${task.title}`;
-  byId("taskCompletionReviewSummary").textContent = `${taskOwnerName(task, "Chưa rõ người thực hiện")} · Trạng thái hiện tại: ${currentStatus} · Ngày hoàn thành: ${formatTaskDeadline(task) || "chưa cập nhật"}`;
-  byId("taskCompletionReviewDialog").classList.remove("is-hidden");
-  byId("taskCompletionReviewDialog").setAttribute("aria-hidden", "false");
-  byId("taskCompletionReviewStatus").focus();
+function openTaskCompletionReviewDialog(...args) {
+  return runTaskFeature("tasks-details", "openTaskCompletionReviewDialog", args);
 }
 
-async function reviewTaskCompletion(taskId, decision, note = "", qualityPercent = "") {
-  const taskIndex = state.tasks.findIndex((item) => item.id === taskId);
-  const task = taskIndex >= 0 ? state.tasks[taskIndex] : null;
-  if (!task || !canReviewTaskCompletion(task) || !["passed", "failed"].includes(decision)) return false;
-
-  const timestamp = new Date().toISOString();
-  const actor = currentActorInfo();
-  const previousStatus = getDueStatus(task);
-  const previousWorkflowStatus = normalizeTaskStatus(task.status);
-  const approved = decision === "passed";
-  const assessedQuality = approved ? normalizeTaskQualityInput(qualityPercent) : "";
-  if (approved && assessedQuality === "") {
-    alert("Nhập Đánh giá chất lượng trước khi lưu kết quả Đạt.");
-    return false;
-  }
-  const wasApproved = taskCompletionIsApproved(task);
-  const completionReviewedAt = approved && wasApproved && task.completionReviewedAt ? task.completionReviewedAt : timestamp;
-  const returnedStatus = previousStatus === "Quá hạn" || taskIsPastDeadline(task) ? "Quá hạn" : "Đang thực hiện";
-  const completedAtForReview = task.completedAt || timestamp;
-  const lateCompletion = approved
-    ? task?.due
-      ? !isTimestampBeforeDeadline(completedAtForReview, task)
-      : false
-    : false;
-  const nextTask = {
-    ...task,
-    status: approved ? TASK_STATUS_COMPLETED : returnedStatus,
-    completionReviewStatus: decision,
-    completionReviewedAt,
-    completionReviewedById: actor.id,
-    completionReviewedByName: actor.name,
-    completionReviewNote: String(note || "").trim(),
-    lateCompletion,
-    qualityPercent: assessedQuality,
-    qualityAssessedAt: approved ? timestamp : "",
-    qualityAssessedById: approved ? actor.id : "",
-    qualityAssessedByName: approved ? actor.name : "",
-  };
-  if (approved) {
-    nextTask.completedAt = completedAtForReview;
-    nextTask.completedById = task.completedById || task.ownerId || "";
-    nextTask.completedByName = task.completedByName || personById(task.ownerId)?.name || "";
-  } else {
-    nextTask.completedAt = "";
-    nextTask.completedById = "";
-    nextTask.completedByName = "";
-  }
-  const nextStatus = getDueStatus(nextTask);
-  const completionTimingStatus = approved ? taskCompletionTimingStatus(nextTask) : "";
-  const completionTimingLabel = approved ? taskCompletionTimingLabel(nextTask) : "";
-  nextTask.progressReports = [
-    ...(task.progressReports || []),
-    {
-      id: uid("task-report"),
-      type: "completion-review",
-      decision,
-      action: approved
-        ? `${wasApproved ? "Cập nhật đánh giá chất lượng" : "Đánh giá hoàn thành: Đạt"}${completionTimingLabel ? ` · ${completionTimingLabel}` : ""} · Chất lượng: ${formatScore(assessedQuality)}%`
-        : `Đánh giá hoàn thành: Không đạt · Chuyển về ${returnedStatus}`,
-      previousStatus: previousWorkflowStatus,
-      status: normalizeTaskStatus(nextTask.status),
-      progress: Number(nextTask.progress || 0),
-      qualityPercent: assessedQuality,
-      completionTiming: completionTimingStatus,
-      note: String(note || "").trim(),
-      createdAt: timestamp,
-      createdById: actor.id,
-      createdBy: actor.name,
-    },
-  ];
-  const auditedTask = applyTaskRecordAudit(nextTask, task);
-  const commandResult = await submitTaskCommandOnline(task, auditedTask, "review-completion");
-  if (!commandResult.ok) return false;
-  const committedTask = commandResult.task || auditedTask;
-  if (!commandResult.remote) {
-    state.tasks = state.tasks.map((item, index) => (index === taskIndex ? committedTask : item));
-  }
-  const gpmbAdvanced = approved && isGpmbWorkflowTask(committedTask) && !commandResult.remote
-    ? ensureGpmbWorkflowProgressionLocally(committedTask.gpmbWorkflowId, committedTask.id)
-    : false;
-  syncPersonalEvaluationTaskScoresForTask(committedTask, task);
-  const owner = personById(committedTask.ownerId);
-  logActivity({
-    action: approved
-      ? wasApproved
-        ? "Cập nhật đánh giá chất lượng"
-        : `Đánh giá công việc Đạt${completionTimingLabel ? ` · ${completionTimingLabel}` : ""}`
-      : `Đánh giá công việc Không đạt · Chuyển về ${returnedStatus}`,
-    module: "Công việc",
-    targetType: "task",
-    targetId: committedTask.id,
-    personId: committedTask.ownerId,
-    departmentId: owner?.departmentId || "",
-    period: taskPeriod(committedTask),
-    detail: `${committedTask.title} · ${previousWorkflowStatus} -> ${normalizeTaskStatus(committedTask.status)}${approved && completionTimingLabel ? ` · ${completionTimingLabel}` : ""}${approved ? ` · chất lượng ${formatScore(assessedQuality)}%` : ""}${note ? ` · ${String(note).trim()}` : ""}`,
-  });
-  saveState();
-  renderAll();
-  if (gpmbAdvanced) showSystemToast("Đã chuyển bước GPMB", "Công việc của bước tiếp theo đã được phát sinh theo quy trình.", { tone: "success" });
-  return true;
+async function reviewTaskCompletion(...args) {
+  return runTaskFeature("tasks-editor", "reviewTaskCompletion", args);
 }
 
 function closeTaskDeadlineExtensionReviewDialog() {
+  taskSurfaceGeneration++;
   byId("taskDeadlineExtensionReviewDialog").classList.add("is-hidden");
   byId("taskDeadlineExtensionReviewDialog").setAttribute("aria-hidden", "true");
   byId("taskDeadlineExtensionReviewForm").reset();
 }
 
-function openTaskDeadlineExtensionReviewDialog(taskId) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task || !canReviewTaskDeadlineExtension(task)) return;
-  byId("taskDeadlineExtensionReviewTaskId").value = task.id;
-  byId("taskDeadlineExtensionReviewSummary").textContent = task.title || "Công việc";
-  byId("taskDeadlineExtensionCurrentDue").textContent = formatTaskDeadline(task) || "Chưa có";
-  byId("taskDeadlineExtensionRequestedDue").textContent = formatDate(task.deadlineExtensionRequestedDue) || "Chưa có";
-  byId("taskDeadlineExtensionRequester").textContent = task.deadlineExtensionRequestedByName || "Người thực hiện";
-  byId("taskDeadlineExtensionRequestReason").textContent = task.deadlineExtensionReason || "Chưa nêu lý do.";
-  byId("taskDeadlineExtensionReviewDecision").value = "";
-  byId("taskDeadlineExtensionReviewNote").value = "";
-  byId("taskDeadlineExtensionReviewDialog").classList.remove("is-hidden");
-  byId("taskDeadlineExtensionReviewDialog").setAttribute("aria-hidden", "false");
-  byId("taskDeadlineExtensionReviewDecision").focus();
+function openTaskDeadlineExtensionReviewDialog(...args) {
+  return runTaskFeature("tasks-details", "openTaskDeadlineExtensionReviewDialog", args);
 }
 
-async function reviewTaskDeadlineExtension(taskId, decision, note = "") {
-  const taskIndex = state.tasks.findIndex((item) => item.id === taskId);
-  const task = taskIndex >= 0 ? state.tasks[taskIndex] : null;
-  const reviewNote = String(note || "").trim();
-  const requestedDue = String(task?.deadlineExtensionRequestedDue || "");
-  if (!task || !canReviewTaskDeadlineExtension(task) || !["approved", "rejected"].includes(decision)) return false;
-  if (!await ensureTaskDeadlineExtensionReviewSupported()) return false;
-  if (reviewNote.length < 3) {
-    alert("Vui lòng ghi ý kiến duyệt (ít nhất 3 ký tự).");
-    return false;
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDue) || requestedDue !== String(task.followUpDate || "") || requestedDue <= String(task.due || "")) {
-    alert("Đề nghị gia hạn không còn hợp lệ. Hãy tải lại dữ liệu công việc trước khi duyệt.");
-    return false;
-  }
-
-  const timestamp = new Date().toISOString();
-  const actor = currentActorInfo();
-  const approved = decision === "approved";
-  const nextTask = {
-    ...task,
-    due: approved ? requestedDue : task.due,
-    deadlineExtensionStatus: decision,
-    deadlineExtensionReviewedAt: timestamp,
-    deadlineExtensionReviewedById: actor.id,
-    deadlineExtensionReviewedByName: actor.name,
-    deadlineExtensionReviewNote: reviewNote,
-    progressReports: [
-      ...(task.progressReports || []),
-      {
-        id: uid("task-report"),
-        type: "deadline-extension-review",
-        decision,
-        action: approved
-          ? `Chấp nhận gia hạn đến ${formatDate(requestedDue)}`
-          : `Không chấp nhận gia hạn; giữ hạn ${formatTaskDeadline(task) || "hiện tại"}`,
-        note: reviewNote,
-        progress: Number(task.progress || 0),
-        status: normalizeTaskStatus(task.status),
-        createdAt: timestamp,
-        createdById: actor.id,
-        createdBy: actor.name,
-      },
-    ],
-  };
-  const auditedTask = applyTaskRecordAudit(nextTask, task);
-  const commandResult = await submitTaskCommandOnline(task, auditedTask, "review-extension");
-  if (!commandResult.ok) return false;
-  const committedTask = commandResult.task || auditedTask;
-  if (!commandResult.remote) {
-    state.tasks = state.tasks.map((item, index) => index === taskIndex ? committedTask : item);
-  }
-  syncPersonalEvaluationTaskScoresForTask(committedTask, task);
-  const owner = personById(committedTask.ownerId);
-  logActivity({
-    action: approved ? "Chấp nhận gia hạn công việc" : "Không chấp nhận gia hạn công việc",
-    module: "Công việc",
-    targetType: "task",
-    targetId: committedTask.id,
-    personId: committedTask.ownerId,
-    departmentId: owner?.departmentId || "",
-    period: taskPeriod(committedTask),
-    detail: `${committedTask.title} · hạn ${formatTaskDeadline(task) || "chưa có"} -> ${formatTaskDeadline(committedTask) || "chưa có"} · ${reviewNote}`,
-  });
-  saveState();
-  renderAll();
-  return true;
+async function reviewTaskDeadlineExtension(...args) {
+  return runTaskFeature("tasks-editor", "reviewTaskDeadlineExtension", args);
 }
 
 function restoreTaskDetailInlineEditor({ reset = false } = {}) {
@@ -10412,201 +9343,22 @@ function restoreTaskDetailInlineEditor({ reset = false } = {}) {
   if (reset) resetTaskForm();
 }
 
-function taskDetailActionMarkup(task) {
-  const actions = [];
-  const editable = canEditTaskDetails(task) && !isRecurrenceStoppedTask(task);
-  const copyable = canCopyTask(task);
-  const reportable = canUpdateTaskProgress(task);
-  const reviewable = canReviewTaskCompletion(task);
-  const deletable = canDeleteTask(task);
-  if (reportable) actions.push('<button class="task-progress-update-button" type="button" data-task-detail-action="report" title="Cập nhật" aria-label="Cập nhật"><span>Cập nhật</span></button>');
-  if (canStopTaskRecurrence(task)) actions.push('<button class="task-stop-recurrence-button" type="button" data-task-detail-action="stop-recurrence">Dừng định kỳ</button>');
-  if (editable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="edit" title="Sửa công việc" aria-label="Sửa công việc"><span aria-hidden="true">&#9998;</span></button>');
-  if (copyable) actions.push('<button class="ghost task-icon-button" type="button" data-task-detail-action="copy" title="Sao chép công việc" aria-label="Sao chép công việc"><span aria-hidden="true">&#9112;</span></button>');
-  if (reviewable) actions.push('<button class="ghost task-icon-button task-icon-approve" type="button" data-task-detail-action="review" title="Duyệt hoàn thành" aria-label="Duyệt hoàn thành"><span aria-hidden="true">&#10003;</span></button>');
-  if (deletable) actions.push('<button class="ghost task-icon-button task-icon-delete" type="button" data-task-detail-action="delete" title="Xóa công việc" aria-label="Xóa công việc"><span aria-hidden="true">&times;</span></button>');
-  return actions.length ? actions.join("") : '<span class="muted">Chỉ xem chi tiết công việc.</span>';
+
+
+function openTaskDetailInlineEditor(...args) {
+  return runTaskFeature("tasks-details", "openTaskDetailInlineEditor", args);
 }
 
-function openTaskDetailInlineEditor(taskId, focusId = "", { progressReportOnly = false } = {}) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task) return;
-  const form = byId("taskForm");
-  if (!form) return;
-  restoreTaskDetailInlineEditor({ reset: true });
-  const anchor = document.createElement("span");
-  anchor.className = "task-detail-form-anchor";
-  form.parentNode.insertBefore(anchor, form);
-  taskDetailInlineEditor = {
-    taskId: task.id,
-    kind: TASK_KIND_REGULAR,
-    progressReportOnly,
-    form,
-    anchor,
-  };
-
-  byId("taskDetailSubtitle").textContent = "Chỉnh sửa trực tiếp";
-  byId("taskDetailTitle").textContent = task.title || "Công việc";
-  byId("taskDetailMeta").classList.add("is-hidden");
-  byId("taskDetailActions").innerHTML = '<button class="ghost" type="button" data-task-detail-action="cancel-edit">Hủy chỉnh sửa</button>';
-  byId("taskDetailContent").innerHTML = `
-    <section class="task-detail-editor">
-      <h3>Cập nhật công việc</h3>
-      <div id="taskDetailEditorSlot"></div>
-    </section>
-  `;
-  byId("taskDetailEditorSlot").append(form);
-  form.classList.add("task-detail-inline-form");
-  populateTaskForm(task);
-  if (taskDetailInlineEditor.progressReportOnly) byId("taskNote").value = "";
-
-  const target = byId(focusId) || byId("taskTitle");
-  if (target && !target.disabled) {
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
-    target.focus({ preventScroll: true });
-  }
+function deleteTaskRecord(...args) {
+  return runTaskFeature("tasks-details", "deleteTaskRecord", args);
 }
 
-function deleteTaskRecord(taskId) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task || !canDeleteTask(task)) return false;
-  if (!confirm("Xóa vĩnh viễn công việc này? Dữ liệu công việc sẽ bị loại khỏi danh mục và đồng bộ xóa trên các thiết bị khác.")) return false;
-  registerDeletedId(taskId);
-  const owner = personById(task.ownerId);
-  state.tasks = state.tasks.filter((item) => item.id !== taskId);
-  syncPersonalEvaluationTaskScoresForTask(null, task);
-  logActivity({
-    action: "Xóa",
-    module: "Công việc",
-    targetType: "task",
-    targetId: taskId,
-    personId: task.ownerId,
-    departmentId: owner?.departmentId || "",
-    period: taskPeriod(task),
-    title: task.title,
-    details: `${taskOwnerName(task, "Chưa rõ người nhận")} · ${normalizeTaskStatus(task.status)}`,
-    score: `${formatScore(task.progress)}%`,
-  });
-  saveState();
-  renderAll();
-  return true;
-}
-
-function openTaskDetailDialog(taskId) {
-  restoreTaskDetailInlineEditor({ reset: true });
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task || !canViewTaskRecord(task)) return;
-  const collaborators = taskCollaboratorNames(task);
-  const status = task.computedStatus || getDueStatus(task);
-  const latestReport = latestTaskProgressReport(task);
-  const blockerNote = String(task.blockerNote || "").trim();
-  const extensionReason = String(task.deadlineExtensionReason || "").trim();
-  const showBlockerNoteSeparately = blockerNote && blockerNote !== extensionReason;
-  const deadlineReviewButton = taskDeadlineExtensionPending(task) && canReviewTaskDeadlineExtension(task)
-    ? `<button class="task-progress-update-button task-deadline-review-button" type="button" data-review-deadline-extension="${escapeHtml(task.id)}">Duyệt gia hạn</button>`
-    : "";
-  const attachments = task.attachments || [];
-  const violations = taskViolationReasons(task);
-  const relatedGpmbCases = isGpmbWorkflowTask(task)
-    ? (state.gpmbCases || [])
-        .filter((record) => String(record.workflowId || "") === String(task.gpmbWorkflowId || ""))
-        .sort((left, right) => {
-          const leftCurrent = String(left.currentStepId || "") === String(task.gpmbStepId || "") ? 1 : 0;
-          const rightCurrent = String(right.currentStepId || "") === String(task.gpmbStepId || "") ? 1 : 0;
-          return rightCurrent - leftCurrent
-            || String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || ""));
-        })
-    : [];
-  const currentStepCaseCount = relatedGpmbCases.filter((record) => String(record.currentStepId || "") === String(task.gpmbStepId || "")).length;
-  const visibleGpmbCases = relatedGpmbCases.slice(0, 20);
-  const attachmentList = attachments.length
-    ? `<div class="task-detail-attachments">${attachments
-        .map((file) => taskAttachmentLinkHtml(file))
-        .join("")}</div>`
-    : `<p class="muted">${relatedGpmbCases.length ? "Chưa có tệp đính kèm; hồ sơ GPMB liên quan được hiển thị bên dưới." : "Chưa có hồ sơ liên quan."}</p>`;
-  const gpmbCaseList = relatedGpmbCases.length ? `
-    <div class="task-related-gpmb-cases">
-      <div class="task-related-gpmb-head">
-        <div><strong>Hồ sơ GPMB theo hộ/thửa</strong><span>${currentStepCaseCount} hồ sơ ở bước công việc này · ${relatedGpmbCases.length} hồ sơ cùng đợt GPMB</span></div>
-      </div>
-      <div class="task-related-gpmb-list">${visibleGpmbCases.map((record) => {
-        const atCurrentStep = String(record.currentStepId || "") === String(task.gpmbStepId || "");
-        const workflow = gpmbWorkflowById(record.workflowId);
-        const step = gpmbCaseEnabledSteps(workflow).find((item) => item.id === record.currentStepId);
-        const land = [record.mapSheet ? `Tờ ${record.mapSheet}` : "", record.parcelNumber ? `Thửa ${record.parcelNumber}` : "", gpmbCaseAreaLabel(record.areaM2)].filter(Boolean).join(" · ");
-        return `<article class="task-related-gpmb-item${atCurrentStep ? " is-current-step" : ""}">
-          <div class="task-related-gpmb-item-head"><span class="gpmb-case-code">${escapeHtml(record.caseCode || "Chưa cấp mã")}</span><span class="gpmb-case-status is-${escapeHtml(record.status || GPMB_CASE_STATUS_NEW)}">${escapeHtml(gpmbCaseStatusLabel(record.status))}</span></div>
-          <strong>${escapeHtml(record.subjectName || "Đối tượng chưa cập nhật")}</strong>
-          <span>${escapeHtml(land || "Chưa cập nhật tờ, thửa, diện tích")}</span>
-          <span>${escapeHtml(atCurrentStep ? "Đang ở bước công việc này" : step ? `${gpmbWorkflowStepLabel(step)} · ${step.title}` : "Cùng đợt GPMB")}</span>
-          ${record.note ? `<p>${escapeHtml(record.note)}</p>` : ""}
-          <small>Cập nhật ${escapeHtml(formatDateTime(record.updatedAt) || "chưa rõ")} · ${escapeHtml(record.updatedBy || record.createdBy || "Không rõ tài khoản")}</small>
-        </article>`;
-      }).join("")}</div>
-      ${relatedGpmbCases.length > visibleGpmbCases.length ? `<p class="muted task-related-gpmb-more">Đang hiển thị 20/${relatedGpmbCases.length} hồ sơ cập nhật gần nhất.</p>` : ""}
-    </div>` : "";
-
-  byId("taskDetailSubtitle").textContent = taskKindLabels[normalizeTaskKind(task)] || "Công việc";
-  byId("taskDetailTitle").textContent = task.title || "Công việc";
-  byId("taskDetailActions").innerHTML = taskDetailActionMarkup(task);
-  byId("taskDetailMeta").classList.remove("is-hidden");
-  byId("taskDetailMeta").innerHTML = `
-    <span><strong>Trạng thái</strong><b class="badge ${taskStatusBadgeClass(status)}">${escapeHtml(status)}</b></span>
-    <span><strong>Tiến độ</strong><b>${formatScore(task.progress)}%</b></span>
-    <span><strong>Chất lượng</strong><b>${escapeHtml(taskQualityLabel(task))}</b></span>
-    <span><strong>Điểm thực hiện KPI</strong><b>${formatScore(taskKpiActualScore(task))}</b></span>
-  `;
-  byId("taskDetailContent").innerHTML = `
-    <section class="task-detail-section task-detail-information">
-      <h3>Thông tin công việc</h3>
-      <div class="task-detail-info-grid">
-        <span><strong>Người thực hiện</strong>${escapeHtml(taskOwnerName(task, "Chưa cập nhật"))}</span>
-        <span><strong>Người phối hợp</strong>${escapeHtml(collaborators.length ? collaborators.join(", ") : "Chưa chọn")}</span>
-        <span><strong>Tên dự án</strong>${escapeHtml(projectNameForTask(task) || "Chưa cập nhật")}</span>
-        <span><strong>Danh mục nhiệm vụ</strong>${escapeHtml(task.category || "Chưa phân loại")}</span>
-        <span><strong>Loại công việc</strong>${escapeHtml(taskWorkTypeLabels[normalizeTaskWorkType(task)] || "Chưa cập nhật")}</span>
-        <span><strong>Mức độ ưu tiên</strong>${escapeHtml(taskPriorityLabels[normalizeTaskPriority(task.priority)])}</span>
-        <span><strong>Định kỳ</strong>${escapeHtml(taskRecurrenceLabels[normalizeTaskRecurrence(task)] || "Không định kỳ")}${task.recurrenceStoppedAt ? ` · Đã dừng ${escapeHtml(formatDate(task.recurrenceStopDate) || formatDateTime(task.recurrenceStoppedAt))}` : ""}</span>
-        <span><strong>Ngày tạo</strong>${escapeHtml(formatDateTime(task.createdAt) || "Chưa ghi nhận")}</span>
-        <span><strong>Người tạo</strong>${escapeHtml(taskRecordedCreatorName(task))}</span>
-        <span><strong>Ngày bắt đầu</strong>${escapeHtml(formatTaskStartDate(task) || "Chưa cập nhật")}</span>
-        <span><strong>Ngày hoàn thành</strong>${escapeHtml(formatTaskDeadline(task) || "Chưa cập nhật")}</span>
-        <span><strong>Đánh giá hoàn thành</strong>${taskCompletionReviewValueHtml(task)}</span>
-        <span><strong>Cập nhật gần nhất</strong>${escapeHtml(latestReport ? `${formatScore(latestReport.progress)}% · ${formatDateTime(latestReport.createdAt)}` : "Chưa có")}</span>
-      </div>
-    </section>
-    <section class="task-detail-section">
-      <h3>Nội dung công việc</h3>
-      <p class="task-detail-note">${escapeHtml(task.note || "Chưa cập nhật.")}</p>
-    </section>
-    <section class="task-detail-section">
-      <h3>Theo dõi điều hành</h3>
-      <div class="task-detail-info-grid">
-        <span><strong>Mốc cập nhật tiếp theo</strong>${escapeHtml(formatTaskDeadline({ due: task.followUpDate }) || "Chưa đặt mốc")}</span>
-        <span><strong>Trạng thái trở ngại</strong>${escapeHtml(taskBlockerLabels[normalizeTaskBlockerStatus(task.blockerStatus)])}</span>
-        <span><strong>Công việc phụ thuộc</strong>${escapeHtml(taskDependencyNames(task).join("; ") || "Không có")}</span>
-      </div>
-      ${task.deadlineExtensionStatus ? `<div class="task-deadline-extension-detail is-${escapeHtml(task.deadlineExtensionStatus)}"><div class="task-deadline-extension-detail-head"><strong>${taskDeadlineExtensionPending(task) ? "Đang chờ duyệt gia hạn" : task.deadlineExtensionStatus === "approved" ? "Đã chấp nhận mốc hoàn thành mới" : "Đề nghị gia hạn chưa được chấp nhận"}</strong>${deadlineReviewButton}</div><span>Hạn hiện tại: ${escapeHtml(formatTaskDeadline(task) || "Chưa có")} · Mốc đề nghị: ${escapeHtml(formatDate(task.deadlineExtensionRequestedDue) || "Chưa có")}</span>${extensionReason ? `<span><b>Nội dung trở ngại / đề nghị hỗ trợ:</b> ${escapeHtml(extensionReason)}</span>` : ""}${!taskDeadlineExtensionPending(task) && task.deadlineExtensionReviewNote ? `<span>Ý kiến duyệt: ${escapeHtml(task.deadlineExtensionReviewNote)}</span>` : ""}</div>` : ""}
-      ${showBlockerNoteSeparately ? `<p class="task-detail-note">${escapeHtml(blockerNote)}</p>` : !task.deadlineExtensionStatus && !blockerNote ? `<p class="task-detail-note">Chưa có nội dung trở ngại hoặc đề nghị hỗ trợ.</p>` : ""}
-    </section>
-    <section class="task-detail-section">
-      <h3>Lịch sử báo cáo tiến độ</h3>
-      ${taskProgressReportListHtml(task) || `<p class="muted">Chưa có báo cáo tiến độ.</p>`}
-    </section>
-    <section class="task-detail-section">
-      <h3>Hồ sơ liên quan</h3>
-      ${attachmentList}
-      ${gpmbCaseList}
-    </section>
-    ${violations.length ? `<div class="task-violation">${escapeHtml(violations.join("; "))}</div>` : ""}
-  `;
-  byId("taskDetailDialog").dataset.taskId = task.id;
-  byId("taskDetailDialog").classList.remove("is-hidden");
-  byId("taskDetailDialog").setAttribute("aria-hidden", "false");
-  hydrateTaskAttachmentLinks(byId("taskDetailDialog"));
+function openTaskDetailDialog(...args) {
+  return runTaskFeature("tasks-details", "openTaskDetailDialog", args);
 }
 
 function closeTaskDetailDialog() {
+  taskSurfaceGeneration++;
   restoreTaskDetailInlineEditor({ reset: true });
   byId("taskDetailDialog").classList.add("is-hidden");
   byId("taskDetailDialog").setAttribute("aria-hidden", "true");
@@ -10620,44 +9372,9 @@ function formatFileSize(bytes) {
   return `${size} B`;
 }
 
-function renderTaskAttachmentSelection(files = byId("taskAttachments")?.files) {
-  const preview = byId("taskAttachmentSelection");
-  if (!preview) return;
-  const selected = Array.from(files || []);
-  preview.replaceChildren();
-  preview.classList.toggle("is-hidden", !selected.length);
-  if (!selected.length) return;
 
-  const title = document.createElement("strong");
-  title.textContent = selected.length === 1 ? "Tệp đã chọn" : `Đã chọn ${selected.length} tệp`;
-  const list = document.createElement("ul");
-  selected.forEach((file) => {
-    const item = document.createElement("li");
-    item.textContent = `${file.name || "Tệp không tên"} · ${formatFileSize(file.size)}`;
-    list.append(item);
-  });
-  preview.append(title, list);
-}
 
-function renderTaskAttachmentDraft() {
-  const list = byId("taskAttachmentList");
-  if (!taskAttachmentDraft.length) {
-    list.innerHTML = '<span class="muted">Chưa có hồ sơ đính kèm.</span>';
-    return;
-  }
-  list.innerHTML = taskAttachmentDraft
-    .map(
-      (file) => `
-        <div class="attachment-item">
-          ${taskAttachmentLinkHtml(file)}
-          <span class="muted">${escapeHtml(formatFileSize(file.size))}</span>
-          <button class="ghost" data-remove-task-attachment="${escapeHtml(file.id)}" type="button">Bỏ</button>
-        </div>
-      `,
-    )
-    .join("");
-  hydrateTaskAttachmentLinks(list);
-}
+
 
 function renderCriteriaInputs(existing = {}) {
   const person = personById(byId("evalPerson").value);
@@ -18609,9 +17326,12 @@ function renderActiveView(viewId = activeViewId(), { animateDashboard = false } 
     renderDepartmentAndRoleOptions();
     renderPeopleTable();
   } else if (viewId === "tasks") {
-    renderTaskProjectCatalog();
-    renderPersonOptions();
-    updateTaskFormLock();
+      const canManage = canManageProjectCatalog();
+      byId("taskProjectCatalogPanel").classList.toggle("is-hidden", !canViewProjectCatalog());
+      byId("openTaskProjectCatalog").textContent = canManage ? "Quản lý dự án" : "Danh mục dự án";
+      if (!byId("taskProjectCatalogDialog").classList.contains("is-hidden")) renderTaskProjectCatalog();
+      const form = window.QldaFeatures?.get("tasks-form");
+      if (form) { form.renderTaskPersonOptions(); form.updateTaskFormLock(); }
     renderGpmbWorkflows();
     renderTaskBoard({ applyCustomization: false });
   } else if (viewId === "public-investment-projects") {
@@ -20265,91 +18985,66 @@ function focusEditForm(formId, focusId) {
   byId(focusId)?.focus({ preventScroll: true });
 }
 
-function syncTaskFormDialogHeading() {
-  byId("taskFormDialogTitle").textContent = byId("taskId").value ? "Cập nhật công việc" : "Thêm công việc";
-}
 
-function showTaskFormDialog({ focusId = "taskTitle" } = {}) {
-  const dialog = byId("taskFormDialog");
-  if (!dialog) return;
-  syncTaskFormDialogHeading();
-  dialog.classList.remove("is-hidden");
-  dialog.setAttribute("aria-hidden", "false");
-  const focusTarget = () => {
-    const target = byId(focusId) || byId("taskTitle");
-    if (target && !target.disabled) target.focus({ preventScroll: true });
-  };
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusTarget);
-  else window.setTimeout(focusTarget, 0);
+
+function showTaskFormDialog(...args) {
+  if (!canAccessView("tasks")) return false;
+  if (activeViewId() !== "tasks") switchView("tasks");
+  return runTaskFeature("tasks-form", "showTaskFormDialog", args);
 }
 
 function closeTaskFormDialog() {
+  taskSurfaceGeneration++;
   const dialog = byId("taskFormDialog");
   if (!dialog) return;
   dialog.classList.add("is-hidden");
   dialog.setAttribute("aria-hidden", "true");
 }
 
-function openNewTaskFormDialog() {
-  if (!canCreateRegularTasks()) return;
-  resetTaskForm();
-  showTaskFormDialog();
+function openNewTaskFormDialog(...args) {
+  if (!canAccessView("tasks")) return false;
+  if (activeViewId() !== "tasks") switchView("tasks");
+  return runTaskFeature("tasks-form", "openNewTaskFormDialog", args);
 }
 
-window.virtualAssistantApplyTaskDraft = (draft = {}) => {
-  if (!canCreateRegularTasks() || !byId("taskFormDialog") || byId("taskFormDialog").classList.contains("is-hidden")) return false;
-  const title = byId("taskTitle");
-  title.value = String(draft.title || "").trim();
-  title.dispatchEvent(new Event("input", { bubbles: true }));
-  const projectSelect = byId("taskProjectId");
-  if (draft.projectId && Array.from(projectSelect.options).some((option) => option.value === String(draft.projectId))) {
-    projectSelect.value = String(draft.projectId);
-    projectSelect.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-  const ownerSelect = byId("taskOwner");
-  if (draft.ownerId && canCreateRegularTaskForPerson(String(draft.ownerId))
-    && Array.from(ownerSelect.options).some((option) => option.value === String(draft.ownerId))) {
-    ownerSelect.value = String(draft.ownerId);
-    ownerSelect.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-  const categorySelect = byId("taskCategory");
-  if (draft.category && Array.from(categorySelect.options).some((option) => normalizeSearchText(option.value) === normalizeSearchText(draft.category))) {
-    categorySelect.value = Array.from(categorySelect.options).find((option) => normalizeSearchText(option.value) === normalizeSearchText(draft.category)).value;
-    categorySelect.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-  const taskCollaborators = byId("taskCollaborators");
-  const allowedCollaboratorIds = Array.isArray(draft.collaboratorIds)
-    ? draft.collaboratorIds.map(String).filter((personId) => personId !== ownerSelect.value && canCreateRegularTaskForPerson(personId))
-    : [];
-  taskCollaborators.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
-    checkbox.checked = allowedCollaboratorIds.includes(checkbox.value);
-  });
-  updateTaskCollaboratorSummary();
-  const fieldValues = [
-    ["taskWorkType", draft.workType, ["routine", "arising"]],
-    ["taskPriority", draft.priority, ["normal", "high", "urgent"]],
-    ["taskRecurrence", draft.recurrence, ["none", "daily", "weekly", "monthly", "quarterly"]],
-  ];
-  fieldValues.forEach(([id, value, allowed]) => {
-    if (allowed.includes(value)) byId(id).value = value;
-  });
-  if (draft.note) byId("taskNote").value = String(draft.note);
-  const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))
-    && Number.isFinite(new Date(String(value) + "T00:00:00").getTime());
-  if (validDate(draft.startDate)) byId("taskStartDate").value = draft.startDate;
-  if (validDate(draft.due)) byId("taskDue").value = draft.due;
-  return true;
+function openTaskEditForm(...args) {
+  if (!canAccessView("tasks")) return false;
+  if (activeViewId() !== "tasks") switchView("tasks");
+  return runTaskFeature("tasks-form", "openTaskEditForm", args);
+}
+
+function syncTaskStatusChoices() {
+  return window.QldaFeatures?.get("tasks-form")?.syncTaskStatusChoices();
+}
+
+window.virtualAssistantApplyTaskDraft = (draft = {}) => runTaskFeature("tasks-form", "applyLunaTaskDraft", [draft]);
+
+window.virtualAssistantOpenTaskDraft = (draft = {}) => {
+  if (!canAccessView("tasks")) return false;
+  if (activeViewId() !== "tasks") switchView("tasks");
+  return runTaskFeature("tasks-form", "openTaskDraft", [draft]);
 };
 
-window.virtualAssistantOpenProgressForm = (draft = {}) => {
+window.virtualAssistantOpenProgressForm = async (draft = {}) => {
   if (String(currentAccount()?.id || "") !== String(draft.accountId || "")) return false;
-  const task = state.tasks.find((item) => String(item.id) === String(draft.taskId || ""));
+  let task = state.tasks.find((item) => String(item.id) === String(draft.taskId || ""));
+  let detailAlreadyOpened = false;
+  if (!task && taskServerReadsEnabled()) {
+    await openTaskDetailDialog(String(draft.taskId || ""));
+    if (String(currentAccount()?.id || "") !== String(draft.accountId || "")) return false;
+    task = state.tasks.find((item) => String(item.id) === String(draft.taskId || ""));
+    detailAlreadyOpened = !!task && byId("taskDetailDialog").dataset.taskId === task.id;
+    if (!detailAlreadyOpened) return false;
+  }
   if (!task || !canOpenTask(task) || !canUpdateTaskProgress(task)) return false;
   if (draft.currentProgress != null && Number(task.progress || 0) !== Number(draft.currentProgress)) return false;
-  openTaskDetailDialog(task.id);
-  const reportButton = byId("taskDetailActions").querySelector('[data-task-detail-action="report"]');
-  if (!reportButton) return false;
-  reportButton.click();
+  const actorId = String(currentAccount()?.id || "");
+  if (!detailAlreadyOpened) await openTaskDetailDialog(task.id);
+  const currentTask = state.tasks.find((item) => item.id === task.id);
+  if (String(currentAccount()?.id || "") !== actorId || byId("taskDetailDialog").dataset.taskId !== task.id || !canUpdateTaskProgress(currentTask)) return false;
+  if (draft.currentProgress != null && Number(currentTask.progress || 0) !== Number(draft.currentProgress)) return false;
+  const opened = await openTaskDetailInlineEditor(task.id, "taskNote", { progressReportOnly: true });
+  if (!opened || String(currentAccount()?.id || "") !== actorId || taskDetailInlineEditor?.taskId !== task.id) return false;
   const form = byId("taskForm");
   if (!form || form.classList.contains("is-hidden")) return false;
   const reportNote = byId("taskNote");
@@ -20361,9 +19056,9 @@ window.virtualAssistantOpenProgressForm = (draft = {}) => {
     taskId: String(task.id),
     kind: TASK_KIND_REGULAR,
     formId: "taskForm",
-    title: String(task.title || "Công việc"),
-    currentStatus: normalizeTaskStatus(task.status),
-    currentProgress: Math.max(0, Math.min(100, Number(task.progress) || 0)),
+    title: String(currentTask.title || "Công việc"),
+    currentStatus: normalizeTaskStatus(currentTask.status),
+    currentProgress: Math.max(0, Math.min(100, Number(currentTask.progress) || 0)),
   };
 };
 
@@ -20483,40 +19178,8 @@ function populatePersonForm(person) {
   applyFieldCustomizations();
 }
 
-function populateTaskForm(task) {
-  if (!task) return;
-  setTaskOwnerPickerOpen(false);
-  setTaskCollaboratorPickerOpen(false);
-  byId("taskId").value = task.id;
-  byId("taskTitle").value = task.title;
-  renderTaskProjectOptions();
-  byId("taskProjectId").value = projectIdForTask(task);
-  ensureTaskOwnerOption(task);
-  byId("taskOwner").value = task.ownerId;
-  updateTaskCollaboratorOptions(taskCollaboratorIds(task));
-  updateTaskCategoryOptions(task.category);
-  byId("taskWorkType").value = normalizeTaskWorkType(task);
-  byId("taskPriority").value = normalizeTaskPriority(task.priority);
-  byId("taskRecurrence").value = normalizeTaskRecurrence(task);
-  byId("taskStartDate").value = task.startDate || "";
-  byId("taskDue").value = task.due;
-  byId("taskDueTime").value = task.dueTime || "";
-  byId("taskStatus").value = editableTaskStatus(task);
-  byId("taskProgress").value = task.progress;
-  byId("taskQualityPercent").value = normalizeTaskQualityInput(task.qualityPercent);
-  byId("taskNote").value = task.note || "";
-  byId("taskFollowUpDate").value = task.followUpDate || "";
-  byId("taskBlockerStatus").value = normalizeTaskBlockerStatus(task.blockerStatus);
-  byId("taskBlockerNote").value = task.blockerNote || task.deadlineExtensionReason || "";
-  renderTaskDependencyOptions(taskDependencyIds(task), task.id);
-  updateTaskResponseMeta(task);
-  byId("taskAttachments").value = "";
-  renderTaskAttachmentSelection();
-  taskAttachmentDraft = [...(task.attachments || [])];
-  renderTaskAttachmentDraft();
-  updateTaskFormLock(task);
-  renderCustomFieldsForScope("tasks");
-  applyFieldCustomizations();
+function populateTaskForm(...args) {
+  return runTaskFeature("tasks-form", "populateTaskForm", args);
 }
 
 function latestTaskProgressReport(task) {
@@ -20568,179 +19231,24 @@ function taskProgressReportListHtml(task) {
   return rows ? `<div class="progress-report-list">${rows}</div>` : "";
 }
 
-function renderTaskProgressReportList(targetId, task) {
-  const container = byId(targetId);
-  if (!container) return;
-  container.innerHTML = taskProgressReportRowsHtml(task);
+
+
+
+
+
+
+function updateTaskFormLock(...args) {
+  return window.QldaFeatures?.get("tasks-form")?.updateTaskFormLock(...args);
 }
 
-function updateTaskResponseMeta(task) {
-  const taskProgressMeta = byId("taskProgressMeta");
-  if (!task) {
-    taskProgressMeta.textContent = "";
-    taskProgressMeta.dataset.baseText = "";
-    renderTaskProgressReportList("taskProgressReportList", null);
-    return;
-  }
-  const taskLatestReport = latestTaskProgressReport(task);
-  taskProgressMeta.textContent = taskLatestReport
-    ? `Cập nhật gần nhất lúc ${formatDateTime(taskLatestReport.createdAt)} bởi ${taskLatestReport.createdBy || "người thực hiện"}: ${formatScore(taskLatestReport.progress)}%.`
-    : "Chưa có cập nhật tiến độ.";
-  taskProgressMeta.dataset.baseText = taskProgressMeta.textContent;
-  renderTaskProgressReportList("taskProgressReportList", task);
-}
 
-function updateTaskDeadlineExtensionNotice(task = null) {
-  const notice = byId("taskDeadlineExtensionNotice");
-  if (!notice) return;
-  const existingTask = task || state.tasks.find((item) => item.id === byId("taskId").value);
-  const followUpDate = String(byId("taskFollowUpDate").value || "");
-  const dueDate = String(byId("taskDue").value || existingTask?.due || "");
-  const exceedsDue = Boolean(followUpDate && dueDate && followUpDate > dueDate);
-  const pending = taskDeadlineExtensionPending(existingTask);
-  notice.classList.remove("is-pending");
-  let message = "";
-  if (pending) {
-    notice.classList.add("is-pending");
-    message = `Đề nghị dời hạn đến ${formatDate(existingTask.deadlineExtensionRequestedDue) || "mốc mới"} đang chờ Trưởng/Phó phòng duyệt. Hạn hiện tại ${formatTaskDeadline(existingTask) || "vẫn được giữ nguyên"}; tiến độ công việc chưa bị đổi hạn.`;
-  } else if (exceedsDue && isGpmbWorkflowTask(existingTask)) {
-    message = "Công việc GPMB không gia hạn tại đây. Hãy điều chỉnh thời hạn bước trong Quản lý GPMB để đồng bộ lịch quy trình.";
-  } else if (exceedsDue) {
-    message = "Mốc cập nhật vượt Ngày hoàn thành. Hãy ghi căn cứ gia hạn trong Nội dung trở ngại / đề nghị hỗ trợ; hạn chỉ đổi sau khi Trưởng/Phó phòng duyệt.";
-  } else if (existingTask?.deadlineExtensionStatus === "approved") {
-    notice.classList.add("is-pending");
-    message = `Mốc mới đã được chấp nhận. Ngày hoàn thành hiện tại: ${formatTaskDeadline(existingTask) || "chưa có"}.`;
-  } else if (existingTask?.deadlineExtensionStatus === "rejected") {
-    message = `Đề nghị trước chưa được chấp nhận; hạn hiện tại vẫn là ${formatTaskDeadline(existingTask) || "chưa có"}.`;
-  }
-  notice.textContent = message;
-  notice.classList.toggle("is-hidden", !message);
-}
 
-function updateTaskFormLock(task = null) {
-  const existingTask = task || state.tasks.find((item) => item.id === byId("taskId").value);
-  const adminOverride = isAdmin();
-  const canEditDetails = existingTask
-    ? canEditTaskDetails(existingTask)
-    : canCreateRegularTasks();
-  const reportLockedByApproval = !!existingTask && taskProgressLockedAfterApproval(existingTask) && !adminOverride;
-  const canUpdateReport = existingTask ? !reportLockedByApproval && (adminOverride || canUpdateTaskProgress(existingTask) || canEditDetails) : canEditDetails;
-  const canUpdateCollaborators = existingTask ? !reportLockedByApproval && (canEditDetails || canUpdateTaskCollaborators(existingTask)) : canEditDetails;
-  const canEditQuality = !!existingTask && adminOverride;
-  byId("taskOwnerLabelText").textContent = "Người thực hiện";
-  byId("taskNoteLabelText").textContent = "Nội dung công việc / Báo cáo tiến độ";
-  byId("taskNote").placeholder = existingTask
-    ? "Nội dung công việc hoặc báo cáo tiến độ cập nhật..."
-    : "Nội dung công việc, báo cáo tiến độ, rủi ro, phối hợp, hồ sơ liên quan...";
-  document.querySelectorAll(".regular-only").forEach((element) => {
-    element.classList.remove("is-hidden");
-  });
-  byId("taskForm")
-    .querySelectorAll("#taskTitle, #taskProjectId, #taskOwner, #taskCategory, #taskWorkType, #taskPriority, #taskRecurrence, #taskStartDate, #taskDue, #taskDueTime")
-    .forEach((input) => {
-      input.disabled = !canEditDetails;
-    });
-  const dependencyList = byId("taskDependencies");
-  if (dependencyList) {
-    dependencyList.classList.toggle("is-disabled", !canEditDetails);
-    dependencyList.setAttribute("aria-disabled", String(!canEditDetails));
-    dependencyList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
-      input.disabled = !canEditDetails;
-    });
-  }
-  const ownerPickerLocked = !canEditDetails || isEmployee();
-  const ownerPicker = byId("taskOwnerPicker");
-  if (ownerPicker) {
-    ownerPicker.classList.toggle("is-disabled", ownerPickerLocked);
-    ownerPicker.setAttribute("aria-disabled", String(ownerPickerLocked));
-    byId("taskOwnerToggle").disabled = ownerPickerLocked;
-    byId("taskOwnerSearch").disabled = ownerPickerLocked;
-    if (ownerPickerLocked) setTaskOwnerPickerOpen(false);
-  }
-  byId("taskNote").disabled = reportLockedByApproval || (!canEditDetails && !(existingTask && canUpdateReport));
-  byId("taskCollaborators")
-    .querySelectorAll('input[type="checkbox"]')
-    .forEach((input) => {
-      input.disabled = !canUpdateCollaborators;
-    });
-  byId("taskCollaborators").classList.toggle("is-disabled", !canUpdateCollaborators);
-  const collaboratorPicker = byId("taskCollaboratorPicker");
-  if (collaboratorPicker) {
-    collaboratorPicker.classList.toggle("is-disabled", !canUpdateCollaborators);
-    collaboratorPicker.setAttribute("aria-disabled", String(!canUpdateCollaborators));
-    if (!canUpdateCollaborators) setTaskCollaboratorPickerOpen(false);
-  }
-  if (isEmployee()) {
-    byId("taskOwner").disabled = true;
-  }
-  byId("taskStatus").disabled = !canUpdateReport;
-  syncTaskStatusChoices();
-  byId("taskForm")
-    .querySelectorAll("#taskProgress, #taskAttachments, #taskBlockerStatus, #taskBlockerNote")
-    .forEach((input) => {
-      input.disabled = !canUpdateReport;
-    });
-  const pendingDeadlineExtension = taskDeadlineExtensionPending(existingTask);
-  byId("taskFollowUpDate").disabled = !canUpdateReport || pendingDeadlineExtension;
-  const qualityInput = byId("taskQualityPercent");
-  if (!taskCompletionIsApproved(existingTask) && !adminOverride) {
-    qualityInput.value = "";
-  }
-  qualityInput.disabled = !canEditQuality;
-  qualityInput.title = canEditQuality
-    ? "Admin có thể cập nhật đánh giá chất lượng và mọi dữ liệu công việc, kể cả khi công việc đang khóa."
-    : "Đánh giá chất lượng được nhập cùng kết quả Đạt tại màn hình Duyệt hoàn thành.";
-  if (reportLockedByApproval) {
-    const progressMeta = byId("taskProgressMeta");
-    if (progressMeta) {
-      const baseText = progressMeta.dataset.baseText || progressMeta.textContent || "";
-      progressMeta.textContent = `${baseText ? `${baseText} ` : ""}Công việc đã được đánh giá hoàn thành là Đạt, báo cáo tiến độ đã khóa.`;
-    }
-  }
-  byId("taskForm").querySelector("button[type='submit']").disabled = !canEditDetails && !canUpdateReport && !canEditQuality;
-  updateTaskDeadlineExtensionNotice(existingTask);
-}
 
-function copiedTaskTitle(title) {
-  const value = String(title || "").trim();
-  return value ? `Bản sao - ${value}` : "Bản sao công việc";
-}
 
-function copyRegularTaskToForm(task) {
-  resetTaskForm();
-  byId("taskTitle").value = copiedTaskTitle(task.title);
-  byId("taskProjectId").value = projectIdForTask(task);
-  byId("taskOwner").value = task.ownerId || "";
-  updateTaskCollaboratorOptions(taskCollaboratorIds(task));
-  updateTaskCategoryOptions(task.category);
-  byId("taskWorkType").value = normalizeTaskWorkType(task);
-  byId("taskPriority").value = normalizeTaskPriority(task.priority);
-  byId("taskRecurrence").value = normalizeTaskRecurrence(task);
-  byId("taskStartDate").value = task.startDate || "";
-  byId("taskDue").value = task.due || "";
-  byId("taskDueTime").value = task.dueTime || "";
-  byId("taskStatus").value = TASK_STATUS_PREPARING;
-  byId("taskProgress").value = 0;
-  byId("taskQualityPercent").value = "";
-  byId("taskNote").value = task.note || "";
-  byId("taskFollowUpDate").value = "";
-  byId("taskBlockerStatus").value = "none";
-  byId("taskBlockerNote").value = "";
-  renderTaskDependencyOptions(taskDependencyIds(task));
-  taskAttachmentDraft = [];
-  byId("taskAttachments").value = "";
-  renderTaskAttachmentSelection();
-  updateTaskResponseMeta(null);
-  renderTaskAttachmentDraft();
-  updateTaskFormLock();
-  renderCustomFieldsForScope("tasks");
-  applyFieldCustomizations();
-  focusEditForm("taskForm", "taskTitle");
-}
-
-function copyTaskToForm(task) {
-  if (!task || !canCopyTask(task)) return;
-  copyRegularTaskToForm(task);
+function copyTaskToForm(...args) {
+  if (!canAccessView("tasks")) return false;
+  if (activeViewId() !== "tasks") switchView("tasks");
+  return runTaskFeature("tasks-form", "copyTaskToForm", args);
 }
 
 function populateDepartmentEvaluationForm(evaluation) {
@@ -20806,8 +19314,7 @@ function openHistoryTimelineTarget(target) {
     renderTaskBoard();
     switchView("tasks");
     if (task && canOpenTask(task)) {
-      populateTaskForm(task);
-      focusEditForm("taskForm", canEditTaskDetails(task) ? "taskTitle" : "taskNote");
+      openTaskEditForm(task.id, { focusId: canEditTaskDetails(task) ? "taskTitle" : "taskNote" });
     } else {
       byId("taskBoard").scrollIntoView({ behavior: "smooth", block: "start" });
     }
@@ -21395,35 +19902,15 @@ async function submitEmployeeHandover(event) {
   }
 }
 
-function resetTaskForm() {
+function resetTaskForm(...args) {
+  const form = window.QldaFeatures?.get("tasks-form");
+  if (form) return form.resetTaskForm(...args);
+  taskFormGeneration++;
   calendarTaskSourceId = "";
+  taskAttachmentDraft = [];
   byId("taskForm").reset();
   byId("taskId").value = "";
-  renderTaskProjectOptions();
-  byId("taskProjectId").value = "";
-  byId("taskCollaborators").innerHTML = "";
-  setTaskOwnerPickerOpen(false);
-  setTaskCollaboratorPickerOpen(false);
-  renderPersonOptions();
-  byId("taskWorkType").value = TASK_WORK_TYPE_ROUTINE;
-  byId("taskRecurrence").value = TASK_RECURRENCE_NONE;
-  byId("taskPriority").value = TASK_PRIORITY_NORMAL;
-  byId("taskProgress").value = 0;
-  byId("taskQualityPercent").value = "";
-  byId("taskStatus").value = TASK_STATUS_PREPARING;
-  byId("taskStartDate").value = "";
-  byId("taskDueTime").value = "";
-  byId("taskFollowUpDate").value = "";
-  byId("taskBlockerStatus").value = "none";
-  byId("taskBlockerNote").value = "";
-  renderTaskDependencyOptions();
-  updateTaskResponseMeta(null);
   byId("taskAttachments").value = "";
-  renderTaskAttachmentSelection();
-  taskAttachmentDraft = [];
-  updateTaskCategoryOptions();
-  renderTaskAttachmentDraft();
-  updateTaskFormLock();
 }
 
 function resetEvaluationForm() {
@@ -23220,469 +21707,11 @@ byId("peopleTable").addEventListener("click", (event) => {
   if (handoverId && canManageEmployeeHandover()) openEmployeeHandoverDialog(handoverId);
 });
 
-async function saveTaskRecord(record, fileInput, draftAttachments, progressReportNote, resetCallback, forceProgressReport = false) {
-  const index = state.tasks.findIndex((item) => item.id === record.id);
-  const existingTask = index >= 0 ? state.tasks[index] : null;
-  const adminOverride = isAdmin();
-  if (existingTask && !await ensureTaskMutationContractSupported()) return false;
-  let uploadedAttachments = [];
-  try {
-    uploadedAttachments = await readTaskAttachmentFiles(fileInput.files);
-  } catch (error) {
-    alert(error.message || "Không thể đọc hồ sơ đính kèm. Vui lòng thử lại.");
-    return false;
-  }
-  const preparedRecord = {
-    ...record,
-    attachments: [...draftAttachments, ...uploadedAttachments],
-    customFields: collectCustomFieldValues("tasks", existingTask?.customFields),
-  };
-  preparedRecord.priority = normalizeTaskPriority(preparedRecord.priority);
-  preparedRecord.blockerStatus = normalizeTaskBlockerStatus(preparedRecord.blockerStatus);
-  preparedRecord.blockerNote = String(preparedRecord.blockerNote || "").trim();
-  preparedRecord.followUpDate = String(preparedRecord.followUpDate || "");
-  [
-    "deadlineExtensionStatus",
-    "deadlineExtensionRequestedDue",
-    "deadlineExtensionOriginalDue",
-    "deadlineExtensionReason",
-    "deadlineExtensionRequestedAt",
-    "deadlineExtensionRequestedById",
-    "deadlineExtensionRequestedByName",
-    "deadlineExtensionReviewedAt",
-    "deadlineExtensionReviewedById",
-    "deadlineExtensionReviewedByName",
-    "deadlineExtensionReviewNote",
-  ].forEach((field) => {
-    if (existingTask) preparedRecord[field] = existingTask[field] || "";
-  });
-  preparedRecord.dependencyIds = taskDependencyIds(preparedRecord).filter((id) => id !== preparedRecord.id);
-  const progressOnlyUpdate = !!existingTask && !canEditTaskDetails(existingTask) && canUpdateTaskProgress(existingTask);
-  if (progressOnlyUpdate) {
-    // A collaborator receives a filtered personnel list from the server. Preserve
-    // immutable task details instead of relying on disabled form controls.
-    preparedRecord.ownerId = existingTask.ownerId;
-    preparedRecord.projectId = projectIdForTask(existingTask);
-  }
-  const selectedProject = projectById(preparedRecord.projectId);
-  if (preparedRecord.projectId && !selectedProject) {
-    alert("Danh mục dự án đã chọn không còn tồn tại. Vui lòng chọn lại.");
-    return false;
-  }
-  if (!selectedProject) {
-    alert("Vui lòng chọn Danh mục dự án trước khi lưu công việc.");
-    return false;
-  }
-  if (!preparedRecord.startDate) {
-    alert("Vui lòng nhập Ngày bắt đầu trước khi lưu công việc.");
-    return false;
-  }
-  preparedRecord.projectId = selectedProject?.id || "";
-  preparedRecord.projectName = selectedProject?.name || "";
-  const recordKind = TASK_KIND_REGULAR;
-  preparedRecord.kind = recordKind;
-  preparedRecord.workType = normalizeTaskWorkType(preparedRecord);
-  preparedRecord.recurrence = normalizeTaskRecurrence(preparedRecord);
-  preparedRecord.collaboratorIds = taskCollaboratorIds(preparedRecord).filter((id) => id !== preparedRecord.ownerId);
-  preparedRecord.collaboratorId = "";
-  if (preparedRecord.recurrence === TASK_RECURRENCE_NONE) {
-    preparedRecord.recurrenceSourceId = "";
-    preparedRecord.recurrenceSeriesId = "";
-    preparedRecord.recurrenceAnchorDue = "";
-    preparedRecord.recurrenceAnchorDay = "";
-  } else if (existingTask?.recurrenceSourceId) {
-    preparedRecord.recurrenceSourceId = existingTask.recurrenceSourceId;
-    preparedRecord.recurrenceSeriesId = existingTask.recurrenceSeriesId || existingTask.recurrenceSourceId;
-    preparedRecord.recurrenceAnchorDue = existingTask.recurrenceAnchorDue || existingTask.due;
-    preparedRecord.recurrenceAnchorDay = existingTask.recurrenceAnchorDay || Number(existingTask.due?.slice(8, 10)) || "";
-  } else {
-    preparedRecord.recurrenceSourceId = "";
-    preparedRecord.recurrenceSeriesId = existingTask?.recurrenceSeriesId || preparedRecord.id;
-    preparedRecord.recurrenceAnchorDue = preparedRecord.due;
-    preparedRecord.recurrenceAnchorDay = Number(preparedRecord.due?.slice(8, 10)) || "";
-  }
-  const canEditDetails = existingTask
-    ? canEditTaskDetails(existingTask)
-    : canCreateRegularTaskForPerson(preparedRecord.ownerId);
-  const reportLockedByApproval = !!existingTask && taskProgressLockedAfterApproval(existingTask) && !adminOverride;
-  const canUpdateReport = existingTask ? !reportLockedByApproval && (adminOverride || canUpdateTaskProgress(existingTask)) : false;
-  const canUpdateCollaborators = !!existingTask && !reportLockedByApproval && (canEditDetails || canUpdateTaskCollaborators(existingTask));
-  if (reportLockedByApproval) {
-    preparedRecord.status = existingTask.status;
-    preparedRecord.progress = existingTask.progress;
-    preparedRecord.attachments = existingTask.attachments || [];
-    preparedRecord.note = existingTask.note || "";
-  }
-  if (existingTask && !canUpdateCollaborators) {
-    preparedRecord.collaboratorIds = taskCollaboratorIds(existingTask);
-    preparedRecord.collaboratorId = "";
-  }
-  const submittedQuality = normalizeTaskQualityInput(preparedRecord.qualityPercent);
-  const priorQuality = existingTask ? normalizeTaskQualityInput(existingTask.qualityPercent) : "";
-  const nextStatusForQuality = normalizeTaskStatus(preparedRecord.status);
-  const canEditQuality = !!existingTask && adminOverride;
-  const nextQuality = adminOverride
-    ? (canEditQuality ? submittedQuality : priorQuality)
-    : nextStatusForQuality === TASK_STATUS_COMPLETED && taskCompletionIsApproved(existingTask)
-      ? (canEditQuality ? submittedQuality : priorQuality)
-      : "";
-  const qualityChanged = String(nextQuality) !== String(priorQuality);
-  const qualityAssessmentChanged = qualityChanged && (nextStatusForQuality === TASK_STATUS_COMPLETED || adminOverride);
-  preparedRecord.qualityPercent = nextQuality;
-  if (!canEditDetails && !canUpdateReport && !canEditQuality) {
-    alert("Tài khoản hiện tại không có quyền lưu hoặc cập nhật công việc này.");
-    return false;
-  }
-  if (!existingTask && !canEditDetails) {
-    alert("Tài khoản hiện tại không có quyền tạo loại công việc này.");
-    return false;
-  }
-  if (canEditDetails && !isAdmin() && !canCreateRegularTaskForPerson(preparedRecord.ownerId)) {
-    alert("Tài khoản hiện tại chỉ được tạo/sửa công việc thường kỳ trong phạm vi được xem.");
-    return false;
-  }
-  let deadlineExtensionRequest = false;
-  if (existingTask) {
-    const requestedDue = String(preparedRecord.followUpDate || "");
-    const exceedsCurrentDue = Boolean(requestedDue && requestedDue > String(existingTask.due || ""));
-    if (taskDeadlineExtensionPending(existingTask)) {
-      preparedRecord.followUpDate = existingTask.followUpDate || "";
-      [
-        "deadlineExtensionStatus", "deadlineExtensionRequestedDue", "deadlineExtensionOriginalDue",
-        "deadlineExtensionReason", "deadlineExtensionRequestedAt", "deadlineExtensionRequestedById",
-        "deadlineExtensionRequestedByName", "deadlineExtensionReviewedAt", "deadlineExtensionReviewedById",
-        "deadlineExtensionReviewedByName", "deadlineExtensionReviewNote",
-      ].forEach((field) => { preparedRecord[field] = existingTask[field] || ""; });
-    } else if (exceedsCurrentDue && isGpmbWorkflowTask(existingTask)) {
-      if (requestedDue !== String(existingTask.followUpDate || "")) {
-        alert("Công việc GPMB phải điều chỉnh hạn trong Quản lý GPMB để đồng bộ với quy trình.");
-        return false;
-      }
-    } else if (exceedsCurrentDue) {
-      const reason = String(byId("taskBlockerNote").value || "").trim();
-      const requestAlreadyMatches = existingTask.deadlineExtensionStatus === "rejected"
-        && existingTask.deadlineExtensionRequestedDue === requestedDue
-        && String(existingTask.deadlineExtensionReason || "").trim() === reason;
-      if (!requestAlreadyMatches) {
-        if (reason.length < 10) {
-          alert("Nhập căn cứ đề nghị gia hạn trong trường Nội dung trở ngại / đề nghị hỗ trợ (ít nhất 10 ký tự) trước khi lưu.");
-          byId("taskBlockerNote").focus();
-          return false;
-        }
-        if (!await ensureTaskDeadlineExtensionReviewSupported()) return false;
-        const actor = currentActorInfo();
-        preparedRecord.deadlineExtensionStatus = "pending";
-        preparedRecord.deadlineExtensionRequestedDue = requestedDue;
-        preparedRecord.deadlineExtensionOriginalDue = String(existingTask.due || "");
-        preparedRecord.deadlineExtensionReason = reason;
-        preparedRecord.deadlineExtensionRequestedAt = new Date().toISOString();
-        preparedRecord.deadlineExtensionRequestedById = actor.id;
-        preparedRecord.deadlineExtensionRequestedByName = actor.name;
-        deadlineExtensionRequest = true;
-      }
-    }
-  }
-  const timestamp = new Date().toISOString();
-  const actor = currentActorInfo();
-  const ownerChanged = existingTask && existingTask.ownerId !== preparedRecord.ownerId;
-  const collaboratorsChanged = !!existingTask && (
-    (existingTask.collaboratorId || "") !== (preparedRecord.collaboratorId || "") ||
-    !samePersonIdList(taskCollaboratorIds(existingTask), taskCollaboratorIds(preparedRecord))
-  );
-  const detailsChanged =
-    !existingTask ||
-    ownerChanged ||
-    normalizeTaskKind(existingTask) !== recordKind ||
-    existingTask.title !== preparedRecord.title ||
-    projectIdForTask(existingTask) !== (preparedRecord.projectId || "") ||
-    (existingTask.projectName || "") !== (preparedRecord.projectName || "") ||
-    collaboratorsChanged ||
-    existingTask.category !== preparedRecord.category ||
-    normalizeTaskWorkType(existingTask) !== preparedRecord.workType ||
-    normalizeTaskPriority(existingTask.priority) !== preparedRecord.priority ||
-    normalizeTaskRecurrence(existingTask) !== preparedRecord.recurrence ||
-    (existingTask.startDate || "") !== (preparedRecord.startDate || "") ||
-    existingTask.due !== preparedRecord.due ||
-    (existingTask.dueTime || "") !== (preparedRecord.dueTime || "") ||
-    !samePersonIdList(taskDependencyIds(existingTask), preparedRecord.dependencyIds) ||
-    (existingTask.note || "") !== preparedRecord.note;
-
-  let mergedRecord = canEditDetails
-    ? {
-        ...existingTask,
-        ...preparedRecord,
-        progressReports: existingTask?.progressReports || [],
-      }
-    : canUpdateReport
-      ? {
-          ...existingTask,
-          status: preparedRecord.status,
-          progress: preparedRecord.progress,
-          attachments: preparedRecord.attachments,
-          followUpDate: preparedRecord.followUpDate,
-          deadlineExtensionStatus: preparedRecord.deadlineExtensionStatus || "",
-          deadlineExtensionRequestedDue: preparedRecord.deadlineExtensionRequestedDue || "",
-          deadlineExtensionOriginalDue: preparedRecord.deadlineExtensionOriginalDue || "",
-          deadlineExtensionReason: preparedRecord.deadlineExtensionReason || "",
-          deadlineExtensionRequestedAt: preparedRecord.deadlineExtensionRequestedAt || "",
-          deadlineExtensionRequestedById: preparedRecord.deadlineExtensionRequestedById || "",
-          deadlineExtensionRequestedByName: preparedRecord.deadlineExtensionRequestedByName || "",
-          deadlineExtensionReviewedAt: preparedRecord.deadlineExtensionReviewedAt || "",
-          deadlineExtensionReviewedById: preparedRecord.deadlineExtensionReviewedById || "",
-          deadlineExtensionReviewedByName: preparedRecord.deadlineExtensionReviewedByName || "",
-          deadlineExtensionReviewNote: preparedRecord.deadlineExtensionReviewNote || "",
-          blockerStatus: preparedRecord.blockerStatus,
-          blockerNote: preparedRecord.blockerNote,
-        }
-      : {
-          ...existingTask,
-        };
-  if (!canEditDetails && canUpdateCollaborators) {
-    mergedRecord.collaboratorIds = taskCollaboratorIds(preparedRecord);
-    mergedRecord.collaboratorId = "";
-  }
-  mergedRecord.qualityPercent = nextQuality;
-  const completionResubmitted = nextStatusForQuality === TASK_STATUS_COMPLETED && (
-    !existingTask ||
-    normalizeTaskStatus(existingTask.status) !== TASK_STATUS_COMPLETED ||
-    taskCompletionReviewStatus(existingTask) === "failed"
-  );
-  if (completionResubmitted) {
-    mergedRecord.completionReviewStatus = "pending";
-    mergedRecord.completionReviewedAt = "";
-    mergedRecord.completionReviewedById = "";
-    mergedRecord.completionReviewedByName = "";
-    mergedRecord.completionReviewNote = "";
-    mergedRecord.lateCompletion = false;
-    if (!adminOverride) mergedRecord.qualityPercent = "";
-    mergedRecord.qualityAssessedAt = "";
-    mergedRecord.qualityAssessedById = "";
-    mergedRecord.qualityAssessedByName = "";
-  } else if (nextStatusForQuality !== TASK_STATUS_COMPLETED) {
-    mergedRecord.completionReviewStatus = "";
-    mergedRecord.completionReviewedAt = "";
-    mergedRecord.completionReviewedById = "";
-    mergedRecord.completionReviewedByName = "";
-    mergedRecord.completionReviewNote = "";
-    mergedRecord.lateCompletion = false;
-  } else if (!mergedRecord.completionReviewStatus) {
-    mergedRecord.completionReviewStatus = taskCompletionReviewStatus(existingTask);
-  }
-  if (nextStatusForQuality !== TASK_STATUS_COMPLETED && !adminOverride) {
-    mergedRecord.qualityAssessedAt = "";
-    mergedRecord.qualityAssessedById = "";
-    mergedRecord.qualityAssessedByName = "";
-  } else if (qualityChanged) {
-    mergedRecord.qualityAssessedAt = timestamp;
-    mergedRecord.qualityAssessedById = actor.id;
-    mergedRecord.qualityAssessedByName = actor.name;
-  }
-  if (existingTask && !adminOverride && canUpdateReport && !sharedSyncSupportsTaskProgressLifecycle()) {
-    preserveLegacyTaskProgressLifecycle(mergedRecord, existingTask);
-  }
-
-  if (canEditDetails) {
-    mergedRecord.assignedById = "";
-    mergedRecord.assignedByName = "";
-    mergedRecord.assignedAt = "";
-    mergedRecord.responseStatus = "";
-    mergedRecord.responseNote = "";
-    mergedRecord.responseAt = "";
-    mergedRecord.responseById = "";
-    mergedRecord.responseByName = "";
-  }
-
-  if (normalizeTaskStatus(mergedRecord.status) === TASK_STATUS_COMPLETED) {
-    // A completed task is always a fully completed task; this also repairs
-    // legacy records that were marked completed while their progress was 0%.
-    mergedRecord.progress = 100;
-  }
-
-  const previousStatus = normalizeTaskStatus(existingTask?.status);
-  const nextStatus = normalizeTaskStatus(mergedRecord.status);
-  const previousComputedStatus = existingTask ? getDueStatus(existingTask) : previousStatus;
-  const nextComputedStatus = getDueStatus(mergedRecord);
-  const progressChanged = existingTask && Number(existingTask.progress || 0) !== Number(mergedRecord.progress || 0);
-  const statusChanged = existingTask && (previousStatus !== nextStatus || previousComputedStatus !== nextComputedStatus);
-  const progressReportNoteText = String(progressReportNote || "").trim();
-  const shouldAppendProgressNote = !!progressReportNoteText && (forceProgressReport || !canEditDetails || progressReportNoteText !== (existingTask?.note || ""));
-  const updateChangeLabels = existingTask ? taskUpdateChangeLabels(existingTask, mergedRecord) : [];
-  const hasTaskUpdate = updateChangeLabels.length > 0 || deadlineExtensionRequest;
-  if ((existingTask && !reportLockedByApproval && (canUpdateReport || canEditDetails)) && (shouldAppendProgressNote || hasTaskUpdate)) {
-    const updateAction = deadlineExtensionRequest
-      ? `Đề nghị gia hạn hạn hoàn thành đến ${formatDate(mergedRecord.deadlineExtensionRequestedDue)}`
-      : statusChanged
-      ? "Chuyển trạng thái công việc"
-      : qualityChanged
-        ? "Cập nhật đánh giá chất lượng"
-        : collaboratorsChanged
-          ? "Cập nhật người phối hợp"
-          : progressChanged || shouldAppendProgressNote
-            ? "Cập nhật tiến độ công việc"
-            : "Cập nhật thông tin công việc";
-    const updateNote = deadlineExtensionRequest
-      ? `Lý do đề nghị: ${mergedRecord.deadlineExtensionReason}${shouldAppendProgressNote ? ` · Báo cáo tiến độ: ${progressReportNoteText}` : ""}`
-      : shouldAppendProgressNote
-      ? progressReportNoteText
-      : hasTaskUpdate
-        ? `Đã thay đổi: ${updateChangeLabels.join(", ")}.`
-        : "Cập nhật công việc.";
-    mergedRecord.progressReports = [
-      ...(mergedRecord.progressReports || []),
-      {
-        id: uid("task-report"),
-        ...(deadlineExtensionRequest ? { type: "deadline-extension-request" } : {}),
-        progress: mergedRecord.progress,
-        status: nextStatus,
-        previousStatus,
-        action: updateAction,
-        note: updateNote,
-        createdAt: timestamp,
-        createdById: actor.id,
-        createdBy: actor.name,
-      },
-    ];
-  }
-
-  if (nextStatus === "Hoàn thành" && previousStatus !== "Hoàn thành") {
-    mergedRecord.completedAt = timestamp;
-    mergedRecord.completedById = actor.id;
-    mergedRecord.completedByName = actor.name;
-  } else if (nextStatus !== "Hoàn thành") {
-    mergedRecord.completedAt = "";
-    mergedRecord.completedById = "";
-    mergedRecord.completedByName = "";
-  }
-
-  const totalAttachmentSize = mergedRecord.attachments.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
-  if (totalAttachmentSize > MAX_TASK_ATTACHMENT_TOTAL_BYTES) {
-    alert("Tổng dung lượng hồ sơ đính kèm của một công việc không được vượt quá 5MB.");
-    return false;
-  }
-  const previousTasks = state.tasks;
-  const previousActivityLog = state.activityLog;
-  const previousEvaluations = state.evaluations;
-  const auditedRecord = applyTaskRecordAudit(mergedRecord, existingTask);
-  const taskCommand = deadlineExtensionRequest
-    ? "request-extension"
-    : completionResubmitted
-      ? "submit-completion"
-      : qualityAssessmentChanged
-        ? "review-completion"
-        : canEditDetails && detailsChanged
-          ? "save-task"
-          : "update-progress";
-  const commandResult = existingTask
-    ? await submitTaskCommandOnline(existingTask, auditedRecord, taskCommand)
-    : { ok: true, task: auditedRecord, remote: false };
-  if (!commandResult.ok) return false;
-  const committedRecord = commandResult.task || auditedRecord;
-  if (!commandResult.remote) {
-    state.tasks = index >= 0 ? state.tasks.map((item) => (item.id === preparedRecord.id ? committedRecord : item)) : [...state.tasks, committedRecord];
-  }
-  syncPersonalEvaluationTaskScoresForTask(committedRecord, existingTask);
-  const owner = personById(committedRecord.ownerId);
-  const collaboratorNames = taskCollaboratorNames(committedRecord);
-  const collaboratorMeta = collaboratorNames.length ? ` · phối hợp ${collaboratorNames.join(", ")}` : "";
-  const projectMeta = committedRecord.projectName ? ` · dự án ${committedRecord.projectName}` : "";
-  const action = !existingTask
-    ? "Tạo"
-    : canEditDetails && detailsChanged
-      ? "Cập nhật thường kỳ"
-      : updateChangeLabels.length
-        ? "Cập nhật công việc"
-      : collaboratorsChanged
-        ? "Cập nhật người phối hợp"
-      : qualityAssessmentChanged
-        ? "Đánh giá chất lượng"
-      : "Cập nhật tiến độ";
-  logActivity({
-    action,
-    module: "Công việc",
-    targetType: "task",
-    targetId: preparedRecord.id,
-    personId: committedRecord.ownerId,
-    departmentId: owner?.departmentId || "",
-    period: taskPeriod(committedRecord),
-    title: committedRecord.title,
-    details: `${taskKindLabels[recordKind]} · ${taskWorkMeta(committedRecord)}${projectMeta} · ${taskOwnerName(committedRecord, "Chưa rõ người nhận")}${collaboratorMeta} · ${normalizeTaskStatus(committedRecord.status)} · hoàn thành ${formatTaskDeadline(committedRecord) || "chưa có"}${taskHasQualityPercent(committedRecord) ? ` · chất lượng ${formatScore(taskQualityPercentValue(committedRecord))}%` : ""}`,
-    score: taskHasQualityPercent(committedRecord)
-      ? `Tiến độ ${formatScore(committedRecord.progress)}% · Chất lượng ${formatScore(taskQualityPercentValue(committedRecord))}%`
-      : `${formatScore(committedRecord.progress)}%`,
-  });
-  try {
-    saveState();
-  } catch {
-    if (commandResult.remote) {
-      showSystemToast("Công việc đã được lưu trên máy chủ", "Bộ nhớ cục bộ không đủ để lưu bản sao tệp; dữ liệu online vẫn được giữ nguyên.", { tone: "warning", duration: 9000 });
-      resetCallback();
-      renderAll();
-      return true;
-    }
-    state.tasks = previousTasks;
-    state.activityLog = previousActivityLog;
-    state.evaluations = previousEvaluations;
-    alert("Không thể lưu hồ sơ đính kèm vì dung lượng dữ liệu trình duyệt đã đầy. Vui lòng giảm số lượng hoặc dung lượng tệp.");
-    return false;
-  }
-  if ((!existingTask || (sharedSync.session && !commandResult.remote)) && !await confirmTaskMutationOnline(committedRecord.id)) return false;
-  resetCallback();
-  renderAll();
-  return true;
+async function saveTaskRecord(...args) {
+  return runTaskFeature("tasks-editor", "saveTaskRecord", args);
 }
 
-byId("taskForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const taskId = byId("taskId").value || uid("task");
-  const existingTask = state.tasks.find((task) => task.id === taskId);
-  const progressReportOnly = taskDetailInlineEditor?.taskId === taskId && taskDetailInlineEditor.progressReportOnly;
-  const taskNote = byId("taskNote").value.trim();
-  const preserveExistingOwner = !!existingTask && !canEditTaskDetails(existingTask);
-  const ownerId = preserveExistingOwner ? String(existingTask.ownerId || "") : byId("taskOwner").value;
-  if (!ownerId) {
-    alert("Chọn Người thực hiện trước khi lưu công việc.");
-    setTaskOwnerPickerOpen(true);
-    return;
-  }
-  const saved = await saveTaskRecord(
-    {
-      id: taskId,
-      kind: TASK_KIND_REGULAR,
-      sourceCalendarEventId: existingTask?.sourceCalendarEventId || calendarTaskSourceId || "",
-      title: byId("taskTitle").value.trim(),
-      projectId: byId("taskProjectId").value,
-      ownerId,
-      collaboratorIds: selectedTaskCollaboratorIds(),
-      category: byId("taskCategory").value,
-      workType: byId("taskWorkType").value,
-      priority: byId("taskPriority").value,
-      recurrence: byId("taskRecurrence").value,
-      startDate: byId("taskStartDate").value,
-      due: byId("taskDue").value,
-      dueTime: byId("taskDueTime").value,
-      status: normalizeTaskStatus(byId("taskStatus").value),
-      progress: clamp(byId("taskProgress").value, 0, 100),
-      qualityPercent: normalizeTaskQualityInput(byId("taskQualityPercent").value),
-      note: progressReportOnly && existingTask ? existingTask.note || "" : taskNote,
-      followUpDate: byId("taskFollowUpDate").value,
-      blockerStatus: byId("taskBlockerStatus").value,
-      blockerNote: byId("taskBlockerNote").value.trim(),
-      dependencyIds: selectedTaskDependencyIds(),
-    },
-    byId("taskAttachments"),
-    taskAttachmentDraft,
-    existingTask && (progressReportOnly || taskNote !== String(existingTask.note || "").trim()) ? taskNote : "",
-    resetTaskForm,
-    progressReportOnly,
-  );
-  if (saved) window.virtualAssistantTaskWizardSaved?.(taskId);
-  if (saved && taskDetailInlineEditor?.taskId === taskId) {
-    restoreTaskDetailInlineEditor();
-    openTaskDetailDialog(taskId);
-  } else if (saved) {
-    closeTaskFormDialog();
-  }
-});
+
 
 byId("openTaskForm").addEventListener("click", openNewTaskFormDialog);
 byId("openTaskBulkImport").addEventListener("click", openTaskBulkImportDialog);
@@ -23694,104 +21723,44 @@ byId("closeTaskBulkImport").addEventListener("click", closeTaskBulkImportDialog)
 byId("taskBulkImportDialog").addEventListener("click", (event) => {
   if (event.target === byId("taskBulkImportDialog")) closeTaskBulkImportDialog();
 });
-byId("taskBulkImportFile").addEventListener("change", (event) => {
-  handleTaskBulkImportFile(event.target.files?.[0]);
-});
-byId("downloadTaskImportTemplate").addEventListener("click", downloadTaskBulkImportTemplate);
-byId("confirmTaskBulkImport").addEventListener("click", importTaskBulkRows);
-byId("resetTaskBulkImport").addEventListener("click", resetTaskBulkImport);
-byId("resetTaskForm").addEventListener("click", () => {
-  resetTaskForm();
-  syncTaskFormDialogHeading();
-});
+
+
+
+
+
 byId("openTaskProjectCatalog").addEventListener("click", openTaskProjectCatalogDialog);
 byId("closeTaskProjectCatalog").addEventListener("click", closeTaskProjectCatalogDialog);
 byId("taskProjectCatalogDialog").addEventListener("click", (event) => {
   if (event.target === byId("taskProjectCatalogDialog")) closeTaskProjectCatalogDialog();
 });
-byId("taskProjectCatalogForm").addEventListener("submit", saveTaskProjectCatalog);
-byId("resetTaskProjectCatalogForm").addEventListener("click", resetTaskProjectCatalogForm);
-byId("taskProjectCatalogSearch").addEventListener("input", renderTaskProjectCatalog);
-byId("taskProjectCatalogList").addEventListener("click", (event) => {
-  const projectTaskListId = event.target.closest("[data-open-project-tasks]")?.dataset.openProjectTasks;
-  if (projectTaskListId) {
-    openProjectTaskList(projectTaskListId);
-    return;
-  }
-  const editProjectId = event.target.closest("[data-edit-task-project]")?.dataset.editTaskProject;
-  if (editProjectId) {
-    editTaskProjectCatalog(editProjectId);
-    return;
-  }
-  const deleteProjectId = event.target.closest("[data-delete-task-project]")?.dataset.deleteTaskProject;
-  if (deleteProjectId) deleteTaskProjectCatalog(deleteProjectId);
-});
-byId("taskOwner").addEventListener("change", () => {
-  byId("taskCategory").value = "";
-  updateTaskOwnerOptions();
-  updateTaskCollaboratorOptions();
-  updateTaskCategoryOptions();
-  updateTaskFormLock();
-});
-byId("taskOwnerOptions").addEventListener("change", (event) => {
-  const input = event.target.closest('input[type="radio"]');
-  if (!input?.value || byId("taskOwner").disabled) return;
-  byId("taskOwner").value = input.value;
-  byId("taskOwner").dispatchEvent(new Event("change", { bubbles: true }));
-  setTaskOwnerPickerOpen(false);
-});
-byId("taskOwnerSearch").addEventListener("input", debounce(filterTaskOwnerOptions, 100));
-byId("taskOwnerSearch").addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  setTaskOwnerPickerOpen(false);
-  byId("taskOwnerToggle")?.focus();
-});
-byId("taskOwnerToggle").addEventListener("click", () => {
-  setTaskOwnerPickerOpen(!isTaskOwnerPickerOpen());
-});
-byId("taskCollaborators").addEventListener("change", updateTaskCollaboratorSummary);
-byId("taskCollaboratorSearch").addEventListener("input", debounce(filterTaskCollaboratorOptions, 150));
-byId("taskCollaboratorSearch").addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  setTaskCollaboratorPickerOpen(false);
-  byId("taskCollaboratorToggle")?.focus();
-});
-byId("taskCollaboratorToggle").addEventListener("click", () => {
-  setTaskCollaboratorPickerOpen(!isTaskCollaboratorPickerOpen());
-});
-document.addEventListener("pointerdown", (event) => {
-  const collaboratorPicker = byId("taskCollaboratorPicker");
-  const ownerPicker = byId("taskOwnerPicker");
-  if (isTaskCollaboratorPickerOpen() && !collaboratorPicker?.contains(event.target)) {
-    setTaskCollaboratorPickerOpen(false);
-  }
-  if (isTaskOwnerPickerOpen() && !ownerPicker?.contains(event.target)) {
-    setTaskOwnerPickerOpen(false);
-  }
-});
-byId("taskStatus").addEventListener("change", () => {
-  updateTaskFormLock();
-});
-byId("taskDue").addEventListener("input", () => updateTaskDeadlineExtensionNotice());
-byId("taskDue").addEventListener("change", () => updateTaskDeadlineExtensionNotice());
-byId("taskFollowUpDate").addEventListener("input", () => updateTaskDeadlineExtensionNotice());
-byId("taskFollowUpDate").addEventListener("change", () => updateTaskDeadlineExtensionNotice());
-byId("taskSearch").addEventListener("input", debounce(renderTaskBoard, 200));
-byId("taskScopeFilter").addEventListener("change", (event) => setTaskDisplayScope(event.target.value));
-byId("taskProjectFilter").addEventListener("change", renderTaskBoard);
-byId("taskDepartmentFilter").addEventListener("change", renderTaskBoard);
-byId("taskStatusFilter").addEventListener("change", renderTaskBoard);
-byId("taskPersonFilterNote").addEventListener("click", (event) => {
-  if (!event.target.closest("[data-clear-task-person-filter]")) return;
-  taskDashboardPersonFilterId = "";
-  renderTaskBoard();
-});
-byId("taskDateFrom").addEventListener("change", renderTaskBoard);
-byId("taskDateTo").addEventListener("change", renderTaskBoard);
-byId("clearTaskTimeFilter").addEventListener("click", () => {
-  clearTaskTimeFilter();
-  renderTaskBoard();
-});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 document.querySelectorAll("[data-scroll-page]").forEach((button) => button.addEventListener("click", () => {
   const scrollRoot = document.scrollingElement || document.documentElement;
   const top = button.dataset.scrollPage === "bottom" ? scrollRoot.scrollHeight : 0;
@@ -23834,42 +21803,14 @@ byId("taskCompletionReviewDialog").addEventListener("click", (event) => {
     closeTaskCompletionReviewDialog();
   }
 });
-byId("taskCompletionReviewStatus").addEventListener("change", updateTaskCompletionReviewQualityField);
-byId("taskCompletionReviewForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const taskId = byId("taskCompletionReviewTaskId").value;
-  const decision = byId("taskCompletionReviewStatus").value;
-  if (!decision) {
-    alert("Chọn kết quả Đạt hoặc Không đạt trước khi lưu.");
-    return;
-  }
-  const qualityPercent = normalizeTaskQualityInput(byId("taskCompletionReviewQualityPercent").value);
-  if (decision === "passed" && qualityPercent === "") {
-    alert("Nhập Đánh giá chất lượng trước khi lưu kết quả Đạt.");
-    byId("taskCompletionReviewQualityPercent").focus();
-    return;
-  }
-  if (await reviewTaskCompletion(taskId, decision, byId("taskCompletionReviewNote").value, qualityPercent)) {
-    closeTaskCompletionReviewDialog();
-  }
-});
+
+
 byId("closeTaskDeadlineExtensionReview").addEventListener("click", closeTaskDeadlineExtensionReviewDialog);
 byId("cancelTaskDeadlineExtensionReview").addEventListener("click", closeTaskDeadlineExtensionReviewDialog);
 byId("taskDeadlineExtensionReviewDialog").addEventListener("click", (event) => {
   if (event.target === byId("taskDeadlineExtensionReviewDialog")) closeTaskDeadlineExtensionReviewDialog();
 });
-byId("taskDeadlineExtensionReviewForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const taskId = byId("taskDeadlineExtensionReviewTaskId").value;
-  const decision = byId("taskDeadlineExtensionReviewDecision").value;
-  if (!decision) {
-    alert("Chọn chấp nhận hoặc không chấp nhận mốc mới trước khi lưu.");
-    return;
-  }
-  if (await reviewTaskDeadlineExtension(taskId, decision, byId("taskDeadlineExtensionReviewNote").value)) {
-    closeTaskDeadlineExtensionReviewDialog();
-  }
-});
+
 byId("exportTaskDetailExcel").addEventListener("click", () => {
   const task = state.tasks.find((item) => item.id === byId("taskDetailDialog").dataset.taskId);
   if (!task) return;
@@ -23880,68 +21821,9 @@ byId("exportTaskDetailExcel").addEventListener("click", () => {
   }));
 });
 byId("closeTaskDetail").addEventListener("click", closeTaskDetailDialog);
-byId("taskDetailDialog").addEventListener("click", (event) => {
-  const reviewButton = event.target.closest("[data-review-deadline-extension]");
-  if (reviewButton) {
-    const taskId = reviewButton.dataset.reviewDeadlineExtension;
-    const task = state.tasks.find((item) => item.id === taskId);
-    if (task && canReviewTaskDeadlineExtension(task)) {
-      closeTaskDetailDialog();
-      openTaskDeadlineExtensionReviewDialog(taskId);
-    }
-    return;
-  }
-  if (event.target === byId("taskDetailDialog")) {
-    closeTaskDetailDialog();
-  }
-});
-byId("taskDetailActions").addEventListener("click", (event) => {
-  const action = event.target.closest("[data-task-detail-action]")?.dataset.taskDetailAction;
-  const taskId = byId("taskDetailDialog").dataset.taskId;
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!action || !task) return;
-  if (action === "cancel-edit") {
-    openTaskDetailDialog(taskId);
-    return;
-  }
-  if (action === "stop-recurrence" && canStopTaskRecurrence(task)) {
-    void stopRecurringTask(taskId);
-    return;
-  }
-  if (action === "edit" && canEditTaskDetails(task)) {
-    openTaskDetailInlineEditor(taskId);
-    return;
-  }
-  if (action === "report" && canUpdateTaskProgress(task)) {
-    if (window.virtualAssistantSelectProgressTask?.(taskId) === true) return;
-    openTaskDetailInlineEditor(taskId, "taskNote", { progressReportOnly: true });
-    return;
-  }
-  if (action === "copy" && canCopyTask(task)) {
-    closeTaskDetailDialog();
-    copyTaskToForm(task);
-    return;
-  }
-  if (action === "review" && canReviewTaskCompletion(task)) {
-    closeTaskDetailDialog();
-    openTaskCompletionReviewDialog(taskId);
-    return;
-  }
-  if (action === "review-deadline-extension" && canReviewTaskDeadlineExtension(task)) {
-    closeTaskDetailDialog();
-    openTaskDeadlineExtensionReviewDialog(taskId);
-    return;
-  }
-  if (action === "delete" && canDeleteTask(task)) {
-    if (deleteTaskRecord(taskId)) closeTaskDetailDialog();
-  }
-});
-byId("taskStatusDetailList").addEventListener("click", (event) => {
-  const taskId = event.target.closest("[data-open-status-task]")?.dataset.openStatusTask;
-  if (!taskId) return;
-  closeTaskStatusDetailDialog();
-  openTaskDetailDialog(taskId);
-});
+
+
+
 byId("closeKpiTaskDetail").addEventListener("click", closeKpiTaskDetailDialog);
 byId("kpiTaskDetailDialog").addEventListener("click", (event) => {
   if (event.target === byId("kpiTaskDetailDialog")) {
@@ -23959,77 +21841,11 @@ byId("kpiTaskDetailList").addEventListener("click", (event) => {
   closeKpiTaskDetailDialog();
   openHistoryTimelineTarget({ targetType: "task", targetId: taskId });
 });
-byId("taskAttachmentList").addEventListener("click", (event) => {
-  const removeId = event.target.dataset.removeTaskAttachment;
-  if (!removeId) return;
-  taskAttachmentDraft = taskAttachmentDraft.filter((file) => file.id !== removeId);
-  renderTaskAttachmentDraft();
-});
-byId("taskAttachments").addEventListener("change", (event) => {
-  renderTaskAttachmentSelection(event.target.files);
-});
-byId("taskBoard").addEventListener("click", (event) => {
-  const loadMoreStatus = event.target.closest("[data-load-more-task-status]")?.dataset.loadMoreTaskStatus;
-  const statusButton = event.target.closest("[data-open-task-status]");
-  const detailId = event.target.closest("[data-open-task-detail]")?.dataset.openTaskDetail;
-  const editId = event.target.closest("[data-edit-task]")?.dataset.editTask;
-  const copyId = event.target.closest("[data-copy-task]")?.dataset.copyTask;
-  const respondId = event.target.closest("[data-respond-task]")?.dataset.respondTask;
-  const reviewId = event.target.closest("[data-review-task]")?.dataset.reviewTask;
-  const deadlineReviewId = event.target.closest("[data-review-deadline-extension]")?.dataset.reviewDeadlineExtension;
-  const deleteId = event.target.closest("[data-delete-task]")?.dataset.deleteTask;
-  if (loadMoreStatus) {
-    const currentLimit = taskBoardVisibleLimits.get(loadMoreStatus) || TASK_BOARD_INITIAL_RENDER_LIMIT;
-    taskBoardVisibleLimits.set(loadMoreStatus, currentLimit + TASK_BOARD_RENDER_STEP);
-    renderTaskBoard();
-    return;
-  }
-  if (statusButton) {
-    openTaskStatusDetailDialog(statusButton.dataset.openTaskStatus);
-    return;
-  }
-  if (detailId && !event.target.closest("button, a, input, select, textarea, label, details, summary")) {
-    openTaskDetailDialog(detailId);
-    return;
-  }
-  if (editId) {
-    const task = state.tasks.find((item) => item.id === editId);
-    if (!task || !canEditTaskDetails(task)) return;
-    populateTaskForm(task);
-    focusEditForm("taskForm", "taskTitle");
-  }
-  if (copyId) {
-    const task = state.tasks.find((item) => item.id === copyId);
-    copyTaskToForm(task);
-    return;
-  }
-  if (respondId) {
-    const task = state.tasks.find((item) => item.id === respondId);
-    if (!task || !canUpdateTaskProgress(task)) return;
-    if (window.virtualAssistantSelectProgressTask?.(respondId) === true) return;
-    populateTaskForm(task);
-    focusEditForm("taskForm", "taskNote");
-  }
-  if (reviewId) {
-    openTaskCompletionReviewDialog(reviewId);
-    return;
-  }
-  if (deadlineReviewId) {
-    openTaskDeadlineExtensionReviewDialog(deadlineReviewId);
-    return;
-  }
-  if (deleteId) deleteTaskRecord(deleteId);
-});
 
-byId("taskCompletionPendingList").addEventListener("click", (event) => {
-  const taskId = event.target.closest("[data-open-pending-task]")?.dataset.openPendingTask;
-  if (taskId) {
-    openTaskDetailDialog(taskId);
-    return;
-  }
-  const reviewTaskId = event.target.closest("[data-review-pending-task]")?.dataset.reviewPendingTask;
-  if (reviewTaskId) openTaskCompletionReviewDialog(reviewTaskId);
-});
+
+
+
+
 
 byId("openTaskCompletionPendingList").addEventListener("click", openTaskCompletionPendingDetailDialog);
 

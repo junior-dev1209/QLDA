@@ -86,6 +86,10 @@
   let aiRequestController = null;
   const pendingTaskDrafts = new Map();
   const taskWizard = { active: false, mode: "create", steps: [], index: 0, applyingAnswer: false, awaitingConfirmation: false, accountId: "", taskId: "", kind: "", form: null };
+  let taskWizardOpenGeneration = 0;
+  let taskWizardLauncherStyle = null;
+  let taskWizardPreferredAnchor = null;
+  let taskWizardPositionFrame = 0;
   const assistantExpressionAssets = {
     flower: "assets/luna-flower.webp",
     cake: "assets/luna-cake.webp",
@@ -246,6 +250,13 @@
     launcher.style.top = `${position.top}px`;
     launcher.style.right = "auto";
     launcher.style.bottom = "auto";
+    if (persist && taskWizardLauncherStyle) {
+      taskWizardLauncherStyle.left = launcher.style.left;
+      taskWizardLauncherStyle.top = launcher.style.top;
+      taskWizardLauncherStyle.right = "auto";
+      taskWizardLauncherStyle.bottom = "auto";
+      taskWizardPreferredAnchor = { left: position.left, top: position.top };
+    }
     positionMinimizeButton();
     if (persist && activeAccountId) {
       try {
@@ -384,50 +395,71 @@
   function positionTaskWizardBubble() {
     if (!taskVoiceWizard || taskVoiceWizard.classList.contains("is-hidden")) return;
     const mobile = isMobileAssistantViewport();
-    const margin = 12;
-    const gap = 18;
-    const width = Math.min(mobile ? 360 : 390, window.innerWidth - margin * 2);
+    const margin = 12, gap = 18;
+    const viewport = window.visualViewport;
+    const bounds = { left: viewport?.offsetLeft || 0, top: viewport?.offsetTop || 0,
+      width: Math.min(window.innerWidth, viewport?.width || window.innerWidth),
+      height: Math.min(window.innerHeight, viewport?.height || window.innerHeight) };
+    const width = Math.min(mobile ? 360 : 390, bounds.width - margin * 2);
+    if (!taskWizardLauncherStyle) {
+      taskWizardLauncherStyle = Object.fromEntries(["left", "top", "right", "bottom", "width", "height"].map((key) => [key, launcher.style[key]]));
+      const rect = launcher.getBoundingClientRect();
+      taskWizardPreferredAnchor = { left: rect.left, top: rect.top };
+    }
+    if (bounds.height < 480) taskVoiceWizard.classList.add("is-condensed");
+    launcher.style.height = bounds.height < 480 ? "80px" : taskWizardLauncherStyle.height;
     taskVoiceWizard.style.width = `${width}px`;
-    taskVoiceWizard.style.maxHeight = `${Math.max(1, window.innerHeight - margin * 2)}px`;
+    taskVoiceWizard.style.maxHeight = `${Math.max(120, bounds.height - launcher.offsetHeight - gap - margin * 2)}px`;
     const anchor = launcher.getBoundingClientRect();
     const height = taskVoiceWizard.offsetHeight;
-    const centerX = anchor.left + anchor.width / 2;
-    const roomAbove = anchor.top - margin - gap;
-    const roomBelow = window.innerHeight - anchor.bottom - margin - gap;
-    const left = clamp(centerX - width / 2, margin, window.innerWidth - width - margin);
-    let placement = roomAbove >= height ? "above" : roomBelow >= height ? "below" : roomAbove >= roomBelow ? "above" : "below";
-    let top = placement === "above"
-      ? clamp(anchor.top - height - gap, margin, window.innerHeight - height - margin)
-      : clamp(anchor.bottom + gap, margin, window.innerHeight - height - margin);
     const activeTarget = taskWizard.form?.querySelector("[data-luna-current-step]");
-    if (taskWizard.active && !taskWizard.awaitingConfirmation && activeTarget) {
-      const targetRect = activeTarget.getBoundingClientRect();
-      const openPickerPanels = taskWizard.mode === "calendar" ? [] : ["taskOwnerPanel", "taskCollaboratorPanel"]
+    const targets = taskWizard.active && !taskWizard.awaitingConfirmation && activeTarget
+      ? [activeTarget.getBoundingClientRect(), ...(taskWizard.mode === "calendar" ? [] : ["taskOwnerPanel", "taskCollaboratorPanel"])
         .map((id) => document.getElementById(id))
         .filter((element) => element && !element.classList.contains("is-hidden"))
-        .map((element) => element.getBoundingClientRect());
-      const targetBottom = Math.max(targetRect.bottom, ...openPickerPanels.map((rect) => rect.bottom));
-      const targetTop = Math.min(targetRect.top, ...openPickerPanels.map((rect) => rect.top));
-      const fitsBetweenTargetAndLuna = targetBottom + gap + height <= anchor.top + anchor.height * 0.08 - gap;
-      if (fitsBetweenTargetAndLuna) {
-        placement = "above";
-        top = anchor.top + anchor.height * 0.08 - height - gap;
-      } else {
-        const currentRect = { left, right: left + width, top, bottom: top + height };
-        const overlapsTarget = currentRect.left < targetRect.right && currentRect.right > targetRect.left
-          && currentRect.top < targetBottom && currentRect.bottom > targetTop;
-        if (overlapsTarget && targetTop - height - gap >= margin) {
-          top = targetTop - height - gap;
-        } else if (overlapsTarget && targetBottom + height + gap <= window.innerHeight - margin) {
-          placement = "below";
-          top = targetBottom + gap;
-        }
-      }
-    }
-    taskVoiceWizard.dataset.placement = placement;
+        .map((element) => element.getBoundingClientRect())] : [];
+    const pairHeight = height + gap + anchor.height;
+    const preferred = taskWizardPreferredAnchor;
+    const xs = [preferred.left + anchor.width / 2 - width / 2, bounds.left + margin, bounds.left + bounds.width - width - margin];
+    const ys = [preferred.top - height - gap, bounds.top + margin, bounds.top + bounds.height - pairHeight - margin,
+      ...targets.flatMap((rect) => [rect.top - pairHeight - gap, rect.bottom + gap])];
+    const overlap = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left))
+      * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    const candidates = xs.flatMap((x) => ys.map((y) => {
+      const left = clamp(x, bounds.left + margin, bounds.left + bounds.width - width - margin);
+      const top = clamp(y, bounds.top + margin, bounds.top + bounds.height - pairHeight - margin);
+      const avatarLeft = clamp(preferred.left, Math.max(bounds.left + margin, left + 20 - anchor.width / 2),
+        Math.min(bounds.left + bounds.width - anchor.width - margin, left + width - 20 - anchor.width / 2));
+      const avatarTop = top + height + gap;
+      const bubble = { left, top, right: left + width, bottom: top + height };
+      const avatar = { left: avatarLeft, top: avatarTop, right: avatarLeft + anchor.width, bottom: avatarTop + anchor.height };
+      const score = targets.reduce((sum, rect) => sum + overlap(bubble, rect) * 1000 + overlap(avatar, rect) * 100, 0)
+        + (avatarLeft - preferred.left) ** 2 + (avatarTop - preferred.top) ** 2;
+      return { left, top, avatarLeft, avatarTop, score };
+    })).sort((a, b) => a.score - b.score);
+    const { left, top, avatarLeft, avatarTop } = candidates[0];
+    placeLauncher(avatarLeft, avatarTop);
+    taskVoiceWizard.dataset.placement = "above";
     taskVoiceWizard.style.left = `${left}px`;
     taskVoiceWizard.style.top = `${top}px`;
-    taskVoiceWizard.style.setProperty("--task-wizard-tail-x", `${clamp(centerX - left, 20, width - 20)}px`);
+    taskVoiceWizard.style.setProperty("--task-wizard-tail-x", `${clamp(avatarLeft + anchor.width / 2 - left, 20, width - 20)}px`);
+  }
+
+  function restoreTaskWizardLauncher() {
+    if (!taskWizardLauncherStyle) return;
+    Object.entries(taskWizardLauncherStyle).forEach(([key, value]) => { launcher.style[key] = value; });
+    taskWizardLauncherStyle = null;
+    taskWizardPreferredAnchor = null;
+    if (launcher.style.left && launcher.style.top) {
+      const rect = launcher.getBoundingClientRect();
+      placeLauncher(rect.left, rect.top);
+    }
+    positionMinimizeButton();
+  }
+
+  function scheduleTaskWizardPosition() {
+    if (taskWizardPositionFrame || taskVoiceWizard.classList.contains("is-hidden")) return;
+    taskWizardPositionFrame = requestAnimationFrame(() => { taskWizardPositionFrame = 0; positionTaskWizardBubble(); });
   }
 
   function normalize(value) {
@@ -1682,6 +1714,7 @@
   }
 
   function openTaskDraft(draft) {
+    const accountId = String(currentAccount()?.id || "");
     if (typeof canCreateRegularTasks !== "function" || !canCreateRegularTasks()) {
       appendMessage("assistant", "Tài khoản này chưa được cấp quyền tạo công việc nên em chưa thể mở biểu mẫu ạ.");
       return;
@@ -1689,7 +1722,8 @@
     const preparedDraft = typeof draft === "string" ? { title: draft } : (draft || {});
     const taskNav = document.querySelector('.nav-item[data-view="tasks"]');
     if (taskNav && !document.getElementById("tasks")?.classList.contains("is-active")) taskNav.click();
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
+      if (String(currentAccount()?.id || "") !== accountId) return;
       if (!currentAccount() || !canCreateRegularTasks()) {
         appendMessage("assistant", "Quyền đã thay đổi trong lúc thao tác; biểu mẫu không được mở.");
         syncAccountAccess();
@@ -1700,10 +1734,8 @@
         appendMessage("assistant", "Không thể mở biểu mẫu tạo công việc lúc này. Hãy vào mục Công việc và thử lại.");
         return;
       }
-      trigger.click();
-      const applied = typeof window.virtualAssistantApplyTaskDraft === "function"
-        ? window.virtualAssistantApplyTaskDraft(preparedDraft)
-        : false;
+      const applied = await window.virtualAssistantOpenTaskDraft?.(preparedDraft);
+      if (String(currentAccount()?.id || "") !== accountId) return;
       const title = String(preparedDraft.title || "").trim();
       const pronoun = assistantUserProfile(currentAccount()).pronoun;
       appendMessage("assistant", applied
@@ -2192,6 +2224,8 @@
   }
 
   function exitTaskWizard(message = "") {
+    taskWizardOpenGeneration++;
+    taskWizard.openingTaskId = "";
     if (recognition && voiceCaptureMode === "task-wizard") stopVoiceCapture({ discard: true });
     taskWizard.active = false;
     taskWizard.awaitingConfirmation = false;
@@ -2202,6 +2236,7 @@
     clearTaskWizardHighlight();
     taskVoiceWizard?.classList.add("is-hidden");
     root.classList.remove("is-task-wizard");
+    restoreTaskWizardLauncher();
     taskWizardConversation?.replaceChildren();
     if (taskWizardReply) taskWizardReply.value = "";
     if (message) {
@@ -2246,9 +2281,12 @@
       appendMessage("assistant", "Tài khoản này chưa được cấp quyền tạo công việc nên em chưa thể mở hướng dẫn ạ.");
       return;
     }
+    const accountId = String(currentAccount()?.id || "");
+    const generation = ++taskWizardOpenGeneration;
     const taskNav = document.querySelector('.nav-item[data-view="tasks"]');
     if (taskNav && !document.getElementById("tasks")?.classList.contains("is-active")) taskNav.click();
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
+      if (String(currentAccount()?.id || "") !== accountId || generation !== taskWizardOpenGeneration || taskWizard.active) return;
       if (!currentAccount() || !canCreateRegularTasks()) {
         appendMessage("assistant", "Quyền tạo công việc đã thay đổi; em chưa mở biểu mẫu ạ.");
         return;
@@ -2259,7 +2297,8 @@
         return;
       }
       if (!panel.classList.contains("is-hidden")) setPanelOpen(false, { restoreFocus: false });
-      trigger.click();
+      const opened = await window.virtualAssistantOpenTaskDraft?.({});
+      if (!opened || String(currentAccount()?.id || "") !== accountId || generation !== taskWizardOpenGeneration || taskWizard.active) return;
       taskWizard.mode = "create";
       taskWizard.accountId = String(currentAccount()?.id || "");
       taskWizard.taskId = "";
@@ -2978,7 +3017,7 @@
       : false;
   }
 
-  function startTaskProgressWizard(task, suggestedProgress = null) {
+  async function startTaskProgressWizard(task, suggestedProgress = null) {
     if (!task || typeof canUpdateTaskProgress !== "function" || !canUpdateTaskProgress(task)) {
       appendMessage("assistant", "Tài khoản này không có quyền cập nhật tiến độ công việc đó.");
       return false;
@@ -2988,13 +3027,17 @@
       return false;
     }
     const accountId = String(currentAccount()?.id || "");
+    const generation = ++taskWizardOpenGeneration;
     const previousTaskId = taskWizard.taskId;
     taskWizard.taskId = String(task.id);
-    const opened = window.virtualAssistantOpenProgressForm?.({
+    taskWizard.openingTaskId = String(task.id);
+    const opened = await window.virtualAssistantOpenProgressForm?.({
       accountId,
       taskId: String(task.id),
       currentProgress: Number(task.progress || 0),
     });
+    if (String(currentAccount()?.id || "") !== accountId || generation !== taskWizardOpenGeneration) return false;
+    taskWizard.openingTaskId = "";
     if (!opened) {
       taskWizard.taskId = previousTaskId;
       appendMessage("assistant", "Em chưa thể mở biểu mẫu cập nhật an toàn lúc này. Không có dữ liệu nào được thay đổi.");
@@ -3088,10 +3131,11 @@
     return true;
   }
 
-  window.virtualAssistantSelectProgressTask = (taskId) => {
+  window.virtualAssistantSelectProgressTask = (taskId, selectedTask = null) => {
     const currentStep = taskWizard.steps[taskWizard.index];
     if (!taskWizard.active || taskWizard.mode !== "progress" || taskWizard.taskId || currentStep?.key !== "task") return false;
-    const task = currentTasks().find((item) => String(item.id) === String(taskId || ""));
+    const task = currentTasks().find((item) => String(item.id) === String(taskId || ""))
+      || (String(selectedTask?.id || "") === String(taskId || "") ? selectedTask : null);
     if (!task || typeof canUpdateTaskProgress !== "function" || !canUpdateTaskProgress(task)) {
       const message = "Công việc vừa chọn không còn khả dụng hoặc tài khoản hiện tại không có quyền cập nhật. Em chưa thay đổi dữ liệu ạ.";
       taskWizardSetStatus(message);
@@ -3857,18 +3901,6 @@
     window.requestAnimationFrame(positionTaskWizardBubble);
   });
   const taskFormDialog = document.getElementById("taskFormDialog");
-  document.querySelector("#taskFormDialog .task-form-modal")?.addEventListener("scroll", () => {
-    if (taskWizard.active) window.requestAnimationFrame(positionTaskWizardBubble);
-  }, { passive: true });
-  document.querySelector("#calendarDialog .calendar-modal")?.addEventListener("scroll", () => {
-    if (taskWizard.active && taskWizard.mode === "calendar") window.requestAnimationFrame(positionTaskWizardBubble);
-  }, { passive: true });
-  document.querySelector("#personFormDialog .person-form-modal")?.addEventListener("scroll", () => {
-    if (taskWizard.active && taskWizard.mode === "people") window.requestAnimationFrame(positionTaskWizardBubble);
-  }, { passive: true });
-  document.querySelector("#taskDetailDialog .task-detail-modal")?.addEventListener("scroll", () => {
-    if (taskWizard.active) window.requestAnimationFrame(positionTaskWizardBubble);
-  }, { passive: true });
   if (taskFormDialog) {
     new MutationObserver(() => {
       if (!taskFormDialog.classList.contains("is-hidden") || taskVoiceWizard.classList.contains("is-hidden")) return;
@@ -3879,6 +3911,7 @@
   if (taskDetailDialog) {
     new MutationObserver(() => {
       if (!taskWizard.active || taskWizard.mode !== "progress") return;
+      if (taskWizard.openingTaskId) return;
       if (!taskWizard.taskId && taskWizard.steps[taskWizard.index]?.key === "task") return;
       if (!taskDetailDialog.classList.contains("is-hidden") && taskDetailDialog.contains(taskWizard.form)) return;
       exitTaskWizard("Dạ, em đã dừng cập nhật vì biểu mẫu đã đóng. Thông tin chưa được lưu ạ.");
@@ -3924,9 +3957,9 @@
     if (event.key === "Escape" && !panel.classList.contains("is-hidden")) setPanelOpen(false);
   });
   window.addEventListener("resize", () => {
-    if (isMobileAssistantViewport()) {
+    if (!taskWizardLauncherStyle && isMobileAssistantViewport()) {
       restoreLauncherPosition(activeAccountId);
-    } else if (launcher.style.left && launcher.style.top) {
+    } else if (!taskWizardLauncherStyle && launcher.style.left && launcher.style.top) {
       const rect = launcher.getBoundingClientRect();
       placeLauncher(rect.left, rect.top, { persist: true });
     }
@@ -3935,6 +3968,9 @@
     positionQuickNotice();
     positionTaskWizardBubble();
   });
+  document.addEventListener("scroll", scheduleTaskWizardPosition, { capture: true, passive: true });
+  window.visualViewport?.addEventListener("resize", scheduleTaskWizardPosition);
+  window.visualViewport?.addEventListener("scroll", scheduleTaskWizardPosition);
   window.addEventListener("storage", () => { syncAccountAccess(); changeMoodIfDue(); });
   window.addEventListener("phuc-thinh-theme-change", (event) => applyAssistantTheme(event.detail));
   window.addEventListener("phuc-thinh-luna-visibility-change", syncAccountAccess);
@@ -3990,6 +4026,7 @@
       if (!taskWizard.active && !taskVoiceWizard.classList.contains("is-hidden")) {
         taskVoiceWizard.classList.add("is-hidden");
         root.classList.remove("is-task-wizard");
+        restoreTaskWizardLauncher();
         taskWizardConversation.replaceChildren();
       }
     }, 4500);
@@ -4015,6 +4052,7 @@
       if (!taskWizard.active && !taskVoiceWizard.classList.contains("is-hidden")) {
         taskVoiceWizard.classList.add("is-hidden");
         root.classList.remove("is-task-wizard");
+        restoreTaskWizardLauncher();
         taskWizardConversation.replaceChildren();
       }
     }, 4500);
@@ -4037,6 +4075,7 @@
       if (!taskWizard.active && !taskVoiceWizard.classList.contains("is-hidden")) {
         taskVoiceWizard.classList.add("is-hidden");
         root.classList.remove("is-task-wizard");
+        restoreTaskWizardLauncher();
         taskWizardConversation.replaceChildren();
       }
     }, 4500);
