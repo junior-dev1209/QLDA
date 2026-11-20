@@ -8,11 +8,10 @@ export function taskCommandChanges(
   collectionNames: readonly string[], fieldNames: readonly string[],
 ) {
   const collections: Record<string, RecordChange> = {};
-  const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+  const same = (left: unknown, right: unknown) => left === right || JSON.stringify(left) === JSON.stringify(right);
   for (const name of collectionNames) {
     const oldRecords = (Array.isArray(before[name]) ? before[name] : []) as RecordValue[];
     const newRecords = (Array.isArray(after[name]) ? after[name] : []) as RecordValue[];
-    if (same(oldRecords, newRecords)) continue;
     const oldById = new Map(oldRecords.map((record) => [String(record.id), record]));
     const newById = new Map(newRecords.map((record) => [String(record.id), record]));
     if (oldById.size !== oldRecords.length || newById.size !== newRecords.length
@@ -23,7 +22,9 @@ export function taskCommandChanges(
     const defaultOrder = oldRecords.filter((record) => newById.has(String(record.id))).map((record) => String(record.id));
     defaultOrder.push(...newRecords.filter((record) => !oldById.has(String(record.id))).map((record) => String(record.id)));
     const newOrder = newRecords.map((record) => String(record.id));
-    if (!same(defaultOrder, newOrder)) change.order = newOrder;
+    const reordered = !same(defaultOrder, newOrder);
+    if (!upserts.length && !deletes.length && !reordered) continue;
+    if (reordered) change.order = newOrder;
     collections[name] = change;
   }
   const fields: Record<string, unknown> = {};

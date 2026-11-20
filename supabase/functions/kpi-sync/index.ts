@@ -1,9 +1,12 @@
 import { createClient } from "npm:@supabase/supabase-js@2.107.0";
 import { gpmbWorkflowTemplate } from "./gpmb-workflow-template.ts";
-import { createTaskStorageProbe } from "./task-storage.ts";
+import { createTaskStorageProbe, createTaskRecordGateway } from "./task-storage.ts";
+import { createIdentityLookup } from "./task-identity-index.ts";
+import { createProjectionTableResolver } from "./projection-table.ts";
 import { assertTaskCommandReceipt, taskCommandReceiptResult, TaskCommandConflictError, type TaskCommandCommit } from "./task-command-store.ts";
 import { taskCommandChanges } from "./task-command-response.ts";
 import { nextTaskOccurrence } from "./task-recurrence.ts";
+import { parseTaskPageQuery, taskQueryStatuses, taskQueryPending, taskQueryStopped, taskQueryMatchesStatus, taskQueryCompare, taskQueryNormalized, taskQueryWorkMeta } from "./task-query.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
 const legacyServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -21,7 +24,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.11.19.3-cpu-read";
+const deploymentVersion = "2026.11.19.10";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -53,7 +56,7 @@ const moduleSettingsVersion = 6;
 type CollectionName = (typeof collections)[number];
 type ScalarField = (typeof scalarFields)[number];
 type JsonRecord = Record<string, unknown>;
-type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "kpi_record_evaluations" | "kpi_record_catalog" | "kpi_record_activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals" | "public_investment_projects";
+type RecordProjectionTable = "people" | "tasks" | "task_progress_reports" | "evaluations" | "kpi_catalog" | "activity_log" | "notifications" | "gpmb_workflows" | "gpmb_cases" | "public_investment_appraisals" | "public_investment_projects";
 type OnlineAccount = {
   accountId: string;
   displayName: string;
@@ -91,11 +94,26 @@ const admin = createClient(supabaseUrl, serviceRoleKey, {
 });
 const transactionalTaskStorage = createTaskStorageProbe(async () => await admin
   .from("kpi_task_storage_state").select("schema_version, source_mode").eq("id", stateId).maybeSingle());
+const taskRecords = createTaskRecordGateway({
+  rpc: (name, params) => admin.rpc(name, params),
+  legacyRead: () => admin.from("kpi_shared_state").select("revision, state, updated_at").eq("id", stateId).maybeSingle(),
+  modeRead: () => admin.from("kpi_task_storage_state").select("schema_version, source_mode").eq("id", stateId).maybeSingle(),
+});
+const identityRecord = createIdentityLookup();
+const projectionTableName = createProjectionTableResolver(async (table) => await admin.from(table).select("id").limit(0));
+
+async function commitSharedState(params: Record<string, unknown>, actorId = "", sessionHash = "") {
+  const result = await taskRecords.commitState(params, actorId, sessionHash);
+  if (result.error?.code === "KPA01") throw new AuthenticationRequiredError("Authentication required.");
+  return result;
+}
 
 type StateSnapshot = {
   revision: number;
   updatedAt: string;
   state: JsonRecord;
+  sourceMode?: string;
+  taskVersions?: Record<string, number>;
 };
 type StateMetadata = Omit<StateSnapshot, "state">;
 
@@ -160,9 +178,9 @@ const projectionTableByCollection: Partial<Record<CollectionName, RecordProjecti
   gpmbCases: "gpmb_cases",
   publicInvestmentAppraisals: "public_investment_appraisals",
   publicInvestmentProjects: "public_investment_projects",
-  evaluations: "kpi_record_evaluations",
+  evaluations: "evaluations",
   notifications: "notifications",
-  activityLog: "kpi_record_activity_log",
+  activityLog: "activity_log",
 };
 const kpiCatalogScalarFields: ScalarField[] = [
   "departments",
@@ -455,7 +473,7 @@ function applySystemSettingsToState(state: JsonRecord, recordsValue: unknown = s
 }
 
 function ensureSystemSettings(state: JsonRecord): boolean {
-  const before = clone(state);
+  const before = clone({ systemSettings: state.systemSettings, moduleSettings: state.moduleSettings, systemCustomization: state.systemCustomization });
   const existing = Array.isArray(state.systemSettings) ? state.systemSettings : [];
   if (existing.some((record) => isRecord(record) && String(record.key || "").trim())) applySystemSettingsToState(state, existing);
   else {
@@ -504,6 +522,7 @@ function canonical(value: unknown): unknown {
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
   return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
@@ -924,7 +943,7 @@ async function migrateLegacyAccountPassword(current: StateSnapshot, account: Jso
     const nextAccount = accountForId(nextState, accountId);
     if (!nextAccount) throw new Error("Authentication required.");
     await setAccountPasswordCredential(nextAccount, password);
-    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+    const { data, error } = await commitSharedState({
       expected_revision: source.revision,
       next_state: nextState,
     });
@@ -1133,11 +1152,9 @@ function clearMandatoryPasswordChangeFlags(state: JsonRecord): number {
 }
 
 async function snapshot(repair = true): Promise<StateSnapshot> {
-  const { data, error } = await admin
-    .from("kpi_shared_state")
-    .select("revision, state, updated_at")
-    .eq("id", stateId)
-    .maybeSingle();
+  const result = await taskRecords.readSnapshot();
+  const { error } = result;
+  const data = result.data as { revision: number; state: JsonRecord; updated_at: string; source_mode?: string; task_versions?: Record<string, number> } | null;
   if (error) throw error;
   if (!data) return { revision: 0, updatedAt: "", state: defaultState() };
   const state = validState(data.state) ? data.state : defaultState();
@@ -1154,14 +1171,16 @@ async function snapshot(repair = true): Promise<StateSnapshot> {
     revision: Number(data.revision) || 0,
     updatedAt: String(data.updated_at || ""),
     state,
+    sourceMode: data.source_mode || "snapshot",
+    taskVersions: data.task_versions || {},
   };
-  if (!repair) return current;
+  if (!repair || current.sourceMode === "record-primary") return current;
   const repairedRecords = (ensureSystemSettings(current.state) ? 1 : 0)
     + repairPersonnelAccountLinks(current.state)
     + repairTaskParticipantLinks(current.state)
     + clearMandatoryPasswordChangeFlags(current.state);
   if (!purgeRetiredLegacyTasks(current.state) && !repairedRecords) return current;
-  const { data: updated, error: updateError } = await admin.rpc("kpi_update_shared_state", {
+  const { data: updated, error: updateError } = await commitSharedState({
     expected_revision: current.revision,
     next_state: current.state,
   });
@@ -1188,7 +1207,7 @@ async function restoreBootstrapAdminPassword(
   const target = records(nextState, "accounts").find((item) => recordId(item) === recordId(account));
   if (!target) return current;
   await setAccountPasswordCredential(target, password);
-  const { data, error } = await admin.rpc("kpi_update_shared_state", {
+  const { data, error } = await commitSharedState({
     expected_revision: current.revision,
     next_state: nextState,
   });
@@ -1215,6 +1234,36 @@ async function snapshotMetadata(): Promise<StateMetadata> {
     revision: Number(data?.revision) || 0,
     updatedAt: String(data?.updated_at || ""),
   };
+}
+
+async function accountMonitoringSnapshot(): Promise<StateSnapshot> {
+  // Monitoring never needs tasks, attachments, or repair-on-read writes.
+  const { data, error } = await admin.from("kpi_shared_state")
+    .select("revision, updated_at, accounts:state->accounts, people:state->people, departments:state->departments")
+    .eq("id", stateId).maybeSingle();
+  if (error) throw error;
+  return {
+    revision: Number(data?.revision) || 0,
+    updatedAt: String(data?.updated_at || ""),
+    state: {
+      accounts: Array.isArray(data?.accounts) ? data.accounts : [],
+      people: Array.isArray(data?.people) ? data.people : [],
+      departments: Array.isArray(data?.departments) ? data.departments : [],
+    },
+  };
+}
+
+// Only a recent completed legacy read's revision is retained, never records or ACL decisions.
+// The bounded lifetime preserves periodic legacy read housekeeping in snapshot mode.
+let cleanSharedReadRevision = 0;
+let cleanSharedReadAt = 0;
+const cleanSharedReadLifetimeMs = 60_000;
+async function sharedSessionMetadata(): Promise<StateSnapshot> {
+  const { data,error } = await admin.from("kpi_shared_state")
+    .select("revision, updated_at, accounts:state->accounts").eq("id",stateId).maybeSingle();
+  if(error) throw error;
+  return {revision:Number(data?.revision)||0,updatedAt:String(data?.updated_at||""),
+    state:{accounts:Array.isArray(data?.accounts)?data.accounts:[]}};
 }
 
 async function sha256(value: string): Promise<string> {
@@ -1275,21 +1324,16 @@ function safeDownloadMimeType(type: string): string {
   return safeUploadMimeType(type);
 }
 
+const vietnamDateFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit", day: "2-digit",
+});
+
 function currentPeriod(): string {
-  const date = new Date();
-  const values = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit" }).formatToParts(date);
-  const year = values.find((item) => item.type === "year")?.value || String(date.getUTCFullYear());
-  const month = values.find((item) => item.type === "month")?.value || String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
+  return vietnamMonthKey();
 }
 
 function vietnamDateParts(date = new Date()): { year: string; month: string; day: string } {
-  const values = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Ho_Chi_Minh",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
+  const values = vietnamDateFormatter.formatToParts(date);
   return {
     year: values.find((item) => item.type === "year")?.value || String(date.getUTCFullYear()),
     month: values.find((item) => item.type === "month")?.value || String(date.getUTCMonth() + 1).padStart(2, "0"),
@@ -1348,11 +1392,11 @@ function vietnamWeekStartIso(date = new Date()): string {
 }
 
 function accountForId(state: JsonRecord, id: string): JsonRecord | undefined {
-  return records(state, "accounts").find((account) => String(account.id || "") === id);
+  return identityRecord(state.accounts, id);
 }
 
 function personForId(state: JsonRecord, id: string): JsonRecord | undefined {
-  return records(state, "people").find((person) => String(person.id || "") === id);
+  return identityRecord(state.people, id);
 }
 
 function personIsActive(person: JsonRecord | undefined): boolean {
@@ -1580,10 +1624,22 @@ function taskParticipantPerson(state: JsonRecord, value: unknown): JsonRecord | 
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-function taskParticipant(state: JsonRecord, task: JsonRecord, personId: string): boolean {
-  const expectedPersonId = String(taskParticipantPerson(state, personId)?.id || personId || "").trim();
+type TaskParticipantLookup = (value: unknown) => JsonRecord | undefined;
+
+function taskParticipantViewLookup(state: JsonRecord): TaskParticipantLookup {
+  const people = new Map<string, JsonRecord | undefined>();
+  return (value) => {
+    const key = String(value || "").trim();
+    if (!people.has(key)) people.set(key, taskParticipantPerson(state, key));
+    return people.get(key);
+  };
+}
+
+function taskParticipant(state: JsonRecord, task: JsonRecord, personId: string, lookup?: TaskParticipantLookup): boolean {
+  const resolve = lookup || ((value: unknown) => taskParticipantPerson(state, value));
+  const expectedPersonId = String(resolve(personId)?.id || personId || "").trim();
   if (!expectedPersonId) return false;
-  return taskParticipantValues(task).some((value) => String(taskParticipantPerson(state, value)?.id || value) === expectedPersonId);
+  return taskParticipantValues(task).some((value) => String(resolve(value)?.id || value) === expectedPersonId);
 }
 
 function taskParticipantForAccount(state: JsonRecord, task: JsonRecord, account: JsonRecord): boolean {
@@ -2276,6 +2332,7 @@ function validTaskCommandPayload(value: unknown): value is {
   task: JsonRecord;
   baseRevision?: number;
   responseMode?: string;
+  expectedTaskVersion?: number;
 } {
   if (!isRecord(value) || !isRecord(value.baseTask) || !isRecord(value.task)) return false;
   const taskId = String(value.taskId || "").trim();
@@ -2291,6 +2348,7 @@ function validTaskCommandPayload(value: unknown): value is {
     && !taskProgressReportHasId(value.baseTask, commandId)
     && !retiredLegacyTask(value.task)
     && taskProgressReportHasId(value.task, commandId)
+    && (value.expectedTaskVersion === undefined || (Number.isSafeInteger(value.expectedTaskVersion) && Number(value.expectedTaskVersion) > 0))
   );
 }
 
@@ -2303,7 +2361,7 @@ function taskCommandResponseState(body: { responseMode?: string; baseRevision?: 
   if (!beforeAccount) return { state };
   const changes = taskCommandChanges(visibleState(before.state, beforeAccount), state,
     before.revision, after.revision, collections, [...scalarFields, "activePeriod", "calendarDirectory"]);
-  return changes && JSON.stringify(changes).length < JSON.stringify(state).length ? { changes } : { state };
+  return changes ? { changes } : { state };
 }
 
 function taskCommandErrorStatus(reason: string): number {
@@ -2417,17 +2475,32 @@ function notificationDateIsValid(value: unknown): boolean {
   return !String(value || "") || Number.isFinite(new Date(String(value)).getTime());
 }
 
-function taskNotificationRecipientAccountIds(state: JsonRecord, task: JsonRecord): string[] {
-  const recipientIds = new Set<string>();
-  taskParticipantValues(task).forEach((participant) => {
-    const directAccount = accountForTaskParticipant(state, participant);
-    if (directAccount && !Boolean(directAccount.disabled)) recipientIds.add(recordId(directAccount));
-    const person = taskParticipantPerson(state, participant);
-    if (!person) return;
-    records(state, "accounts")
-      .filter((account) => !Boolean(account.disabled) && String(account.personId || "") === recordId(person))
-      .forEach((account) => recipientIds.add(recordId(account)));
+function taskNotificationParticipantLookup(state: JsonRecord): (participant: string) => string[] {
+  const accountsByPerson = new Map<string, string[]>();
+  records(state, "accounts").forEach((account) => {
+    if (Boolean(account.disabled)) return;
+    const personId = String(account.personId || "");
+    const ids = accountsByPerson.get(personId) || [];
+    ids.push(recordId(account));
+    accountsByPerson.set(personId, ids);
   });
+  const participants = new Map<string, string[]>();
+  return (participant) => {
+    if (participants.has(participant)) return participants.get(participant)!;
+    const ids = new Set<string>();
+    const directAccount = accountForTaskParticipant(state, participant);
+    if (directAccount && !Boolean(directAccount.disabled)) ids.add(recordId(directAccount));
+    const person = taskParticipantPerson(state, participant);
+    if (person) (accountsByPerson.get(recordId(person)) || []).forEach((id) => ids.add(id));
+    const result = [...ids].filter(Boolean);
+    participants.set(participant, result);
+    return result;
+  };
+}
+
+function taskNotificationRecipientAccountIds(state: JsonRecord, task: JsonRecord, participantLookup = taskNotificationParticipantLookup(state)): string[] {
+  const recipientIds = new Set<string>();
+  taskParticipantValues(task).forEach((participant) => participantLookup(participant).forEach((id) => recipientIds.add(id)));
   [task.assignedById, task.createdById].forEach((accountId) => {
     const account = accountForId(state, String(accountId || ""));
     if (account && !Boolean(account.disabled)) recipientIds.add(recordId(account));
@@ -2435,13 +2508,27 @@ function taskNotificationRecipientAccountIds(state: JsonRecord, task: JsonRecord
   return [...recipientIds].filter(Boolean);
 }
 
-function taskDeadlineNotificationForAccount(state: JsonRecord, account: JsonRecord, task: JsonRecord): JsonRecord | null {
+type TaskDeadlineNoticeContext = { today: string; acknowledgements: Map<string, JsonRecord>; participantLookup: (participant: string) => string[] };
+
+function taskDeadlineNoticeContext(state: JsonRecord, account: JsonRecord): TaskDeadlineNoticeContext {
+  const acknowledgements = new Map<string, JsonRecord>();
+  const accountId = recordId(account);
+  records(state, "notifications").forEach((notification) => {
+    if (String(notification.notificationType || "") !== "acknowledgement"
+      || String(notification.recipientAccountId || "") !== accountId) return;
+    const sourceId = String(notification.sourceNotificationId || "");
+    if (!acknowledgements.has(sourceId)) acknowledgements.set(sourceId, notification);
+  });
+  return { today: vietnamDateKey(), acknowledgements, participantLookup: taskNotificationParticipantLookup(state) };
+}
+
+function taskDeadlineNotificationForAccount(state: JsonRecord, account: JsonRecord, task: JsonRecord, context?: TaskDeadlineNoticeContext): JsonRecord | null {
   const due = String(task.due || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(due) || completedTaskStatus(task.status) || ["Đã kết thúc", "Da ket thuc"].includes(String(task.status || "")) || String(task.completionReviewStatus || "") === "pending") return null;
-  if (!taskNotificationRecipientAccountIds(state, task).includes(recordId(account))) return null;
-  const today = vietnamDateKey();
+  if (!taskNotificationRecipientAccountIds(state, task, context?.participantLookup).includes(recordId(account))) return null;
+  const today = context?.today || vietnamDateKey();
   if (due > today) return null;
-  const acknowledgement = records(state, "notifications").find((notification) => (
+  const acknowledgement = context ? context.acknowledgements.get(`task-deadline:${recordId(task)}:${due}`) : records(state, "notifications").find((notification) => (
     String(notification.notificationType || "") === "acknowledgement"
     && String(notification.recipientAccountId || "") === recordId(account)
     && String(notification.sourceNotificationId || "") === `task-deadline:${recordId(task)}:${due}`
@@ -2477,8 +2564,9 @@ function notificationFeedForAccount(state: JsonRecord, account: JsonRecord): Jso
     .filter((notification) => String(notification.notificationType || "") === "acknowledgement")
     .filter((notification) => String(notification.recipientAccountId || "") === accountId);
   const storedIds = new Set(stored.map(recordId));
+  const context = taskDeadlineNoticeContext(state, account);
   const deadlines = records(state, "tasks")
-    .map((task) => taskDeadlineNotificationForAccount(state, account, task))
+    .map((task) => taskDeadlineNotificationForAccount(state, account, task, context))
     .filter((notification): notification is JsonRecord => notification !== null)
     .filter((notification) => !storedIds.has(recordId(notification)));
   return [...stored, ...acknowledgements, ...deadlines]
@@ -2486,7 +2574,8 @@ function notificationFeedForAccount(state: JsonRecord, account: JsonRecord): Jso
 }
 
 function notificationSourceIsKnownForAccount(state: JsonRecord, account: JsonRecord, sourceId: string): boolean {
-  return records(state, "tasks").some((task) => recordId(taskDeadlineNotificationForAccount(state, account, task)) === sourceId);
+  const context = taskDeadlineNoticeContext(state, account);
+  return records(state, "tasks").some((task) => recordId(taskDeadlineNotificationForAccount(state, account, task, context)) === sourceId);
 }
 
 function notificationAcknowledgementIsValid(state: JsonRecord, actor: JsonRecord, previous: JsonRecord | undefined, next: JsonRecord): boolean {
@@ -2643,7 +2732,7 @@ async function createLunaAnnouncementWithRetry(
     });
     nextState.activityLog = activityLog.slice(-5000);
 
-    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+    const { data, error } = await commitSharedState({
       expected_revision: current.revision,
       next_state: nextState,
     });
@@ -3825,15 +3914,33 @@ function taskParticipantDepartmentId(state: JsonRecord, participantId: string): 
   return String(person?.departmentId || "");
 }
 
-function taskHasParticipantInDepartment(state: JsonRecord, task: JsonRecord, departmentId: string): boolean {
-  return taskParticipantValues(task).some((personId) => taskParticipantDepartmentId(state, personId) === departmentId);
+function taskHasParticipantInDepartment(state: JsonRecord, task: JsonRecord, departmentId: string, lookup?: TaskParticipantLookup): boolean {
+  return taskParticipantValues(task).some((personId) => lookup
+    ? String(lookup(personId)?.departmentId || "") === departmentId
+    : taskParticipantDepartmentId(state, personId) === departmentId);
 }
 
-function taskParticipantDirectory(state: JsonRecord, tasks: JsonRecord[], primaryPeople: JsonRecord[]): JsonRecord[] {
+function taskVisibilityFilter(state: JsonRecord, account: JsonRecord, lookup = taskParticipantViewLookup(state), includeWorkflowOverview = true): (task: JsonRecord) => boolean {
+  if (canViewSystemContent(account)) return () => true;
+  // Resolve scope once per synchronous projection, never across requests.
+  const gpmbAllowed = includeWorkflowOverview && canManageGpmbWorkflow(state, account);
+  const departmentScoped = hasDepartmentManagement(account) || accountRole(account) === "section_head";
+  const departmentId = departmentScoped ? accountDepartmentId(state, account) : "";
+  const personId = departmentScoped ? "" : accountPersonId(state, account);
+  return (task) => (gpmbAllowed && gpmbWorkflowManagedTask(task)) || (departmentScoped
+    ? taskHasParticipantInDepartment(state, task, departmentId, lookup)
+    : taskParticipant(state, task, personId, lookup));
+}
+
+function taskIsVisibleToAccount(state: JsonRecord, account: JsonRecord, task: JsonRecord): boolean {
+  return taskVisibilityFilter(state, account)(task);
+}
+
+function taskParticipantDirectory(state: JsonRecord, tasks: JsonRecord[], primaryPeople: JsonRecord[], lookup = taskParticipantViewLookup(state)): JsonRecord[] {
   const directory = new Map(primaryPeople.map((person) => [recordId(person), person]));
   tasks.forEach((task) => {
     taskParticipantValues(task).forEach((participantId) => {
-      const person = taskParticipantPerson(state, participantId);
+      const person = lookup(participantId);
       const id = recordId(person);
       if (!id || directory.has(id)) return;
       // Task participants only need a compact directory entry for display.
@@ -3879,12 +3986,8 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
   const departmentId = accountDepartmentId(state, account);
   const departmentScoped = hasDepartmentManagement(account) || accountRole(account) === "section_head";
   const gpmbWorkflowAllowed = canManageGpmbWorkflow(state, account);
-  const visibleTasks = records(state, "tasks").filter((task) =>
-    (gpmbWorkflowAllowed && gpmbWorkflowManagedTask(task))
-      || (departmentScoped
-        ? taskHasParticipantInDepartment(state, task, departmentId)
-        : taskParticipant(state, task, personId)),
-  );
+  const participantLookup = taskParticipantViewLookup(state);
+  const visibleTasks = records(state, "tasks").filter(taskVisibilityFilter(state, account, participantLookup));
   const primaryPeople = departmentScoped
     ? records(state, "people").filter((person) => String(person.departmentId || "") === departmentId)
     : records(state, "people").filter((person) => String(person.id || "") === personId);
@@ -3892,7 +3995,7 @@ function visibleState(state: JsonRecord, account: JsonRecord): JsonRecord {
     ...state,
     ...calendarState,
     accounts: [resolvedPersonnelAccount(state, account)],
-    people: gpmbWorkflowAllowed ? records(state, "people") : taskParticipantDirectory(state, visibleTasks, primaryPeople),
+    people: gpmbWorkflowAllowed ? records(state, "people") : taskParticipantDirectory(state, visibleTasks, primaryPeople, participantLookup),
     tasks: visibleTasks,
     gpmbWorkflows: gpmbWorkflowAllowed ? records(state, "gpmbWorkflows") : [],
     gpmbCases: gpmbWorkflowAllowed ? records(state, "gpmbCases") : [],
@@ -4553,7 +4656,8 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
       if (collection === "calendarEvents") calendarAuditEvents.push({ action: "Xóa cuộc họp", event: previous });
     });
     const oldOrder = records(next, collection).map(recordId).filter(Boolean);
-    next[collection] = [...oldOrder.filter((id) => values.has(id)), ...Array.from(values.keys()).filter((id) => !oldOrder.includes(id))].map((id) => values.get(id)!);
+    const oldIds = new Set(oldOrder);
+    next[collection] = [...oldOrder.filter((id) => values.has(id)), ...Array.from(values.keys()).filter((id) => !oldIds.has(id))].map((id) => values.get(id)!);
   });
 
   (patch.fields || []).forEach((field) => {
@@ -4814,6 +4918,7 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
   const historyStart = monthStartIsoForKey(historyStartMonth);
   const activeAccounts = records(current.state, "accounts").filter((account) => recordId(account) && !Boolean(account.disabled));
   const accountsById = new Map(activeAccounts.map((account) => [recordId(account), account]));
+  const departmentByAccount = new Map(activeAccounts.map((account) => [recordId(account), accountDepartmentId(current.state, account) || "unassigned"]));
   const dayStart = vietnamDayStartIso(now);
   const weekStart = vietnamWeekStartIso(now);
   const monthStart = vietnamMonthStartIso(now);
@@ -4828,7 +4933,7 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
 
   const totalByDepartment = new Map<string, number>();
   activeAccounts.forEach((account) => {
-    const departmentId = accountDepartmentId(current.state, account) || "unassigned";
+    const departmentId = departmentByAccount.get(recordId(account)) || "unassigned";
     totalByDepartment.set(departmentId, (totalByDepartment.get(departmentId) || 0) + 1);
   });
 
@@ -4847,7 +4952,7 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
     if (row.activeMonth) monthLoggedInAccounts.add(row.accountId);
     const account = accountsById.get(row.accountId);
     if (!account) return;
-    const departmentId = accountDepartmentId(current.state, account) || "unassigned";
+    const departmentId = departmentByAccount.get(row.accountId) || "unassigned";
     const periodActivity = monthlyActivity.get(row.period) || {
       accountIds: new Set<string>(),
       loginCount: 0,
@@ -4870,7 +4975,7 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
   dailyVisitRows.forEach((row) => {
     const account = accountsById.get(row.accountId);
     if (!account) return;
-    const departmentId = accountDepartmentId(current.state, account) || "unassigned";
+    const departmentId = departmentByAccount.get(row.accountId) || "unassigned";
     const periodActivity = dailyActivity.get(row.period) || {
       accountIds: new Set<string>(),
       visitCount: 0,
@@ -4890,7 +4995,7 @@ async function accountUsageHistorySummary(current: StateSnapshot): Promise<Recor
     activeAccounts.forEach((account) => {
       const accountId = recordId(account);
       if (loggedInSince.has(accountId)) return;
-      const departmentId = accountDepartmentId(current.state, account) || "unassigned";
+      const departmentId = departmentByAccount.get(accountId) || "unassigned";
       const accounts = groups.get(departmentId) || [];
       accounts.push({
         accountId,
@@ -5047,7 +5152,7 @@ function kpiCatalogProjectionRows(state: JsonRecord, revision: number): JsonReco
 async function upsertProjectionRows(table: RecordProjectionTable, rows: JsonRecord[]): Promise<void> {
   for (let index = 0; index < rows.length; index += projectionBatchSize) {
     const { error } = await admin
-      .from(table)
+      .from(await projectionTableName(table))
       .upsert(rows.slice(index, index + projectionBatchSize), { onConflict: "id" });
     if (error) throw error;
   }
@@ -5057,7 +5162,7 @@ async function deleteProjectionRows(table: RecordProjectionTable, ids: string[])
   const uniqueIds = [...new Set(ids.filter(Boolean))];
   for (let index = 0; index < uniqueIds.length; index += projectionBatchSize) {
     const { error } = await admin
-      .from(table)
+      .from(await projectionTableName(table))
       .delete()
       .in("id", uniqueIds.slice(index, index + projectionBatchSize));
     if (error) throw error;
@@ -5122,8 +5227,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return row;
       })
       .filter((record): record is JsonRecord => Boolean(record));
-    await upsertProjectionRows("kpi_record_evaluations", rows);
-    await deleteProjectionRows("kpi_record_evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
+    await upsertProjectionRows("evaluations", rows);
+    await deleteProjectionRows("evaluations", (departmentChanges.deletes || []).map((entry) => `department:${String(entry.id || "")}`));
   }
 
   const projectChanges = changedCollections.projectCatalog;
@@ -5137,8 +5242,8 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         return id ? { id: `project:${id}`, version: Math.max(1, revision), data: clone(record), updated_at: new Date().toISOString() } : null;
       })
       .filter((record): record is JsonRecord => record !== null);
-    await upsertProjectionRows("kpi_record_catalog", rows);
-    await deleteProjectionRows("kpi_record_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
+    await upsertProjectionRows("kpi_catalog", rows);
+    await deleteProjectionRows("kpi_catalog", (projectChanges.deletes || []).map((entry) => `project:${String(entry.id || "")}`));
   }
 
   const changedCatalogFields = new Set((patch.fields || []).map((field) => field.key));
@@ -5148,7 +5253,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
         const fieldName = String(row.id || "").replace(/^catalog:/, "").replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
         return changedCatalogFields.has(fieldName as ScalarField);
       });
-    await upsertProjectionRows("kpi_record_catalog", rows);
+    await upsertProjectionRows("kpi_catalog", rows);
   }
 
   // Keep server-owned sync and calendar audit entries queryable without
@@ -5158,17 +5263,18 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
   const latestServerActivity = serverActivities.filter((item) => !recordId(item).startsWith("server-sync-calendar-")).slice(-1);
   const recentCalendarActivities = serverActivities.filter((item) => recordId(item).startsWith("server-sync-calendar-")).slice(-20);
   const activityRows = [...latestServerActivity, ...recentCalendarActivities];
-  if (activityRows.length) await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(activityRows, revision));
+  if (activityRows.length) await upsertProjectionRows("activity_log", projectionRecordRows(activityRows, revision));
   await updateRecordProjectionMarker(revision);
 }
 
 async function cleanupStoppedRecurringTasksWithRetry(): Promise<StateSnapshot> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
+    if (current.sourceMode === "record-primary") return current;
     if (current.revision <= 0) return current;
     const cleanup = cleanupStoppedRecurringTaskInstances(current.state);
     if (!cleanup.deletedTaskIds.length) return current;
-    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+    const { data, error } = await commitSharedState({
       expected_revision: current.revision,
       next_state: cleanup.state,
     });
@@ -5209,10 +5315,10 @@ async function syncAllRecordProjections(state: JsonRecord, revision: number): Pr
   await upsertProjectionRows("gpmb_cases", projectionRecordRows(records(state, "gpmbCases"), revision));
   await upsertProjectionRows("public_investment_appraisals", projectionRecordRows(records(state, "publicInvestmentAppraisals"), revision));
   await upsertProjectionRows("public_investment_projects", projectionRecordRows(records(state, "publicInvestmentProjects"), revision));
-  await upsertProjectionRows("kpi_record_evaluations", evaluationProjectionRows(state, revision));
-  await upsertProjectionRows("kpi_record_catalog", kpiCatalogProjectionRows(state, revision));
+  await upsertProjectionRows("evaluations", evaluationProjectionRows(state, revision));
+  await upsertProjectionRows("kpi_catalog", kpiCatalogProjectionRows(state, revision));
   await upsertProjectionRows("notifications", projectionRecordRows(records(state, "notifications"), revision));
-  await upsertProjectionRows("kpi_record_activity_log", projectionRecordRows(records(state, "activityLog"), revision));
+  await upsertProjectionRows("activity_log", projectionRecordRows(records(state, "activityLog"), revision));
   if (!transactionalTasks) {
     const reports = records(state, "tasks").flatMap((task) => taskProgressProjectionRows(task, revision));
     await upsertProjectionRows("task_progress_reports", reports);
@@ -5230,7 +5336,7 @@ async function readTaskCommandReceipt(actorId: string, commandId: string) {
     .select("task_id, command_name, request_hash").eq("actor_id", actorId).eq("command_id", commandId).maybeSingle());
 }
 
-async function updateWithRetry(actorId: string, patch: StatePatch, command?: TaskCommandCommit): Promise<{ snapshot: StateSnapshot; denied: DeniedMutation[]; changed: number; idempotent?: boolean }> {
+async function updateWithRetry(actorId: string, patch: StatePatch, command?: TaskCommandCommit, sessionHash = ""): Promise<{ snapshot: StateSnapshot; before?: StateSnapshot; denied: DeniedMutation[]; changed: number; idempotent?: boolean }> {
   let lastDenied: DeniedMutation[] = [];
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
@@ -5241,8 +5347,9 @@ async function updateWithRetry(actorId: string, patch: StatePatch, command?: Tas
     const actor = accountForId(current.state, actorId);
     if (!actor || Boolean(actor.disabled)) throw new AuthenticationRequiredError("Authentication required.");
     if (command) {
+      const currentTask = records(current.state, "tasks").find((task) => recordId(task) === command.taskId);
       if (!moduleIsAvailableToAccount(current.state, actor, "tasks")
-        || !records(visibleState(current.state, actor), "tasks").some((task) => recordId(task) === command.taskId)) {
+        || !currentTask || !taskIsVisibleToAccount(current.state, actor, currentTask)) {
         return { snapshot: current, denied: [{ scope: "tasks", id: command.taskId, reason: "Task update is outside account scope." }], changed: 0 };
       }
       const lookup = await readTaskCommandReceipt(actorId, command.commandId);
@@ -5250,6 +5357,9 @@ async function updateWithRetry(actorId: string, patch: StatePatch, command?: Tas
       if (lookup.receipt) {
         assertTaskCommandReceipt(lookup.receipt, command);
         return { snapshot: await snapshot(), denied: [], changed: 0, idempotent: true };
+      }
+      if (command.expectedTaskVersion !== undefined && current.taskVersions?.[command.taskId] !== command.expectedTaskVersion) {
+        return { snapshot: current, denied: [{ scope: "tasks", id: command.taskId, reason: "Record changed by another user." }], changed: 0 };
       }
     }
     const result = applyPatch(current.state, actor, patch);
@@ -5272,13 +5382,13 @@ async function updateWithRetry(actorId: string, patch: StatePatch, command?: Tas
       taskVersion = Number(stored.data.row_version);
     }
     const { data, error } = command
-      ? await admin.rpc("kpi_commit_task_command", {
+      ? await taskRecords.commitTaskCommand({
         p_expected_revision: current.revision, p_expected_task_version: taskVersion,
         p_task_id: command.taskId, p_actor_id: actorId, p_session_hash: command.sessionHash,
         p_command_id: command.commandId, p_command_name: command.command, p_request_hash: command.requestHash,
         p_next_state: result.state,
-      })
-      : await admin.rpc("kpi_update_shared_state", { expected_revision: current.revision, next_state: result.state });
+      }, current.state)
+      : await commitSharedState({ expected_revision: current.revision, next_state: result.state }, actorId, sessionHash);
     if (error?.code === "KPA01") throw new AuthenticationRequiredError("Authentication required.");
     if (error?.code === "KPC01") throw new TaskCommandConflictError(error.message);
     if (error) throw error;
@@ -5287,6 +5397,7 @@ async function updateWithRetry(actorId: string, patch: StatePatch, command?: Tas
       const updated = data[0] as { next_revision: number; next_updated_at: string };
       const nextSnapshot = {
         snapshot: { revision: Number(updated.next_revision), updatedAt: String(updated.next_updated_at || ""), state: result.state },
+        before: current,
         denied: lastDenied,
         changed: result.changed,
       };
@@ -5379,7 +5490,7 @@ async function changeOwnAccountPasswordWithRetry(actorId: string, currentPasswor
     const nextAccount = accountForId(nextState, actorId);
     if (!nextAccount) throw new Error("Authentication required.");
     await setAccountPasswordCredential(nextAccount, newPassword);
-    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+    const { data, error } = await commitSharedState({
       expected_revision: current.revision,
       next_state: nextState,
     });
@@ -5467,7 +5578,7 @@ function addKpiCatalogServerActivity(state: JsonRecord, actor: JsonRecord, categ
   state.activityLog = activityLog.slice(-5000);
 }
 
-async function updateKpiCatalogWithRetry(actorId: string, requestedCatalog: KpiCatalogUpdate): Promise<StateSnapshot> {
+async function updateKpiCatalogWithRetry(actorId: string, requestedCatalog: KpiCatalogUpdate, sessionHash = ""): Promise<StateSnapshot> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
     if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
@@ -5501,10 +5612,10 @@ async function updateKpiCatalogWithRetry(actorId: string, requestedCatalog: KpiC
     migrateKpiCatalogHistoryForUpdate(nextState, previousCatalog, requestedCatalog);
     const categoryChanges = migrateTaskCategoriesForCatalogChange(nextState, actor, previousCatalog.roles, requestedCatalog.roles);
     addKpiCatalogServerActivity(nextState, actor, categoryChanges);
-    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+    const { data, error } = await commitSharedState({
       expected_revision: current.revision,
       next_state: nextState,
-    });
+    }, actorId, sessionHash);
     if (error) throw error;
     if (Array.isArray(data) && data.length) {
       const updated = data[0] as { next_revision: number; next_updated_at: string };
@@ -5723,9 +5834,12 @@ function advanceRecurringTaskCommands(state: JsonRecord, actor: JsonRecord, touc
   const tasks = records(state, "tasks");
   const taskIds: string[] = [];
   const activityIds: string[] = [];
+  if (!touchedIds.size) return { taskIds, activityIds };
+  const touchedSeries = new Set(tasks.filter((task) => touchedIds.has(recordId(task))).map(taskRecurrenceSeriesKey));
   for (const source of tasks.filter((task) => !task.recurrenceSourceId && !retiredLegacyTask(task)
     && String(task.kind || "regular") === "regular" && recurringValueIsEnabled(task))) {
     const seriesKey = taskRecurrenceSeriesKey(source);
+    if (!touchedSeries.has(seriesKey)) continue;
     const series = tasks.filter((task) => taskRecurrenceSeriesKey(task) === seriesKey);
     const latest = series.reduce((last, task) => String(task.due || "") > String(last.due || "") ? task : last, source);
     if (!touchedIds.has(recordId(latest))) continue;
@@ -5901,7 +6015,7 @@ function stopRecurringTasksForDepartmentChanges(previousState: JsonRecord, nextS
   return { taskIds: [...taskIds], activityIds, stoppedSeriesCount, stoppedOccurrences };
 }
 
-async function stopRecurringTaskWithRetry(actorId: string, taskId: string): Promise<{ snapshot: StateSnapshot; stoppedOccurrences: number }> {
+async function stopRecurringTaskWithRetry(actorId: string, taskId: string, sessionHash = ""): Promise<{ snapshot: StateSnapshot; stoppedOccurrences: number }> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await cleanupStoppedRecurringTasksWithRetry();
     if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
@@ -5909,10 +6023,10 @@ async function stopRecurringTaskWithRetry(actorId: string, taskId: string): Prom
     if (!actor || Boolean(actor.disabled)) throw new Error("Authentication required.");
     const result = stopRecurringTaskInState(current.state, actor, taskId);
     if (!result) throw new Error("The recurring task could not be stopped.");
-    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+    const { data, error } = await commitSharedState({
       expected_revision: current.revision,
       next_state: result.state,
-    });
+    }, actorId, sessionHash);
     if (error) throw error;
     if (Array.isArray(data) && data.length) {
       const updated = data[0] as { next_revision: number; next_updated_at: string };
@@ -5973,7 +6087,7 @@ async function revokeHandoverSessions(accountIds: string[]): Promise<void> {
   if (error) throw error;
 }
 
-async function handoverEmployeeWithRetry(actorId: string, handover: EmployeeHandoverUpdate): Promise<{ snapshot: StateSnapshot; transferredCount: number }> {
+async function handoverEmployeeWithRetry(actorId: string, handover: EmployeeHandoverUpdate, sessionHash = ""): Promise<{ snapshot: StateSnapshot; transferredCount: number }> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const current = await snapshot();
     if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
@@ -6089,10 +6203,10 @@ async function handoverEmployeeWithRetry(actorId: string, handover: EmployeeHand
       .filter((successor): successor is JsonRecord => Boolean(successor));
     handoverActivity(nextState, actor, nextDeparting, nextSuccessors, handover, handoverId);
 
-    const { data, error } = await admin.rpc("kpi_update_shared_state", {
+    const { data, error } = await commitSharedState({
       expected_revision: current.revision,
       next_state: nextState,
-    });
+    }, actorId, sessionHash);
     if (error) throw error;
     if (Array.isArray(data) && data.length) {
       const updated = data[0] as { next_revision: number; next_updated_at: string };
@@ -6123,16 +6237,16 @@ async function handoverEmployeeWithRetry(actorId: string, handover: EmployeeHand
   throw new Error("Concurrent employee handover limit reached.");
 }
 
-async function initializeFromBackup(actorId: string, incoming: JsonRecord): Promise<StateSnapshot> {
+async function initializeFromBackup(actorId: string, incoming: JsonRecord, sessionHash = ""): Promise<StateSnapshot> {
   const current = await snapshot();
   if (current.revision > 0) throw new UnsafeBulkDeletionError("Central data has already been initialized.");
   const actor = accountForId(current.state, actorId);
   if (!actor || !isAdmin(actor)) throw new Error("Permission denied.");
   const nextState = await prepareInitialState(incoming, actor);
-  const { data, error } = await admin.rpc("kpi_update_shared_state", {
+  const { data, error } = await commitSharedState({
     expected_revision: 0,
     next_state: nextState,
-  });
+  }, actorId, sessionHash);
   if (error) throw error;
   if (!Array.isArray(data) || !data.length) throw new Error("Central initialization conflict.");
   const result = data[0] as { next_revision: number; next_updated_at: string };
@@ -6179,6 +6293,116 @@ async function recordProjectionHealth(revision: number): Promise<JsonRecord> {
   };
 }
 
+let taskQueryProtocolReady = false;
+let filteredTaskQueryProtocolReady = false;
+async function taskQueryContext(taskId: string | null, search = false) {
+  const result = await admin.rpc("kpi_task_query_context", { p_task_id: taskId, p_search: search });
+  if (result.error) {
+    if (!taskQueryProtocolReady && ["42883", "PGRST202"].includes(String(result.error.code))) return null;
+    throw result.error;
+  }
+  const row = Array.isArray(result.data) ? result.data[0] : null;
+  if (!row || !isRecord(row.context) || !Number.isSafeInteger(Number(row.revision)) || Number(row.revision) < 1
+    || !["snapshot", "record-primary"].includes(String(row.source_mode))
+    || (taskId === null && !Array.isArray(row.task_index))
+    || (taskId !== null && row.task !== null && (!isRecord(row.task) || recordId(row.task) !== taskId
+      || !Number.isSafeInteger(Number(row.task_version)) || Number(row.task_version) < 1))) throw new Error("Invalid task query context.");
+  taskQueryProtocolReady = true;
+  return { row, current: { revision: Number(row.revision), updatedAt: String(row.updated_at || ""), state: row.context as JsonRecord } };
+}
+
+async function filteredTaskQueryContext(query: ReturnType<typeof parseTaskPageQuery>) {
+  const result=await admin.rpc("kpi_task_filtered_query_context",{p_period:query.scope==="current"?query.period:null,
+    p_from:query.from||null,p_to:query.to||null,p_search:Boolean(query.search),p_facets:query.bucket==="board"});
+  if(result.error) {
+    if(!filteredTaskQueryProtocolReady && ["42883","PGRST202"].includes(String(result.error.code))) {
+      const legacy=await taskQueryContext(null,Boolean(query.search));
+      return legacy?{...legacy,queryPlan:"compact-index-v1"}:null;
+    }
+    throw result.error;
+  }
+  const row=Array.isArray(result.data)?result.data[0]:null;
+  if(!row || !isRecord(row.context) || !Number.isSafeInteger(Number(row.revision)) || Number(row.revision)<1
+    || !["snapshot","record-primary"].includes(String(row.source_mode))
+    || !Array.isArray(row.task_index) || !Array.isArray(row.facet_index)) throw new Error("Invalid filtered task query context.");
+  filteredTaskQueryProtocolReady=true;
+  return {row,current:{revision:Number(row.revision),updatedAt:String(row.updated_at||""),state:row.context as JsonRecord},queryPlan:"task-date-index-v1"};
+}
+
+async function readTaskPage(request: Request, url: URL): Promise<Response> {
+  let query;
+  try { query = parseTaskPageQuery(url.searchParams); }
+  catch { return json(request, { error: "Invalid task query.", code: "TASK_QUERY_INVALID" }, 422); }
+  if (!await activeSessionAccountId(request)) return json(request, { error: "Authentication required." }, 401);
+  const source = await filteredTaskQueryContext(query);
+  if (!source) return json(request, { error: "Task page migration is not installed.", code: "TASK_QUERY_UNSUPPORTED" }, 501);
+  const { current, row } = source;
+  const accountId = await requireSession(request,current);
+  if (accountId instanceof Response) return accountId;
+  const account = accountForId(current.state,accountId);
+  if (!account || !moduleIsAvailableToAccount(current.state,account,"tasks")) return json(request,{error:"Forbidden."},403);
+  const lookup = taskParticipantViewLookup(current.state);
+  // Board scope is the existing personnel view, not the wider GPMB workflow overview.
+  const visible = (row.task_index as JsonRecord[]).filter((task)=>!retiredLegacyTask(task))
+    .filter(taskVisibilityFilter(current.state,account,lookup,false));
+  const facetRows = query.bucket === "board"
+    ? (Array.isArray(row.facet_index) ? (row.facet_index as JsonRecord[]).filter((task)=>!retiredLegacyTask(task))
+      .filter(taskVisibilityFilter(current.state,account,lookup,false)) : visible)
+    : [];
+  const projectNames = new Map(records(current.state,"projectCatalog").map((project)=>[recordId(project),String(project.name || "")]));
+  const projectName = (task: JsonRecord) => String(projectNames.get(String(task.projectId || "")) || task.projectName || "").replace(/\s+/g," ").trim();
+  const participantIds = (task: JsonRecord) => taskParticipantValues(task).map((id) => String(lookup(id)?.id || id));
+  const ownerName = (task: JsonRecord) => String(lookup(task.ownerId)?.name || task.ownerName || "");
+  const collaboratorNames = (task: JsonRecord) => {
+    const ids = [...new Set(taskParticipantValues({ ...task, ownerId: "" }).map((id) => String(lookup(id)?.id || id)))];
+    const names = Array.isArray(task.collaboratorNames) ? task.collaboratorNames : String(task.collaboratorNames || task.collaboratorName || "").split(",");
+    return ids.map((id,index) => String(lookup(id)?.name || names[index] || "").trim()).filter(Boolean);
+  };
+  const searchText = (task: JsonRecord) => `${task.title} ${projectName(task)} Danh mục nhiệm vụ ${ownerName(task)} ${collaboratorNames(task).join(" ")} ${task.assignedByName || task.createdBy || ""} ${task.category} ${taskQueryWorkMeta(task)} ${task.note || ""} ${task.queryReports || ""} ${task.queryFiles || ""}`.toLowerCase();
+  let now = Date.now();
+  const matching = visible.filter((task) => (query.scope === "all" || String(task.due || "").slice(0,7) === query.period)
+    && (!query.from || (String(task.due || "") !== "" && String(task.due) >= query.from))
+    && (!query.to || (String(task.due || "") !== "" && String(task.due) <= query.to))
+    && (!query.project || taskQueryNormalized(projectName(task)) === taskQueryNormalized(query.project))
+    && (!query.department || !(isAdmin(account) || isDirector(account)) || taskHasParticipantInDepartment(current.state,task,query.department,lookup))
+    && (!query.person || participantIds(task).includes(query.person))
+    && (!query.search || searchText(task).includes(query.search)));
+  const signature = await sha256(JSON.stringify([accountId,{...query,cursor:"",bucket:""}]));
+  let offset = 0;
+  if (query.cursor) {
+    try {
+      const cursor = JSON.parse(decodeURIComponent(atob(query.cursor)));
+      if (cursor.signature !== signature || cursor.bucket !== query.bucket || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0
+        || !Number.isSafeInteger(cursor.now) || cursor.now > now) throw new Error();
+      if (cursor.revision !== current.revision || now-cursor.now > 15*60_000 || cursor.day !== vietnamDateKey(new Date())) return json(request,{error:"Task list changed. Reload the first page.",code:"TASK_PAGE_CHANGED"},409);
+      offset = cursor.offset;
+      now = cursor.now;
+    } catch { return json(request,{error:"Invalid task cursor.",code:"TASK_QUERY_INVALID"},422); }
+  }
+  const boardStatuses = [taskQueryPending,taskQueryStopped].includes(query.status) ? [query.status] : taskQueryStatuses;
+  const buckets = (query.bucket === "board" ? [...new Set([...boardStatuses,taskQueryPending])] : [query.bucket]).map((status) => {
+    const tasks = matching.filter((task) => (status === taskQueryPending || taskQueryMatchesStatus(task,query.status,now,query.offsetMinutes))
+      && (status === "all" || taskQueryMatchesStatus(task,status,now,query.offsetMinutes)));
+    if (status === taskQueryPending) tasks.sort(taskQueryCompare);
+    const page = tasks.slice(offset,offset+query.limit);
+    const nextCursor = offset+page.length < tasks.length ? btoa(encodeURIComponent(JSON.stringify({revision:current.revision,signature,bucket:status,
+      offset:offset+page.length,now,day:vietnamDateKey(new Date())}))) : "";
+    return { status,total:tasks.length,ids:page.map(recordId),nextCursor };
+  });
+  const ids = [...new Set(buckets.flatMap((bucket) => bucket.ids))];
+  const selected = await admin.rpc("kpi_task_page_records",{p_ids:ids,p_revision:current.revision});
+  if (selected.error) throw selected.error;
+  const page = Array.isArray(selected.data) ? selected.data[0] : null;
+  if (!page || !Array.isArray(page.tasks) || page.tasks.length !== ids.length) return json(request,{error:"Task list changed. Reload the first page.",code:"TASK_PAGE_CHANGED"},409);
+  if (await activeSessionAccountId(request) !== accountId) return json(request,{error:"Authentication required."},401);
+  const pages = new Map((page.tasks as JsonRecord[]).map((task) => [recordId(task),task]));
+  return json(request,{protocol:"task-page-v1",queryPlan:source.queryPlan,revision:current.revision,sourceMode:row.source_mode,
+    buckets:buckets.map(({ids,...bucket}) => ({...bucket,tasks:ids.map((id) => pages.get(id))})),
+    projects:query.bucket === "board" ? [...new Set([...facetRows.map(projectName),...records(current.state,"projectCatalog").map((project)=>String(project.name || ""))].filter(Boolean))].sort((a,b)=>a.localeCompare(b,"vi")) : [],
+    departmentIds:query.bucket === "board" && (isAdmin(account) || isDirector(account))
+      ? [...new Set(facetRows.flatMap((task)=>taskParticipantValues(task).map((id)=>String(lookup(id)?.departmentId || ""))).filter(Boolean))] : []});
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(request) });
   if (!originAllowed(request)) return json(request, { error: "Origin is not allowed." }, 403);
@@ -6191,11 +6415,10 @@ Deno.serve(async (request) => {
       return json(request, { deploymentVersion });
     }
     if (action === "status") {
-      // Status must not load, repair, or rewrite the full shared state.
+      // Preserve the deployed CPU-read hotfix: status is metadata-only and
+      // must never repair or serialize the full business state.
       const current = await snapshotMetadata();
-      let recordProjection = await recordProjectionHealth(current.revision);
-      // Do not repair large projections synchronously in the status GET handler.
-      // Status remains read-only and exposes recordProjection.synchronized for diagnostics.
+      const recordProjection = await recordProjectionHealth(current.revision);
       const configuredOrigins = (Deno.env.get("KPI_ALLOWED_ORIGIN") || "")
         .split(",")
         .map((value) => value.trim())
@@ -6216,6 +6439,7 @@ Deno.serve(async (request) => {
         recurringTaskCleanup: true,
         lunaBroadcast: true,
         gpmbWorkflows: true,
+        taskQueries: "task-page-v1",
         originRestricted: configuredOrigins.length > 0 && !configuredOrigins.includes("*"),
       });
     }
@@ -6303,13 +6527,64 @@ Deno.serve(async (request) => {
       return json(request, { ok: true });
     }
 
+    if (action === "task-list" && request.method === "GET") return await readTaskPage(request,url);
+
+    if (action === "task-read" && request.method === "GET") {
+      const taskId = String(url.searchParams.get("id") || "").trim();
+      if (!taskId) return json(request, { error: "Task id is required." }, 422);
+      if (!await activeSessionAccountId(request)) return json(request,{error:"Authentication required."},401);
+      const source = await taskQueryContext(taskId);
+      if (source) {
+        const accountId = await requireSession(request,source.current);
+        if (accountId instanceof Response) return accountId;
+        const account = accountForId(source.current.state,accountId);
+        if (!account || !moduleIsAvailableToAccount(source.current.state,account,"tasks")) return json(request,{error:"Forbidden."},403);
+        if (!isRecord(source.row.task) || retiredLegacyTask(source.row.task) || !taskIsVisibleToAccount(source.current.state,account,source.row.task)) return json(request,{error:"Task not found."},404);
+        if (await activeSessionAccountId(request) !== accountId) return json(request,{error:"Authentication required."},401);
+        return json(request,{task:source.row.task,taskVersion:Number(source.row.task_version),revision:source.current.revision,
+          protocol:"task-records-v1",readProtocol:"task-page-v1",sourceMode:source.row.source_mode});
+      }
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const current = await snapshot(false);
+        const accountId = await requireSession(request, current);
+        if (accountId instanceof Response) return accountId;
+        const account = accountForId(current.state, accountId);
+        if (!account || !moduleIsAvailableToAccount(current.state, account, "tasks")) return json(request, { error: "Forbidden." }, 403);
+        const task = records(current.state, "tasks").find((item) => recordId(item) === taskId);
+        if (!task || !taskIsVisibleToAccount(current.state, account, task)) return json(request, { error: "Task not found." }, 404);
+        const version = current.taskVersions?.[taskId];
+        if (!version) return json(request, { task, taskVersion: null, revision: current.revision, protocol: "task-command-v1" });
+        const result = await admin.rpc("kpi_read_task_record", { p_task_id: taskId });
+        if (result.error) throw result.error;
+        const row = Array.isArray(result.data) ? result.data[0] : null;
+        if (row && Number(row.revision) === current.revision && Number(row.row_version) === version && sameJson(row.data, task)) {
+          return json(request, { task, taskVersion: version, revision: current.revision, protocol: "task-records-v1", sourceMode: current.sourceMode });
+        }
+      }
+      return json(request, { error: "Task changed while reading. Refresh before editing." }, 409);
+    }
+
     if (action === "state" && request.method === "GET") {
       const requestedRevision = url.searchParams.get("revision");
       const accountId = await activeSessionAccountId(request);
       if (!accountId) return json(request, { error: "Authentication required." }, 401);
+      const age=Date.now()-cleanSharedReadAt;
+      if(requestedRevision!==null && /^\d+$/.test(requestedRevision)
+        && Number(requestedRevision)>0 && Number(requestedRevision)===cleanSharedReadRevision
+        && age>=0 && age<cleanSharedReadLifetimeMs) {
+        const metadata=await sharedSessionMetadata();
+        const actor=accountForId(metadata.state,accountId);
+        if(!actor || Boolean(actor.disabled)) return json(request,{error:"Authentication required."},401);
+        if(Number(requestedRevision)===metadata.revision) {
+          if(await activeSessionAccountId(request)!==accountId) return json(request,{error:"Authentication required."},401);
+          return json(request,{revision:metadata.revision,updatedAt:metadata.updatedAt,unchanged:true});
+        }
+      }
       const current = await cleanupStoppedRecurringTasksWithRetry();
       const account = accountForId(current.state, accountId);
       if (!account || Boolean(account.disabled)) return json(request, { error: "Authentication required." }, 401);
+      cleanSharedReadRevision=current.revision;
+      cleanSharedReadAt=Date.now();
       if (requestedRevision !== null && Number(requestedRevision) === current.revision) {
         return json(request, { revision: current.revision, updatedAt: current.updatedAt, unchanged: true });
       }
@@ -6317,7 +6592,7 @@ Deno.serve(async (request) => {
     }
 
     if (action === "presence" && request.method === "GET") {
-      const current = await snapshot();
+      const current = await accountMonitoringSnapshot();
       const accountId = await requireSession(request, current);
       if (accountId instanceof Response) return accountId;
       const account = accountForId(current.state, accountId);
@@ -6339,7 +6614,7 @@ Deno.serve(async (request) => {
     }
 
     if (action === "usage-history" && request.method === "GET") {
-      const current = await snapshot();
+      const current = await accountMonitoringSnapshot();
       const accountId = await requireSession(request, current);
       if (accountId instanceof Response) return accountId;
       const account = accountForId(current.state, accountId);
@@ -6351,7 +6626,7 @@ Deno.serve(async (request) => {
     if (action === "monthly-login-summary" && request.method === "GET") {
       const period = String(url.searchParams.get("period") || "");
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) return json(request, { error: "A valid report period is required." }, 422);
-      const current = await snapshot();
+      const current = await accountMonitoringSnapshot();
       const accountId = await requireSession(request, current);
       if (accountId instanceof Response) return accountId;
       const account = accountForId(current.state, accountId);
@@ -6368,7 +6643,7 @@ Deno.serve(async (request) => {
       if (current.revision > 0) return json(request, { error: "Central data has already been initialized." }, 409);
       const body = await readJsonPayload(request);
       if (!validState(body?.state)) return json(request, { error: "A complete backup is required to initialize central data." }, 422);
-      const initialized = await initializeFromBackup(accountId, body.state);
+      const initialized = await initializeFromBackup(accountId, body.state, await sha256(request.headers.get("x-kpi-session") || ""));
       const responseAccount = accountForId(initialized.state, accountId);
       if (!responseAccount) return json(request, { error: "Authentication required." }, 401);
       return json(request, {
@@ -6387,7 +6662,7 @@ Deno.serve(async (request) => {
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
       const body = await readJsonPayload(request);
       if (!validKpiCatalogUpdate(body.catalog)) return json(request, { error: "Invalid KPI catalog payload." }, 422);
-      const updated = await updateKpiCatalogWithRetry(accountId, body.catalog);
+      const updated = await updateKpiCatalogWithRetry(accountId, body.catalog, await sha256(request.headers.get("x-kpi-session") || ""));
       const responseAccount = accountForId(updated.state, accountId);
       if (!responseAccount) return json(request, { error: "Authentication required." }, 401);
       return json(request, {
@@ -6561,7 +6836,7 @@ Deno.serve(async (request) => {
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
       const body = await readJsonPayload(request);
       if (!validEmployeeHandoverUpdate(body.handover)) return json(request, { error: "Invalid employee handover payload." }, 422);
-      const updated = await handoverEmployeeWithRetry(accountId, body.handover);
+      const updated = await handoverEmployeeWithRetry(accountId, body.handover, await sha256(request.headers.get("x-kpi-session") || ""));
       const responseAccount = accountForId(updated.snapshot.state, accountId);
       if (!responseAccount || Boolean(responseAccount.disabled)) return json(request, { error: "Authentication required." }, 401);
       return json(request, {
@@ -6581,7 +6856,7 @@ Deno.serve(async (request) => {
       if (!validStopRecurringTaskRequest(body)) return json(request, { error: "Invalid recurring task reference." }, 422);
       let updated: Awaited<ReturnType<typeof stopRecurringTaskWithRetry>>;
       try {
-        updated = await stopRecurringTaskWithRetry(accountId, body.taskId);
+        updated = await stopRecurringTaskWithRetry(accountId, body.taskId, await sha256(request.headers.get("x-kpi-session") || ""));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to stop the recurring series.";
         const status = message === "Permission denied." ? 403
@@ -6601,43 +6876,64 @@ Deno.serve(async (request) => {
     }
 
     if (["task-command", "task-command-result"].includes(action) && request.method === "POST") {
-      const current = await snapshot(action !== "task-command-result");
+      if (!await activeSessionAccountId(request)) return json(request, { error: "Authentication required." }, 401);
+      const body = await readJsonPayload(request);
+      // Preflight and receipt recovery need one task, not every task/history.
+      // A write still obtains its complete, fresh baseline inside updateWithRetry.
+      const source = await taskQueryContext(isRecord(body) ? String(body.taskId || "").trim() : "");
+      const current = source?.current || await snapshot(false);
       const accountId = await requireSession(request, current);
       if (accountId instanceof Response) return accountId;
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized." }, 409);
-      const body = await readJsonPayload(request);
-      if (!validTaskCommandPayload(body)) return json(request, { error: "Invalid task command payload." }, 422);
+      if (!validTaskCommandPayload(body)) return json(request, {
+        error: "Invalid task command payload.", code: "TASK_COMMAND_INVALID_PAYLOAD", deploymentVersion,
+        message: "Lệnh cập nhật thiếu mã công việc, mã lịch sử mới hoặc có dữ liệu không hợp lệ. Nội dung nhập chưa được lưu; hãy mở lại công việc từ dữ liệu mới nhất.",
+      }, 422);
 
-      const liveTask = records(current.state, "tasks").find((task) => recordId(task) === body.taskId);
-      if (!liveTask) return json(request, { error: "Task not found." }, 404);
+      const liveTask = source ? (isRecord(source.row.task) ? source.row.task : undefined)
+        : records(current.state, "tasks").find((task) => recordId(task) === body.taskId);
+      if (!liveTask || recordId(liveTask) !== body.taskId) return json(request, { error: "Task not found." }, 404);
       const account = accountForId(current.state, accountId);
       if (!account || Boolean(account.disabled)) return json(request, { error: "Authentication required." }, 401);
 
       if (!moduleIsAvailableToAccount(current.state, account, "tasks")
-        || !records(visibleState(current.state, account), "tasks").some((task) => recordId(task) === body.taskId)) {
+        || !taskIsVisibleToAccount(current.state, account, liveTask)) {
         return json(request, { error: "Task update is outside account scope." }, 403);
       }
 
       const classifiedCommand = classifyTaskCommand(body.baseTask, body.task);
       if (classifiedCommand !== body.command) {
-        return json(request, { error: "Task command does not match the requested state transition.", expectedCommand: classifiedCommand }, 422);
+        return json(request, {
+          error: "Task command does not match the requested state transition.",
+          code: "TASK_COMMAND_INTENT_MISMATCH", expectedCommand: classifiedCommand, deploymentVersion,
+          message: "Loại lệnh cập nhật không khớp nội dung thay đổi. Nội dung nhập vẫn được giữ; cần kiểm tra phiên bản giao diện và máy chủ.",
+        }, 422);
       }
       const command: TaskCommandCommit = {
         taskId: body.taskId, commandId: body.commandId, command: body.command,
-        requestHash: await sha256(JSON.stringify(canonical({ taskId: body.taskId, command: body.command, baseTask: body.baseTask, task: body.task }))),
+        requestHash: await sha256(JSON.stringify(canonical({ taskId: body.taskId, command: body.command, baseTask: body.baseTask, task: body.task,
+          ...(body.expectedTaskVersion === undefined ? {} : { expectedTaskVersion: body.expectedTaskVersion }) }))),
         sessionHash: await sha256(request.headers.get("x-kpi-session") || ""),
+        expectedTaskVersion: body.expectedTaskVersion,
       };
       const lookup = await readTaskCommandReceipt(accountId, body.commandId);
       if (lookup.receipt) assertTaskCommandReceipt(lookup.receipt, command);
-      if (action === "task-command-result" && !lookup.receipt) return json(request, { available: lookup.available, found: false });
+      if (action === "task-command-result" && !lookup.receipt) {
+        if (await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
+        return json(request, { available: lookup.available, found: false });
+      }
       if (lookup.receipt || (!lookup.available && taskProgressReportHasId(liveTask, body.commandId))) {
-        const replay = lookup.receipt ? await snapshot(false) : current;
+        const compactReceipt = action === "task-command-result" && url.searchParams.get("compact") === "receipt-v1";
+        const replaySource = compactReceipt && source ? await taskQueryContext(body.taskId) : null;
+        const replay = replaySource?.current || (lookup.receipt || source ? await snapshot(false) : current);
         const replayAccount = accountForId(replay.state, accountId);
         if (!replayAccount || Boolean(replayAccount.disabled)) return json(request, { error: "Authentication required." }, 401);
-        const replayTask = records(visibleState(replay.state, replayAccount), "tasks").find((task) => recordId(task) === body.taskId);
-        if (!moduleIsAvailableToAccount(replay.state, replayAccount, "tasks") || !replayTask) {
+        const replayTask = replaySource ? (isRecord(replaySource.row.task) ? replaySource.row.task : undefined)
+          : records(replay.state, "tasks").find((task) => recordId(task) === body.taskId);
+        if (!moduleIsAvailableToAccount(replay.state, replayAccount, "tasks") || !replayTask || !taskIsVisibleToAccount(replay.state, replayAccount, replayTask)) {
           return json(request, { error: "Task update is outside account scope." }, 403);
         }
+        if (await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
         return json(request, {
           ok: true,
           idempotent: true,
@@ -6647,15 +6943,20 @@ Deno.serve(async (request) => {
           revision: replay.revision,
           updatedAt: replay.updatedAt,
           task: replayTask,
-          ...taskCommandResponseState(body, current, replay, replayAccount),
+          ...(compactReceipt ? { requiresRefresh: true }
+            : source ? { state: visibleState(replay.state, replayAccount) }
+              : taskCommandResponseState(body, current, replay, replayAccount)),
         });
       }
 
       // Never invent a fingerprint for a command committed by an older Edge.
       if (lookup.available && taskProgressReportHasId(liveTask, body.commandId)) {
+        const authoritative = source ? await snapshot(false) : current;
+        const authoritativeAccount = accountForId(authoritative.state, accountId);
+        if (!authoritativeAccount || Boolean(authoritativeAccount.disabled)) return json(request, { error: "Authentication required." }, 401);
         return json(request, {
           error: "Command history predates the durable receipt. Refresh the task before submitting a new command.",
-          state: visibleState(current.state, account), revision: current.revision,
+          state: visibleState(authoritative.state, authoritativeAccount), revision: authoritative.revision,
         }, 409);
       }
 
@@ -6681,13 +6982,19 @@ Deno.serve(async (request) => {
 
       const responseAccount = accountForId(result.snapshot.state, accountId);
       if (!responseAccount || Boolean(responseAccount.disabled)) return json(request, { error: "Authentication required." }, 401);
+      const committedTask = records(result.snapshot.state, "tasks").find((task) => recordId(task) === body.taskId);
       if (!moduleIsAvailableToAccount(result.snapshot.state, responseAccount, "tasks")
-        || !records(visibleState(result.snapshot.state, responseAccount), "tasks").some((task) => recordId(task) === body.taskId)) {
+        || !committedTask || !taskIsVisibleToAccount(result.snapshot.state, responseAccount, committedTask)) {
         return json(request, { error: "Task update is outside account scope." }, 403);
       }
-      const committedTask = records(result.snapshot.state, "tasks").find((task) => recordId(task) === body.taskId);
       if (!committedTask || (!result.idempotent && !taskProgressReportHasId(committedTask, body.commandId))) {
         return json(request, { error: "Task command was not committed." }, 409);
+      }
+      // A successful command has already completed the same repair/cleanup work
+      // as a full read. Retain only its revision/time for bounded unchanged polls.
+      if (!result.idempotent && result.changed > 0 && result.snapshot.revision >= cleanSharedReadRevision) {
+        cleanSharedReadRevision = result.snapshot.revision;
+        cleanSharedReadAt = Date.now();
       }
       return json(request, {
         ok: true,
@@ -6696,7 +7003,8 @@ Deno.serve(async (request) => {
         revision: result.snapshot.revision,
         updatedAt: result.snapshot.updatedAt,
         task: committedTask,
-        ...taskCommandResponseState(body, current, result.snapshot, responseAccount),
+        ...(result.before ? taskCommandResponseState(body, result.before, result.snapshot, responseAccount)
+          : { state: visibleState(result.snapshot.state, responseAccount) }),
       });
     }
 
@@ -6710,7 +7018,7 @@ Deno.serve(async (request) => {
       if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
         return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
       }
-      const result = await updateWithRetry(accountId, body.patch);
+      const result = await updateWithRetry(accountId, body.patch, undefined, await sha256(request.headers.get("x-kpi-session") || ""));
       const responseAccount = accountForId(result.snapshot.state, accountId) || accountForId(current.state, accountId);
       if (!responseAccount) return json(request, { error: "Authentication required." }, 401);
       return json(request, {
