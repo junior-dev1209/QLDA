@@ -1,6 +1,6 @@
 const STORAGE_KEY = "phuc-thinh-workforce-kpi-v1";
 const SESSION_KEY = "phuc-thinh-current-account-v1";
-const APP_VERSION = "3.4.160";
+const APP_VERSION = "3.4.192";
 if (window.QldaFeatures) window.QldaFeatures.configure(APP_VERSION, document.baseURI);
 const taskFeatureGenerations = new Map();
 const taskFeatureWrites = new Set();
@@ -7046,6 +7046,35 @@ function taskStateFromCommandResponse(payload) {
   return remote;
 }
 
+function acceptTaskCommandReceipt(payload, body, sentLocal, creating = false) {
+  const id = String(body.taskId || "");
+  if (payload?.protocol !== (creating ? "task-created-v1" : "task-receipt-v1") || payload.ok !== true || payload.requiresRefresh !== true
+    || payload.command !== body.command || !Number.isSafeInteger(payload.revision) || payload.revision < sharedSync.revision
+    || !Number.isSafeInteger(payload.taskVersion) || payload.taskVersion < 1
+    || String(payload.task?.id || "") !== id || !Array.isArray(payload.task.progressReports)
+    || (!creating && !payload.task.progressReports.some((report) => String(report.id) === body.commandId))
+    || !Array.isArray(payload.task.attachments || []) || !canViewTaskRecord(payload.task)
+    || !sharedSync.baseState || !sharedSync.serverBaseState) return false;
+  const local = state.tasks.find((task) => String(task.id) === id);
+  const sent = sentLocal.tasks.find((task) => String(task.id) === id);
+  if (!sharedValuesEqual(local, sent)) return false;
+  for (const target of [state, sharedSync.baseState, sharedSync.serverBaseState]) {
+    if (!Array.isArray(target.tasks)) return false;
+  }
+  // Like the existing point reader, this acknowledges only one record. Keeping
+  // the global revision unchanged ensures the next normal poll still catches
+  // every other account's changes; a Task receipt is not a whole-state snapshot.
+  for (const target of [state, sharedSync.baseState, sharedSync.serverBaseState]) {
+    const index = target.tasks.findIndex((task) => String(task.id) === id);
+    if (index < 0) target.tasks.push(cloneStatePayload(payload.task));
+    else target.tasks[index] = cloneStatePayload(payload.task);
+  }
+  invalidateDerivedState();
+  persistState();
+  persistSharedSyncCheckpoint();
+  return true;
+}
+
 async function acceptTaskCommandState(remote, sentLocal, changeVersion) {
   if (sharedSync.localChangeVersion === changeVersion) {
     await adoptSharedState(remote, { render: false });
@@ -7166,8 +7195,9 @@ async function submitTaskCommandOnline(previous, candidate, command) {
   const sameSession = () => sharedSync.session && sharedSync.sessionToken === sessionToken && String(currentAccount()?.id || "") === actorId;
   if (!await ensureTaskMutationContractSupported()) return { ok: false, reason: "unsupported-server" };
   if (!sameSession()) return { ok: false, reason: "session-changed" };
-  const commandId = taskCommandReportId(previous, candidate);
-  if (!commandId) {
+  const creating = !previous;
+  const commandId = creating ? "" : taskCommandReportId(previous, candidate);
+  if (!creating && !commandId) {
     showSystemToast(
       "Chưa thể cập nhật công việc",
       "Thao tác chưa có mã lịch sử kiểm toán nên không được gửi lên máy chủ.",
@@ -7193,24 +7223,37 @@ async function submitTaskCommandOnline(previous, candidate, command) {
   const serverCandidate = JSON.parse(JSON.stringify(candidate));
   try {
     await attachSharedFileKeys([candidate], [serverCandidate], "attachments");
-    const transport = await loadTaskCommandTransport();
     if (!sameSession()) return { ok: false, reason: "session-changed" };
     const request = (action, options) => sameSession()
       ? sharedJsonRequest(action, options)
       : Promise.reject(new Error("session-changed"));
-    const { response, payload } = await transport.send(request, {
+    const commandBody = {
       taskId: String(candidate.id || ""),
       command,
       commandId,
       baseRevision,
-      responseMode: "changes-v1",
+      responseMode: sharedSync.taskQuerySupported === true ? "receipt-v1" : "changes-v1",
       baseTask: previous,
       task: serverCandidate,
-    });
+    };
+    const { response, payload } = creating
+      ? await (await loadTaskCommandTransport()).create(request, {
+        responseMode: sharedSync.taskQuerySupported === true ? "receipt-v1" : undefined, patch: { collections: { tasks: {
+          upserts: [{ id: String(candidate.id), baseValue: null, value: serverCandidate }],
+        } } },
+      })
+      : await (await loadTaskCommandTransport()).send(request, commandBody);
     if (!sameSession()) return { ok: false, reason: "session-changed" };
     if (response.status === 401) {
       handleSharedSessionUnauthorized();
       return { ok: false, reason: "session-verification" };
+    }
+    const createDenied = creating && payload?.denied?.some((item) => item.scope === "tasks" && String(item.id) === String(candidate.id));
+    if (creating && response.ok && !createDenied) {
+      payload.task = payload.task || payload?.state?.tasks?.find((task) => String(task.id) === String(candidate.id));
+    }
+    if (response.ok && !createDenied && acceptTaskCommandReceipt(payload, commandBody, sentLocal, creating)) {
+      return { ok: true, task: payload.task, remote: true, idempotent: payload.idempotent === true };
     }
     let remoteState = taskStateFromCommandResponse(payload);
     if (response.ok && payload?.task && !remoteState) {
@@ -7223,12 +7266,13 @@ async function submitTaskCommandOnline(previous, candidate, command) {
     }
     if (!response.ok || !remoteState || !payload?.task) {
       const resourceLimited = response.status === 546;
-      const reason = resourceLimited ? "worker-resource-limit" : String(payload?.error || payload?.message || `server-${response.status}`);
+      const deniedMessage = payload?.denied?.length ? sharedDeniedChangeMessage(payload.denied, sentLocal) : "";
+      const reason = resourceLimited ? "worker-resource-limit" : String(deniedMessage || payload?.error || payload?.message || `server-${response.status}`);
       const diagnostic = response.status === 422
-        ? `${payload?.message || "Máy chủ không chấp nhận nội dung cập nhật. Nội dung đang nhập vẫn được giữ; hãy kiểm tra lại trạng thái, thời hạn và dữ liệu công việc."} (422${payload?.code ? ` · ${payload.code}` : ""}${payload?.deploymentVersion ? ` · ${payload.deploymentVersion}` : ""})`
+        ? `${payload?.message || deniedMessage || payload?.error || "Máy chủ chưa xác nhận nội dung cập nhật. Nội dung đang nhập vẫn được giữ."} (422${payload?.code ? ` · ${payload.code}` : ""}${payload?.deploymentVersion ? ` · ${payload.deploymentVersion}` : ""})`
         : reason;
       showSystemToast(
-        resourceLimited ? "Máy chủ vượt giới hạn xử lý" : response.status === 409 ? "Dữ liệu công việc đã thay đổi" : "Máy chủ từ chối cập nhật công việc",
+        resourceLimited ? "Máy chủ vượt giới hạn xử lý" : response.status === 409 ? "Dữ liệu công việc đã thay đổi" : creating ? "Công việc chưa được tạo" : "Máy chủ từ chối cập nhật công việc",
         response.status === 409
           ? "Hệ thống đã giữ phiên bản mới nhất trên máy chủ. Hãy kiểm tra lại công việc trước khi cập nhật tiếp."
           : resourceLimited ? "Máy chủ online đã dừng xử lý do vượt giới hạn CPU hoặc bộ nhớ (546). Nội dung đang nhập vẫn được giữ; chưa hiển thị thành công khi chưa có xác nhận. Hệ thống không tự gửi lặp lệnh gây quá tải." : diagnostic,
