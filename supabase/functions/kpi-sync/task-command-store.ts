@@ -2,6 +2,9 @@ export type TaskCommandReceipt = { task_id: string; command_name: string; reques
 export type TaskCommandCommit = {
   taskId: string; commandId: string; command: string; requestHash: string; sessionHash: string;
   expectedTaskVersion?: number;
+  receiptCheckedTaskVersion?: number;
+  compactResponse?: boolean;
+  creating?: boolean;
 };
 export class TaskCommandConflictError extends Error {}
 

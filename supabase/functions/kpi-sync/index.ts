@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.107.0";
 import { gpmbWorkflowTemplate } from "./gpmb-workflow-template.ts";
-import { createTaskStorageProbe, createTaskRecordGateway } from "./task-storage.ts";
+import { createTaskStorageProbe, createTaskRecordGateway, createTaskCommitLane, taskCommandRetryDelay } from "./task-storage.ts";
+import { cloneTaskDependencyContext, runTaskDependencyRules, appendTaskCommandActivity, appendTaskCommandNotification, taskRecurrenceActivityRows, TaskMetadataRequired, guardTaskColdMetadata, unwrapTaskColdMetadata, ordinaryDependencyTask } from "./task-command-dependencies.ts";
 import { createIdentityLookup } from "./task-identity-index.ts";
 import { createProjectionTableResolver } from "./projection-table.ts";
 import { assertTaskCommandReceipt, taskCommandReceiptResult, TaskCommandConflictError, type TaskCommandCommit } from "./task-command-store.ts";
@@ -24,7 +25,7 @@ const presenceWindowMs = 2 * 60 * 1000;
 const sessionLastSeenUpdateIntervalMs = 45 * 1000;
 const usageHistoryMonths = 12;
 const loginEventRetentionDays = 400;
-const deploymentVersion = "2026.11.19.10";
+const deploymentVersion = "2026.11.25.7";
 const lunaAnnouncementTopic = "luna-system-announcements";
 const lunaAiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
 const lunaAiModel = Deno.env.get("OPENAI_MODEL") || "gpt-6-luna";
@@ -95,11 +96,20 @@ const admin = createClient(supabaseUrl, serviceRoleKey, {
 const transactionalTaskStorage = createTaskStorageProbe(async () => await admin
   .from("kpi_task_storage_state").select("schema_version, source_mode").eq("id", stateId).maybeSingle());
 const taskRecords = createTaskRecordGateway({
-  rpc: (name, params) => admin.rpc(name, params),
+  rpc: async (name, params) => {
+    const started = performance.now();
+    const result = await admin.rpc(name, params);
+    if (result.error) Object.assign(result.error, { taskRpcName: name, taskRpcMs: Math.round(performance.now()-started) });
+    if (Deno.env.get("KPI_TASK_METRICS") === "1") console.log(JSON.stringify({ event: "task-rpc", name,
+      ms: Math.round(performance.now()-started), rows: Array.isArray(result.data) ? result.data.length : null,
+      code: result.error?.code || null, rebased: Array.isArray(result.data) ? result.data[0]?.rebased : undefined }));
+    return result;
+  },
   legacyRead: () => admin.from("kpi_shared_state").select("revision, state, updated_at").eq("id", stateId).maybeSingle(),
   modeRead: () => admin.from("kpi_task_storage_state").select("schema_version, source_mode").eq("id", stateId).maybeSingle(),
-});
+}, { now: () => performance.now(), ttlMs: 15_000, maxCharacters: 1_000_000, maxTasks: 2_000, checkpoint: true, metadata: true, cold: true, wire: true });
 const identityRecord = createIdentityLookup();
+const acquireTaskRequest = createTaskCommitLane(16, 20_000, 2);
 const projectionTableName = createProjectionTableResolver(async (table) => await admin.from(table).select("id").limit(0));
 
 async function commitSharedState(params: Record<string, unknown>, actorId = "", sessionHash = "") {
@@ -114,6 +124,12 @@ type StateSnapshot = {
   state: JsonRecord;
   sourceMode?: string;
   taskVersions?: Record<string, number>;
+  partialTaskIds?: Set<string>;
+  checkpointEpoch?: number;
+  metadataEpoch?: number;
+  coldProjected?: boolean;
+  appendProjected?: boolean;
+  arrayBaseHashes?: Record<string, string>;
 };
 type StateMetadata = Omit<StateSnapshot, "state">;
 
@@ -488,6 +504,8 @@ function ensureSystemSettings(state: JsonRecord): boolean {
 
 function clone<T>(value: T): T {
   if (value === undefined) return value;
+  const dependencyClone = cloneTaskDependencyContext(value);
+  if (dependencyClone) return dependencyClone.value;
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
@@ -1151,6 +1169,47 @@ function clearMandatoryPasswordChangeFlags(state: JsonRecord): number {
   return changed;
 }
 
+function initializeSnapshotCollections(state: JsonRecord): void {
+  for (const name of ["projectCatalog", "supportRequests", "calendarEvents", "notifications", "gpmbWorkflows", "gpmbCases",
+    "publicInvestmentAppraisals", "publicInvestmentProjects", "systemSettings"]) {
+    if (!Array.isArray(state[name])) state[name] = [];
+  }
+}
+
+function repairSnapshotMetadata(state: JsonRecord): number {
+  const changed = (ensureSystemSettings(state) ? 1 : 0) + repairPersonnelAccountLinks(state)
+    + repairTaskParticipantLinks(state) + clearMandatoryPasswordChangeFlags(state);
+  return purgeRetiredLegacyTasks(state) + changed;
+}
+
+async function commandSnapshot(taskId: string, before?: StateSnapshot, allowCold = false, allowAppend = false): Promise<StateSnapshot | null> {
+  let result = before?.partialTaskIds && !before.coldProjected ? await taskRecords.readRetrySnapshot(taskId, before) : null;
+  if (result?.error) throw result.error;
+  if (!result?.data) result = await taskRecords.readCommandSnapshot(taskId, !before?.partialTaskIds, allowCold, allowAppend);
+  if (result.error) throw result.error;
+  if (!result.data) return null;
+  const row = result.data as { revision: number; updated_at: string; state: JsonRecord; source_mode: string;
+    task_versions: Record<string, number>; full_task_ids: string[]; checkpoint_epoch?: number; metadata_epoch?: number; cold_projected?: boolean; append_projected?: boolean; array_base_hashes?: Record<string, string> };
+  if (!validState(row.state)) throw new Error("Invalid task write state.");
+  initializeSnapshotCollections(row.state);
+  // Legacy repair may touch arbitrary rows; never commit a projected repair.
+  if (row.source_mode === "snapshot") {
+    // Task link repair is copy-on-write and retirement only replaces the array.
+    // Clone mutable shared roots, not every unchanged Task/history in this probe.
+    const { tasks, ...roots } = row.state;
+    if (repairSnapshotMetadata({ ...clone(roots), tasks })) return null;
+  }
+  const fullIds = new Set(row.full_task_ids);
+  return { revision: Number(row.revision), updatedAt: String(row.updated_at || ""), state: row.cold_projected ? guardTaskColdMetadata(row.state, taskId) : row.state,
+    sourceMode: row.source_mode, taskVersions: row.task_versions,
+    ...(row.checkpoint_epoch === undefined ? {} : { checkpointEpoch: row.checkpoint_epoch }),
+    ...(row.metadata_epoch === undefined ? {} : { metadataEpoch: row.metadata_epoch }),
+    ...(row.cold_projected ? { coldProjected: true } : {}),
+    ...(row.append_projected ? { appendProjected: true } : {}),
+    ...(row.array_base_hashes ? { arrayBaseHashes: row.array_base_hashes } : {}),
+    partialTaskIds: new Set(records(row.state, "tasks").map(recordId).filter((id) => !fullIds.has(id))) };
+}
+
 async function snapshot(repair = true): Promise<StateSnapshot> {
   const result = await taskRecords.readSnapshot();
   const { error } = result;
@@ -1158,15 +1217,7 @@ async function snapshot(repair = true): Promise<StateSnapshot> {
   if (error) throw error;
   if (!data) return { revision: 0, updatedAt: "", state: defaultState() };
   const state = validState(data.state) ? data.state : defaultState();
-  if (!Array.isArray(state.projectCatalog)) state.projectCatalog = [];
-  if (!Array.isArray(state.supportRequests)) state.supportRequests = [];
-  if (!Array.isArray(state.calendarEvents)) state.calendarEvents = [];
-  if (!Array.isArray(state.notifications)) state.notifications = [];
-  if (!Array.isArray(state.gpmbWorkflows)) state.gpmbWorkflows = [];
-  if (!Array.isArray(state.gpmbCases)) state.gpmbCases = [];
-  if (!Array.isArray(state.publicInvestmentAppraisals)) state.publicInvestmentAppraisals = [];
-  if (!Array.isArray(state.publicInvestmentProjects)) state.publicInvestmentProjects = [];
-  if (!Array.isArray(state.systemSettings)) state.systemSettings = [];
+  initializeSnapshotCollections(state);
   const current = {
     revision: Number(data.revision) || 0,
     updatedAt: String(data.updated_at || ""),
@@ -1175,11 +1226,7 @@ async function snapshot(repair = true): Promise<StateSnapshot> {
     taskVersions: data.task_versions || {},
   };
   if (!repair || current.sourceMode === "record-primary") return current;
-  const repairedRecords = (ensureSystemSettings(current.state) ? 1 : 0)
-    + repairPersonnelAccountLinks(current.state)
-    + repairTaskParticipantLinks(current.state)
-    + clearMandatoryPasswordChangeFlags(current.state);
-  if (!purgeRetiredLegacyTasks(current.state) && !repairedRecords) return current;
+  if (!repairSnapshotMetadata(current.state)) return current;
   const { data: updated, error: updateError } = await commitSharedState({
     expected_revision: current.revision,
     next_state: current.state,
@@ -1264,6 +1311,21 @@ async function sharedSessionMetadata(): Promise<StateSnapshot> {
   if(error) throw error;
   return {revision:Number(data?.revision)||0,updatedAt:String(data?.updated_at||""),
     state:{accounts:Array.isArray(data?.accounts)?data.accounts:[]}};
+}
+
+let taskPollProtocolReady = false;
+async function taskPollContext(allowUninitialized = false): Promise<StateSnapshot | null> {
+  const result = await admin.rpc("kpi_task_poll_context");
+  if (result.error) {
+    if (!taskPollProtocolReady && ["42883", "PGRST202"].includes(String(result.error.code))) return null;
+    throw result.error;
+  }
+  const row = Array.isArray(result.data) && result.data.length === 1 ? result.data[0] : null;
+  if (!row || !Number.isSafeInteger(Number(row.revision)) || Number(row.revision) < (allowUninitialized ? 0 : 1)
+    || !["snapshot", "record-primary"].includes(String(row.source_mode)) || !isRecord(row.context)
+    || !Array.isArray(row.context.accounts)) throw new Error("Invalid task poll metadata.");
+  taskPollProtocolReady = true;
+  return { revision: Number(row.revision), updatedAt: String(row.updated_at || ""), state: row.context, sourceMode: row.source_mode };
 }
 
 async function sha256(value: string): Promise<string> {
@@ -1663,7 +1725,7 @@ function repairTaskParticipantLinks(state: JsonRecord): number {
   const tasks = records(state, "tasks");
   let changed = 0;
   const repairedTasks = tasks.map((task) => {
-    const next = clone(task);
+    const next = { ...task };
     let taskChanged = false;
     const ownerId = remapTaskParticipantId(state, task.ownerId);
     if (ownerId && ownerId !== String(task.ownerId || "")) {
@@ -1693,7 +1755,7 @@ function repairTaskParticipantLinks(state: JsonRecord): number {
       taskChanged = true;
     }
     if (taskChanged) changed += 1;
-    return next;
+    return taskChanged ? next : task;
   });
   if (changed) state.tasks = repairedTasks;
   return changed;
@@ -1976,7 +2038,7 @@ const taskDeadlineExtensionReviewFields = [
 
 function taskDeadlineExtensionRequestChanged(previous: JsonRecord, next: JsonRecord): boolean {
   return (previous.followUpDate || "") !== (next.followUpDate || "")
-    || taskDeadlineExtensionRequestFields.some((field) => !sameJson(previous[field], next[field]));
+    || taskDeadlineExtensionRequestFields.some((field) => String(previous[field] ?? "") !== String(next[field] ?? ""));
 }
 
 function validTaskIsoDate(value: unknown): boolean {
@@ -1991,7 +2053,7 @@ function normalizeTaskDeadlineExtensionRequest(
   previous: JsonRecord,
   candidate: JsonRecord,
 ): JsonRecord | null {
-  const requestFieldsChanged = taskDeadlineExtensionRequestFields.some((field) => !sameJson(previous[field], candidate[field]));
+  const requestFieldsChanged = taskDeadlineExtensionRequestFields.some((field) => String(previous[field] ?? "") !== String(candidate[field] ?? ""));
   const followUpChanged = String(previous.followUpDate || "") !== String(candidate.followUpDate || "");
   const followUpExceedsDue = String(candidate.followUpDate || "") > String(previous.due || "");
   if (!requestFieldsChanged && !followUpChanged) return clone(candidate);
@@ -2353,14 +2415,15 @@ function validTaskCommandPayload(value: unknown): value is {
 }
 
 function taskCommandResponseState(body: { responseMode?: string; baseRevision?: number }, before: StateSnapshot,
-  after: StateSnapshot, account: JsonRecord): JsonRecord {
+  after: StateSnapshot, account: JsonRecord): JsonRecord | null {
   const state = visibleState(after.state, account);
   if (body.responseMode !== "changes-v1" || body.baseRevision !== before.revision
-    || ![before.revision, before.revision + 1].includes(after.revision)) return { state };
+    || ![before.revision, before.revision + 1].includes(after.revision)) return after.partialTaskIds ? null : { state };
   const beforeAccount = accountForId(before.state, recordId(account));
-  if (!beforeAccount) return { state };
+  if (!beforeAccount) return after.partialTaskIds ? null : { state };
   const changes = taskCommandChanges(visibleState(before.state, beforeAccount), state,
     before.revision, after.revision, collections, [...scalarFields, "activePeriod", "calendarDirectory"]);
+  if (after.partialTaskIds && (!changes || changes.collections.tasks?.upserts.some((task) => after.partialTaskIds!.has(recordId(task))))) return null;
   return changes ? { changes } : { state };
 }
 
@@ -2525,9 +2588,9 @@ function taskDeadlineNoticeContext(state: JsonRecord, account: JsonRecord): Task
 function taskDeadlineNotificationForAccount(state: JsonRecord, account: JsonRecord, task: JsonRecord, context?: TaskDeadlineNoticeContext): JsonRecord | null {
   const due = String(task.due || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(due) || completedTaskStatus(task.status) || ["Đã kết thúc", "Da ket thuc"].includes(String(task.status || "")) || String(task.completionReviewStatus || "") === "pending") return null;
-  if (!taskNotificationRecipientAccountIds(state, task, context?.participantLookup).includes(recordId(account))) return null;
   const today = context?.today || vietnamDateKey();
   if (due > today) return null;
+  if (!taskNotificationRecipientAccountIds(state, task, context?.participantLookup).includes(recordId(account))) return null;
   const acknowledgement = context ? context.acknowledgements.get(`task-deadline:${recordId(task)}:${due}`) : records(state, "notifications").find((notification) => (
     String(notification.notificationType || "") === "acknowledgement"
     && String(notification.recipientAccountId || "") === recordId(account)
@@ -2617,12 +2680,7 @@ function appendSystemNotification(state: JsonRecord, recipientAccountId: string,
     dismissedAt: "",
     updatedAt: timestamp,
   };
-  const existing = records(state, "notifications");
-  // Retain acknowledgements for derived deadline notices, while bounding the
-  // server-generated event stream so snapshots remain responsive.
-  const events = existing.filter((item) => String(item.notificationType || "") === "event");
-  const acknowledgements = existing.filter((item) => String(item.notificationType || "") === "acknowledgement");
-  state.notifications = [...acknowledgements, ...[...events, record].slice(-3000)];
+  appendTaskCommandNotification(state, record);
   return record.id;
 }
 
@@ -4279,6 +4337,18 @@ function validPatch(value: unknown): value is StatePatch {
   return true;
 }
 
+function taskCreationUpsert(patch: StatePatch): MutationEntry | null {
+  const operations = patch.collections?.tasks;
+  return Object.keys(patch.collections || {}).length === 1 && !(patch.fields || []).length
+    && operations?.upserts?.length === 1 && !(operations.deletes || []).length
+    && operations.upserts[0].baseValue == null && String(operations.upserts[0].id).length <= 150 ? operations.upserts[0] : null;
+}
+
+async function taskCreationCommand(create: MutationEntry, sessionHash: string): Promise<TaskCommandCommit> {
+  return { taskId: String(create.id), commandId: `create:${create.id}`, command: "save-task", creating: true,
+    compactResponse: true, sessionHash, requestHash: await sha256(JSON.stringify(canonical({ taskId: create.id, value: create.value }))) };
+}
+
 function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch): boolean {
   const protectedCollections: CollectionName[] = ["people", "tasks", "bulletins", "archiveRecords", "evaluations", "departmentEvaluations", "accounts"];
   let currentTotal = 0;
@@ -4301,8 +4371,7 @@ function patchRemovesUnsafeAmountOfData(current: JsonRecord, patch: StatePatch):
 
 function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number): void {
   if (!changed) return;
-  const activityLog = records(state, "activityLog");
-  activityLog.push({
+  appendTaskCommandActivity(state, {
     id: `server-sync-${crypto.randomUUID()}`,
     action: "Dong bo",
     module: "He thong",
@@ -4314,7 +4383,6 @@ function addServerActivity(state: JsonRecord, actor: JsonRecord, changed: number
     createdBy: String(actor.displayName || actor.username || "Tai khoan"),
     createdById: String(actor.id || ""),
   });
-  state.activityLog = activityLog.slice(-5000);
 }
 
 function addCalendarEventActivity(state: JsonRecord, actor: JsonRecord, action: string, event: JsonRecord): void {
@@ -4578,6 +4646,12 @@ function applyPatch(current: JsonRecord, actor: JsonRecord, patch: StatePatch): 
         candidate = normalizeTaskProgressLifecycle(candidate);
       }
       const comparisonBaseValue = collection === "tasks" && taskBaseValue ? taskBaseValue : operation.baseValue;
+      // A lost create response may be retried with the same draft ID. Only an
+      // exact business-value match can acknowledge it; never overwrite a row.
+      if (collection === "tasks" && previous && comparisonBaseValue == null
+        && canUpsert(next, actor, collection, undefined, candidate)
+        && sameJson(withoutKeys(previous, [...taskOriginAuditFields, "updatedAt", "updatedBy", "updatedById"]),
+          withoutKeys(candidate, [...taskOriginAuditFields, "updatedAt", "updatedBy", "updatedById"]))) return;
       if (previous && !sameJson(comparisonBaseValue, serverValue)) {
         if (collection === "activityLog" && String(candidate.actorId || candidate.createdById || "") === String(actor.id || "")) {
           id = `client-activity-${crypto.randomUUID()}`;
@@ -5187,9 +5261,46 @@ async function updateRecordProjectionMarker(revision: number): Promise<void> {
   if (error) throw error;
 }
 
+function serverActivitiesForProjection(state: JsonRecord): JsonRecord[] {
+  const activities = records(state, "activityLog").filter((item) => recordId(item).startsWith("server-sync-"));
+  return [...activities.filter((item) => !recordId(item).startsWith("server-sync-calendar-")).slice(-1),
+    ...activities.filter((item) => recordId(item).startsWith("server-sync-calendar-")).slice(-20)];
+}
+
+let taskProjectionBatchReady = false;
+let taskProjectionBatchUnavailableUntil = 0;
+async function projectTaskSideEffects(state: JsonRecord, patch: StatePatch, revision: number): Promise<boolean> {
+  if (!patch.collections?.tasks || (patch.fields || []).length
+    || Object.keys(patch.collections).some((name) => !["tasks", "notifications", "activityLog"].includes(name))
+    || (!taskProjectionBatchReady && performance.now() < taskProjectionBatchUnavailableUntil)) return false;
+  const rowsFor = (name: "notifications" | "activityLog") => {
+    const source = recordMap(state, name);
+    return projectionRecordRows([...new Set((patch.collections?.[name]?.upserts || []).map((item) => String(item.id || "")).filter(Boolean))]
+      .map((id) => source.get(id)).filter((item): item is JsonRecord => Boolean(item)), revision);
+  };
+  const params = { p_revision: revision, p_notifications: rowsFor("notifications"),
+    p_notification_deletes: [...new Set((patch.collections.notifications?.deletes || []).map((item) => String(item.id || "")).filter(Boolean))],
+    p_activities: rowsFor("activityLog"),
+    p_activity_deletes: [...new Set((patch.collections.activityLog?.deletes || []).map((item) => String(item.id || "")).filter(Boolean))],
+    p_server_activities: projectionRecordRows(serverActivitiesForProjection(state), revision) };
+  if (Object.values(params).some((value) => Array.isArray(value) && value.length > projectionBatchSize)
+    || new TextEncoder().encode(JSON.stringify(params)).length > 1_500_000) return false;
+  const { data, error } = await admin.rpc("kpi_project_task_side_effects", params);
+  if (error) {
+    if (!taskProjectionBatchReady && ["42883", "PGRST202"].includes(String(error.code))) {
+      taskProjectionBatchUnavailableUntil = performance.now() + 30_000; return false;
+    }
+    throw error;
+  }
+  if (data !== true) throw new Error("Task projection batch was not acknowledged.");
+  taskProjectionBatchReady = true;
+  return true;
+}
+
 async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch, revision: number): Promise<void> {
   const changedCollections = patch.collections || {};
   const transactionalTasks = await transactionalTaskStorage();
+  if (transactionalTasks && await projectTaskSideEffects(state, patch, revision)) return;
   for (const collection of ["people", "tasks", "gpmbWorkflows", "gpmbCases", "publicInvestmentAppraisals", "publicInvestmentProjects", "evaluations", "notifications", "activityLog"] as CollectionName[]) {
     const changes = changedCollections[collection];
     if (!changes) continue;
@@ -5258,11 +5369,7 @@ async function syncRecordProjectionForPatch(state: JsonRecord, patch: StatePatch
 
   // Keep server-owned sync and calendar audit entries queryable without
   // rewriting the full activity history on each command.
-  const serverActivities = records(state, "activityLog")
-    .filter((item) => recordId(item).startsWith("server-sync-"));
-  const latestServerActivity = serverActivities.filter((item) => !recordId(item).startsWith("server-sync-calendar-")).slice(-1);
-  const recentCalendarActivities = serverActivities.filter((item) => recordId(item).startsWith("server-sync-calendar-")).slice(-20);
-  const activityRows = [...latestServerActivity, ...recentCalendarActivities];
+  const activityRows = serverActivitiesForProjection(state);
   if (activityRows.length) await upsertProjectionRows("activity_log", projectionRecordRows(activityRows, revision));
   await updateRecordProjectionMarker(revision);
 }
@@ -5336,145 +5443,219 @@ async function readTaskCommandReceipt(actorId: string, commandId: string) {
     .select("task_id, command_name, request_hash").eq("actor_id", actorId).eq("command_id", commandId).maybeSingle());
 }
 
-async function updateWithRetry(actorId: string, patch: StatePatch, command?: TaskCommandCommit, sessionHash = ""): Promise<{ snapshot: StateSnapshot; before?: StateSnapshot; denied: DeniedMutation[]; changed: number; idempotent?: boolean }> {
+async function updateWithRetry(actorId: string, patch: StatePatch, command?: TaskCommandCommit, sessionHash = "", allowCold = false): Promise<{ snapshot: StateSnapshot; before?: StateSnapshot; denied: DeniedMutation[]; changed: number; idempotent?: boolean; committedRevision?: number }> {
   let lastDenied: DeniedMutation[] = [];
+  let requireComplete = false;
+  let requireMetadata = false;
+  let retryBaseline: StateSnapshot | undefined;
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const current = await snapshot();
-    if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
-    if (patchRemovesUnsafeAmountOfData(current.state, patch)) {
-      throw new UnsafeBulkDeletionError("Unsafe bulk deletion was blocked.");
+    const current = (command && !requireComplete ? await commandSnapshot(command.taskId, retryBaseline,
+      command.command === "update-progress" && !requireMetadata && allowCold,
+      command.command === "update-progress" && !requireMetadata && allowCold && command.compactResponse === true) : null) || await snapshot();
+    const creatingTask = command?.creating ? patch.collections?.tasks?.upserts?.[0]?.value : null;
+    if (command?.creating && current.partialTaskIds && !requireMetadata && !requireComplete
+      && Array.isArray(creatingTask?.progressReports) && Array.isArray(creatingTask?.attachments)) {
+      current.state = guardTaskColdMetadata(current.state, command.taskId, true);
+      current.coldProjected = true;
     }
-    const actor = accountForId(current.state, actorId);
-    if (!actor || Boolean(actor.disabled)) throw new AuthenticationRequiredError("Authentication required.");
-    if (command) {
-      const currentTask = records(current.state, "tasks").find((task) => recordId(task) === command.taskId);
-      if (!moduleIsAvailableToAccount(current.state, actor, "tasks")
-        || !currentTask || !taskIsVisibleToAccount(current.state, actor, currentTask)) {
-        return { snapshot: current, denied: [{ scope: "tasks", id: command.taskId, reason: "Task update is outside account scope." }], changed: 0 };
+    try {
+      retryBaseline = current.partialTaskIds ? current : undefined;
+      if (current.revision <= 0) throw new SharedStateUninitializedError("Central data is not initialized.");
+      if (patchRemovesUnsafeAmountOfData(current.state, patch)) {
+        throw new UnsafeBulkDeletionError("Unsafe bulk deletion was blocked.");
       }
-      const lookup = await readTaskCommandReceipt(actorId, command.commandId);
-      if (!lookup.available) throw new Error("Task command receipt schema became unavailable.");
-      if (lookup.receipt) {
-        assertTaskCommandReceipt(lookup.receipt, command);
-        return { snapshot: await snapshot(), denied: [], changed: 0, idempotent: true };
+      const actor = accountForId(current.state, actorId);
+      if (!actor || Boolean(actor.disabled)) throw new AuthenticationRequiredError("Authentication required.");
+      if (command) {
+        const currentTask = records(current.state, "tasks").find((task) => recordId(task) === command.taskId);
+        if (!moduleIsAvailableToAccount(current.state, actor, "tasks")
+          || (!command.creating && !currentTask) || (currentTask && !taskIsVisibleToAccount(current.state, actor, currentTask))) {
+          return { snapshot: current, denied: [{ scope: "tasks", id: command.taskId, reason: "Task update is outside account scope." }], changed: 0 };
+        }
+        // A new ID has no body to replay here. SQL checks its durable receipt
+        // atomically with insertion, including concurrent same-ID creation.
+        const receiptVersionUnchanged = command.receiptCheckedTaskVersion !== undefined
+          && current.taskVersions?.[command.taskId] === command.receiptCheckedTaskVersion;
+        if ((!command.creating || currentTask) && !receiptVersionUnchanged) {
+          const lookup = await readTaskCommandReceipt(actorId, command.commandId);
+          if (!lookup.available) throw new Error("Task command receipt schema became unavailable.");
+          if (lookup.receipt) {
+            assertTaskCommandReceipt(lookup.receipt, command);
+            return { snapshot: command.compactResponse ? current : await snapshot(), denied: [], changed: 0, idempotent: true };
+          }
+        }
+        if (command.expectedTaskVersion !== undefined && current.taskVersions?.[command.taskId] !== command.expectedTaskVersion) {
+          return { snapshot: current, denied: [{ scope: "tasks", id: command.taskId, reason: "Record changed by another user." }], changed: 0 };
+        }
       }
-      if (command.expectedTaskVersion !== undefined && current.taskVersions?.[command.taskId] !== command.expectedTaskVersion) {
-        return { snapshot: current, denied: [{ scope: "tasks", id: command.taskId, reason: "Record changed by another user." }], changed: 0 };
+      const executePatch = () => command?.command === "update-progress" && current.partialTaskIds
+        ? runTaskDependencyRules(current.state, (state) => applyPatch(state, actor, patch), command.taskId)
+        : { result: applyPatch(current.state, actor, patch), isolated: false };
+      let execution = executePatch();
+      if (current.appendProjected && !execution.isolated) throw new TaskMetadataRequired("Complete roots are required for unscoped Task rules.");
+      let result = execution.result;
+      if (current.partialTaskIds && !current.coldProjected) {
+        const oldTasks = new Map(records(current.state, "tasks").map((task) => [recordId(task), task]));
+        const changedPartialIds = records(result.state, "tasks").filter((task) => current.partialTaskIds!.has(recordId(task))
+          && !sameJson(oldTasks.get(recordId(task)), task)).map(recordId);
+        const incompleteNewTask = records(result.state, "tasks").some((task) => !oldTasks.has(recordId(task))
+          && (!Object.hasOwn(task, "progressReports") || !Object.hasOwn(task, "attachments")));
+        if (incompleteNewTask || changedPartialIds.length > 200) { requireComplete = true; continue; }
+        if (changedPartialIds.length) {
+          const hydrated = await admin.rpc("kpi_task_page_records", { p_ids: changedPartialIds, p_revision: current.revision });
+          if (hydrated.error) throw hydrated.error;
+          const row = Array.isArray(hydrated.data) ? hydrated.data[0] : null;
+          if (!row) continue;
+          if (Number(row.revision) !== current.revision || !Array.isArray(row.tasks)
+            || row.tasks.length !== changedPartialIds.length || new Set(row.tasks.map(recordId)).size !== changedPartialIds.length
+            || row.tasks.some((task: JsonRecord) => !changedPartialIds.includes(recordId(task)))) throw new Error("Invalid hydrated task rows.");
+          const byId = new Map((row.tasks as JsonRecord[]).map((task) => [recordId(task), task]));
+          if (row.tasks.some((task: JsonRecord) => !sameJson(withoutKeys(task, ["progressReports", "attachments"]),
+            oldTasks.get(recordId(task))))) throw new Error("Hydrated task metadata changed.");
+          current.state.tasks = records(current.state, "tasks").map((task) => byId.get(recordId(task)) || task);
+          changedPartialIds.forEach((id) => current.partialTaskIds!.delete(id));
+          execution = executePatch();
+          result = execution.result;
+          // If hydration exposes another dependency, use the existing complete path.
+          const hydratedBefore = new Map(records(current.state, "tasks").map((task) => [recordId(task), task]));
+          if (records(result.state, "tasks").some((task) => current.partialTaskIds!.has(recordId(task))
+            && !sameJson(hydratedBefore.get(recordId(task)), task))) { requireComplete = true; continue; }
+        }
       }
-    }
-    const result = applyPatch(current.state, actor, patch);
-    lastDenied = result.denied;
-    if (command && lastDenied.some((denied) => denied.scope === "tasks" && denied.id === command.taskId)) {
-      return { snapshot: current, denied: lastDenied, changed: 0 };
-    }
-    const departmentStopEffects = stopRecurringTasksForDepartmentChanges(current.state, result.state, actor);
-    result.changed += departmentStopEffects.taskIds.length + departmentStopEffects.activityIds.length;
-    if (!result.changed) return { snapshot: current, denied: lastDenied, changed: 0 };
-    await secureMutatedAccountCredentials(result.state, patch);
-    let taskVersion = 0;
-    if (command) {
-      const stored = await admin.from("tasks").select("row_version, data").eq("id", command.taskId).maybeSingle();
-      if (stored.error) throw stored.error;
-      if (!stored.data || !sameJson(stored.data.data, records(current.state, "tasks").find((task) => recordId(task) === command.taskId))) {
-        await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
-        continue;
+      lastDenied = result.denied;
+      if (command && lastDenied.some((denied) => denied.scope === "tasks" && denied.id === command.taskId)) {
+        return { snapshot: current, denied: lastDenied, changed: 0 };
       }
-      taskVersion = Number(stored.data.row_version);
-    }
-    const { data, error } = command
-      ? await taskRecords.commitTaskCommand({
-        p_expected_revision: current.revision, p_expected_task_version: taskVersion,
-        p_task_id: command.taskId, p_actor_id: actorId, p_session_hash: command.sessionHash,
-        p_command_id: command.commandId, p_command_name: command.command, p_request_hash: command.requestHash,
-        p_next_state: result.state,
-      }, current.state)
-      : await commitSharedState({ expected_revision: current.revision, next_state: result.state }, actorId, sessionHash);
-    if (error?.code === "KPA01") throw new AuthenticationRequiredError("Authentication required.");
-    if (error?.code === "KPC01") throw new TaskCommandConflictError(error.message);
-    if (error) throw error;
-    if (Array.isArray(data) && data.length) {
-      if (command && data[0].replayed) return { snapshot: await snapshot(), denied: [], changed: 0, idempotent: true };
-      const updated = data[0] as { next_revision: number; next_updated_at: string };
-      const nextSnapshot = {
-        snapshot: { revision: Number(updated.next_revision), updatedAt: String(updated.next_updated_at || ""), state: result.state },
-        before: current,
-        denied: lastDenied,
-        changed: result.changed,
-      };
-      // The protected snapshot remains the compatibility source during the
-      // staged migration.  A projection issue must not roll back an already
-      // committed authorised command; the next command or deploy can repair it.
-      try {
-        const projectionPatch: StatePatch = {
-          ...patch,
-          collections: {
-            ...patch.collections,
-            ...(result.serverNotificationIds.length || result.serverDeletedNotificationIds.length ? {
-              notifications: {
-                upserts: [
-                  ...(patch.collections?.notifications?.upserts || []),
-                  ...result.serverNotificationIds.map((id) => ({ id })),
-                ],
-                deletes: [
-                  ...(patch.collections?.notifications?.deletes || []),
-                  ...result.serverDeletedNotificationIds.map((id) => ({ id })),
-                ],
-              },
-            } : {}),
-            ...(result.serverGeneratedTaskIds.length || departmentStopEffects.taskIds.length || result.serverDeletedTaskIds.length ? {
-              tasks: {
-                upserts: [
-                  ...(patch.collections?.tasks?.upserts || []),
-                  ...[...new Set([...result.serverGeneratedTaskIds, ...departmentStopEffects.taskIds])].map((id) => ({ id })),
-                ],
-                deletes: [
-                  ...(patch.collections?.tasks?.deletes || []),
-                  ...result.serverDeletedTaskIds.map((id) => ({ id })),
-                ],
-              },
-            } : {}),
-            ...(departmentStopEffects.activityIds.length || result.serverCleanupActivityIds.length ? {
-              activityLog: {
-                upserts: [
-                  ...(patch.collections?.activityLog?.upserts || []),
-                  ...departmentStopEffects.activityIds.map((id) => ({ id })),
-                  ...result.serverCleanupActivityIds.map((id) => ({ id })),
-                ],
-                deletes: patch.collections?.activityLog?.deletes || [],
-              },
-            } : {}),
-            ...(result.serverUpdatedGpmbWorkflowIds.length ? {
-              gpmbWorkflows: {
-                upserts: [
-                  ...(patch.collections?.gpmbWorkflows?.upserts || []),
-                  ...result.serverUpdatedGpmbWorkflowIds.map((id) => ({ id })),
-                ],
-                deletes: patch.collections?.gpmbWorkflows?.deletes || [],
-              },
-            } : {}),
-            ...(result.serverUpdatedGpmbCaseIds.length || result.serverDeletedGpmbCaseIds.length ? {
-              gpmbCases: {
-                upserts: [
-                  ...(patch.collections?.gpmbCases?.upserts || []),
-                  ...result.serverUpdatedGpmbCaseIds.map((id) => ({ id })),
-                ],
-                deletes: [
-                  ...(patch.collections?.gpmbCases?.deletes || []),
-                  ...result.serverDeletedGpmbCaseIds.map((id) => ({ id })),
-                ],
-              },
-            } : {}),
-          },
+      const departmentStopEffects = stopRecurringTasksForDepartmentChanges(current.state, result.state, actor);
+      if (current.coldProjected) {
+        // All business reads stay guarded. Only delta packing/SQL transport follows;
+        // dependency evidence is guarded again inside the gateway.
+        const visible = taskVisibilityFilter(result.state, actor);
+        records(result.state, "tasks").forEach(visible);
+        current.state = unwrapTaskColdMetadata(current.state, true);
+        result.state = unwrapTaskColdMetadata(result.state, true);
+      }
+      result.changed += departmentStopEffects.taskIds.length + departmentStopEffects.activityIds.length;
+      if (!result.changed) return { snapshot: current, denied: lastDenied, changed: 0 };
+      await secureMutatedAccountCredentials(result.state, patch);
+      let taskVersion = 0;
+      if (command?.creating) {
+        taskVersion = 0;
+      } else if (command && current.partialTaskIds) {
+        taskVersion = Number(current.taskVersions?.[command.taskId]);
+      } else if (command) {
+        const stored = await admin.from("tasks").select("row_version, data").eq("id", command.taskId).maybeSingle();
+        if (stored.error) throw stored.error;
+        if (!stored.data || !sameJson(stored.data.data, records(current.state, "tasks").find((task) => recordId(task) === command.taskId))) {
+          await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
+          continue;
+        }
+        taskVersion = Number(stored.data.row_version);
+      }
+      const { data, error } = command
+        ? await taskRecords.commitTaskCommand({
+          p_expected_revision: current.revision, p_expected_task_version: taskVersion,
+          p_task_id: command.taskId, p_actor_id: actorId, p_session_hash: command.sessionHash,
+          p_command_id: command.commandId, p_command_name: command.command, p_request_hash: command.requestHash,
+          p_next_state: result.state,
+        }, current.state, current.partialTaskIds, execution.isolated ? { versions: current.taskVersions, sourceMode: current.sourceMode,
+          reads: "reads" in execution ? execution.reads : undefined, cold: current.coldProjected, append: current.appendProjected } : undefined, current.arrayBaseHashes)
+        : await commitSharedState({ expected_revision: current.revision, next_state: result.state }, actorId, sessionHash);
+      if (error?.code === "KPA01") throw new AuthenticationRequiredError("Authentication required.");
+      if (error?.code === "KPC01") throw new TaskCommandConflictError(error.message);
+      if (error) throw error;
+      if (Array.isArray(data) && data.length) {
+        if (command && data[0].replayed) return { snapshot: command.compactResponse ? current : await snapshot(), denied: [], changed: 0, idempotent: true };
+        const updated = data[0] as { next_revision: number; next_updated_at: string; rebased?: boolean };
+        const authoritative = updated.rebased && !command?.compactResponse ? await snapshot(false) : null;
+        const nextSnapshot = {
+          snapshot: authoritative || { revision: Number(updated.next_revision), updatedAt: String(updated.next_updated_at || ""), state: result.state,
+            ...(current.partialTaskIds ? { partialTaskIds: current.partialTaskIds } : {}) },
+          before: authoritative ? undefined : current,
+          committedRevision: Number(updated.next_revision),
+          denied: lastDenied,
+          changed: result.changed,
         };
-        await syncRecordProjectionForPatch(result.state, projectionPatch, nextSnapshot.snapshot.revision);
-      } catch (projectionError) {
-        console.error("Unable to mirror an authorised record command.", projectionError);
+        // The protected snapshot remains the compatibility source during the
+        // staged migration.  A projection issue must not roll back an already
+        // committed authorised command; the next command or deploy can repair it.
+        try {
+          const projectionPatch: StatePatch = {
+            ...patch,
+            collections: {
+              ...patch.collections,
+              ...(result.serverNotificationIds.length || result.serverDeletedNotificationIds.length ? {
+                notifications: {
+                  upserts: [
+                    ...(patch.collections?.notifications?.upserts || []),
+                    ...result.serverNotificationIds.map((id) => ({ id })),
+                  ],
+                  deletes: [
+                    ...(patch.collections?.notifications?.deletes || []),
+                    ...result.serverDeletedNotificationIds.map((id) => ({ id })),
+                  ],
+                },
+              } : {}),
+              ...(result.serverGeneratedTaskIds.length || departmentStopEffects.taskIds.length || result.serverDeletedTaskIds.length ? {
+                tasks: {
+                  upserts: [
+                    ...(patch.collections?.tasks?.upserts || []),
+                    ...[...new Set([...result.serverGeneratedTaskIds, ...departmentStopEffects.taskIds])].map((id) => ({ id })),
+                  ],
+                  deletes: [
+                    ...(patch.collections?.tasks?.deletes || []),
+                    ...result.serverDeletedTaskIds.map((id) => ({ id })),
+                  ],
+                },
+              } : {}),
+              ...(departmentStopEffects.activityIds.length || result.serverCleanupActivityIds.length ? {
+                activityLog: {
+                  upserts: [
+                    ...(patch.collections?.activityLog?.upserts || []),
+                    ...departmentStopEffects.activityIds.map((id) => ({ id })),
+                    ...result.serverCleanupActivityIds.map((id) => ({ id })),
+                  ],
+                  deletes: patch.collections?.activityLog?.deletes || [],
+                },
+              } : {}),
+              ...(result.serverUpdatedGpmbWorkflowIds.length ? {
+                gpmbWorkflows: {
+                  upserts: [
+                    ...(patch.collections?.gpmbWorkflows?.upserts || []),
+                    ...result.serverUpdatedGpmbWorkflowIds.map((id) => ({ id })),
+                  ],
+                  deletes: patch.collections?.gpmbWorkflows?.deletes || [],
+                },
+              } : {}),
+              ...(result.serverUpdatedGpmbCaseIds.length || result.serverDeletedGpmbCaseIds.length ? {
+                gpmbCases: {
+                  upserts: [
+                    ...(patch.collections?.gpmbCases?.upserts || []),
+                    ...result.serverUpdatedGpmbCaseIds.map((id) => ({ id })),
+                  ],
+                  deletes: [
+                    ...(patch.collections?.gpmbCases?.deletes || []),
+                    ...result.serverDeletedGpmbCaseIds.map((id) => ({ id })),
+                  ],
+                },
+              } : {}),
+            },
+          };
+          await syncRecordProjectionForPatch(nextSnapshot.snapshot.state, projectionPatch, nextSnapshot.snapshot.revision);
+        } catch (projectionError) {
+          console.error("Unable to mirror an authorised record command.", projectionError);
+        }
+        return nextSnapshot;
       }
-      return nextSnapshot;
-    }
-    if (attempt < 7) {
-      const delay = Math.min(900, 60 * 2 ** attempt) + Math.round(Math.random() * 120);
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (attempt < 7) {
+        const delay = command ? taskCommandRetryDelay(attempt) : Math.min(900, 60 * 2 ** attempt) + Math.round(Math.random() * 120);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    } catch (error) {
+      if (error instanceof TaskMetadataRequired && current.coldProjected && !requireMetadata) {
+        requireMetadata = true; retryBaseline = undefined; attempt -= 1; continue;
+      }
+      throw error;
     }
   }
   throw new Error("Concurrent update limit reached.");
@@ -5738,7 +5919,7 @@ function cleanupStoppedRecurringTaskInstances(state: JsonRecord): {
   }
 
   const generationLogs = new Map<string, number>();
-  records(state, "activityLog").forEach((entry) => {
+  taskRecurrenceActivityRows(state).forEach((entry) => {
     if (String(entry.action || "") !== "Tự tạo định kỳ" || !String(entry.targetId || "")) return;
     const timestamp = taskAuditTimestamp(entry.createdAt || entry.timestamp);
     if (timestamp !== null) {
@@ -6295,6 +6476,21 @@ async function recordProjectionHealth(revision: number): Promise<JsonRecord> {
 
 let taskQueryProtocolReady = false;
 let filteredTaskQueryProtocolReady = false;
+let taskScopeProtocolReady = false;
+let pointWriteProtocolConfirmed = false;
+async function taskPointWriteReady(): Promise<boolean> {
+  const result = await admin.rpc("kpi_task_point_write_protocol");
+  if (result.error) {
+    if (!pointWriteProtocolConfirmed && ["42883","PGRST202"].includes(String(result.error.code))) return false;
+    throw result.error;
+  }
+  if (result.data !== 1) {
+    if (pointWriteProtocolConfirmed) throw new Error("Confirmed Task point writer is unavailable.");
+    return false;
+  }
+  pointWriteProtocolConfirmed = true;
+  return true;
+}
 async function taskQueryContext(taskId: string | null, search = false) {
   const result = await admin.rpc("kpi_task_query_context", { p_task_id: taskId, p_search: search });
   if (result.error) {
@@ -6329,12 +6525,47 @@ async function filteredTaskQueryContext(query: ReturnType<typeof parseTaskPageQu
   return {row,current:{revision:Number(row.revision),updatedAt:String(row.updated_at||""),state:row.context as JsonRecord},queryPlan:"task-date-index-v1"};
 }
 
+async function scopedTaskQueryContext(request: Request, query: ReturnType<typeof parseTaskPageQuery>, actorId: string) {
+  const result = await admin.rpc("kpi_task_scope_context", { p_actor_id: actorId,
+    p_period: query.scope === "current" ? query.period : null, p_from: query.from || null,
+    p_to: query.to || null, p_search: Boolean(query.search), p_facets: query.bucket === "board" });
+  if (result.error) {
+    if (!taskScopeProtocolReady && ["42883", "PGRST202"].includes(String(result.error.code))) return filteredTaskQueryContext(query);
+    throw result.error;
+  }
+  const row = Array.isArray(result.data) && result.data.length === 1 ? result.data[0] : null;
+  if (!row || !isRecord(row.context) || !Number.isSafeInteger(Number(row.revision)) || Number(row.revision) < 1
+    || !["snapshot", "record-primary"].includes(String(row.source_mode)) || !Array.isArray(row.participant_index)
+    || !Array.isArray(row.facet_index) || (row.task_index !== null && !Array.isArray(row.task_index))
+    || row.participant_index.some((tuple: unknown) => !isRecord(tuple))) throw new Error("Invalid task scope context.");
+  taskScopeProtocolReady = true;
+  const current = { revision: Number(row.revision), updatedAt: String(row.updated_at || ""), state: row.context as JsonRecord };
+  const actor = accountForId(current.state, actorId);
+  if (!actor || Boolean(actor.disabled)) return json(request, { error: "Authentication required." }, 401);
+  if (!moduleIsAvailableToAccount(current.state, actor, "tasks")) return json(request, { error: "Forbidden." }, 403);
+  if (Array.isArray(row.task_index)) return { row, current, queryPlan: "task-date-index-v1" };
+  const predicate = taskVisibilityFilter(current.state, actor, taskParticipantViewLookup(current.state), false);
+  let allowed: JsonRecord[] | null = canViewSystemContent(actor) ? null : (row.participant_index as JsonRecord[]).filter(predicate);
+  // A large tuple set is only a performance fallback, never permission authority.
+  if (allowed && (allowed.length > 500 || JSON.stringify(allowed).length > 128_000)) allowed = null;
+  const selected = await admin.rpc("kpi_task_scoped_candidates", { p_revision: current.revision, p_participants: allowed,
+    p_period: query.scope === "current" ? query.period : null, p_from: query.from || null, p_to: query.to || null, p_search: Boolean(query.search) });
+  if (selected.error) throw selected.error;
+  const candidate = Array.isArray(selected.data) ? selected.data[0] : null;
+  if (!candidate) return json(request, { error: "Task list changed. Reload the first page.", code: "TASK_PAGE_CHANGED" }, 409);
+  if (Number(candidate.revision) !== current.revision || !Array.isArray(candidate.task_index)) throw new Error("Invalid scoped task candidates.");
+  row.task_index = candidate.task_index;
+  return { row, current, queryPlan: allowed ? "participant-tuples-v1" : "task-date-index-v1" };
+}
+
 async function readTaskPage(request: Request, url: URL): Promise<Response> {
   let query;
   try { query = parseTaskPageQuery(url.searchParams); }
   catch { return json(request, { error: "Invalid task query.", code: "TASK_QUERY_INVALID" }, 422); }
-  if (!await activeSessionAccountId(request)) return json(request, { error: "Authentication required." }, 401);
-  const source = await filteredTaskQueryContext(query);
+  const sessionAccountId = await activeSessionAccountId(request);
+  if (!sessionAccountId) return json(request, { error: "Authentication required." }, 401);
+  const source = await scopedTaskQueryContext(request,query,sessionAccountId);
+  if (source instanceof Response) return source;
   if (!source) return json(request, { error: "Task page migration is not installed.", code: "TASK_QUERY_UNSUPPORTED" }, 501);
   const { current, row } = source;
   const accountId = await requireSession(request,current);
@@ -6408,6 +6639,12 @@ Deno.serve(async (request) => {
   if (!originAllowed(request)) return json(request, { error: "Origin is not allowed." }, 403);
 
   let action = "";
+  const taskAdmission: { release: (() => void) | null } = { release: null };
+  const admitTaskRequest = async (exclusive = false) => {
+    if (taskAdmission.release) throw new Error("Task request admission was already acquired.");
+    taskAdmission.release = await acquireTaskRequest(exclusive);
+    if (!taskAdmission.release) throw Object.assign(new Error("Task request queue is busy; command was not executed."), { code: "KPB02" });
+  };
   try {
     const url = new URL(request.url);
     action = url.searchParams.get("action") || "";
@@ -6533,6 +6770,7 @@ Deno.serve(async (request) => {
       const taskId = String(url.searchParams.get("id") || "").trim();
       if (!taskId) return json(request, { error: "Task id is required." }, 422);
       if (!await activeSessionAccountId(request)) return json(request,{error:"Authentication required."},401);
+      await admitTaskRequest();
       const source = await taskQueryContext(taskId);
       if (source) {
         const accountId = await requireSession(request,source.current);
@@ -6569,20 +6807,23 @@ Deno.serve(async (request) => {
       const accountId = await activeSessionAccountId(request);
       if (!accountId) return json(request, { error: "Authentication required." }, 401);
       const age=Date.now()-cleanSharedReadAt;
-      if(requestedRevision!==null && /^\d+$/.test(requestedRevision)
-        && Number(requestedRevision)>0 && Number(requestedRevision)===cleanSharedReadRevision
-        && age>=0 && age<cleanSharedReadLifetimeMs) {
-        const metadata=await sharedSessionMetadata();
-        const actor=accountForId(metadata.state,accountId);
-        if(!actor || Boolean(actor.disabled)) return json(request,{error:"Authentication required."},401);
-        if(Number(requestedRevision)===metadata.revision) {
-          if(await activeSessionAccountId(request)!==accountId) return json(request,{error:"Authentication required."},401);
-          return json(request,{revision:metadata.revision,updatedAt:metadata.updatedAt,unchanged:true});
+      if(requestedRevision!==null && /^\d+$/.test(requestedRevision) && Number(requestedRevision)>0) {
+        const warm=Number(requestedRevision)===cleanSharedReadRevision && age>=0 && age<cleanSharedReadLifetimeMs;
+        const scopedMetadata=await taskPollContext();
+        const metadata=scopedMetadata || (warm ? await sharedSessionMetadata() : null);
+        if(metadata) {
+          const actor=accountForId(metadata.state,accountId);
+          if(!actor || Boolean(actor.disabled)) return json(request,{error:"Authentication required."},401);
+          if(Number(requestedRevision)===metadata.revision && (warm || metadata.sourceMode==="record-primary")) {
+            if(await activeSessionAccountId(request)!==accountId) return json(request,{error:"Authentication required."},401);
+            return json(request,{revision:metadata.revision,updatedAt:metadata.updatedAt,unchanged:true});
+          }
         }
       }
       const current = await cleanupStoppedRecurringTasksWithRetry();
       const account = accountForId(current.state, accountId);
       if (!account || Boolean(account.disabled)) return json(request, { error: "Authentication required." }, 401);
+      if (await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
       cleanSharedReadRevision=current.revision;
       cleanSharedReadAt=Date.now();
       if (requestedRevision !== null && Number(requestedRevision) === current.revision) {
@@ -6875,15 +7116,51 @@ Deno.serve(async (request) => {
       });
     }
 
-    if (["task-command", "task-command-result"].includes(action) && request.method === "POST") {
-      if (!await activeSessionAccountId(request)) return json(request, { error: "Authentication required." }, 401);
-      const body = await readJsonPayload(request);
-      // Preflight and receipt recovery need one task, not every task/history.
-      // A write still obtains its complete, fresh baseline inside updateWithRetry.
-      const source = await taskQueryContext(isRecord(body) ? String(body.taskId || "").trim() : "");
-      const current = source?.current || await snapshot(false);
+    if (action === "task-create-result" && request.method === "POST") {
+      const current = await taskPollContext() || await sharedSessionMetadata();
       const accountId = await requireSession(request, current);
       if (accountId instanceof Response) return accountId;
+      const account = accountForId(current.state, accountId);
+      if (!account || Boolean(account.disabled)) return json(request, { error: "Authentication required." }, 401);
+      if (!moduleIsAvailableToAccount(current.state, account, "tasks")) return json(request, { error: "Task creation is outside account scope." }, 403);
+      const body = await readJsonPayload(request);
+      const create = validPatch(body?.patch) ? taskCreationUpsert(body.patch) : null;
+      if (!create || !isRecord(create.value) || recordId(create.value) !== String(create.id)) return json(request, { error: "A single Task creation is required." }, 422);
+      if (current.sourceMode !== "record-primary" || !await taskPointWriteReady()) return json(request, { available: false, found: false });
+      const command = await taskCreationCommand(create, "");
+      const lookup = await readTaskCommandReceipt(accountId, command.commandId);
+      if (lookup.receipt) assertTaskCommandReceipt(lookup.receipt, command);
+      if (!lookup.receipt) {
+        if (await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
+        return json(request, { available: lookup.available, found: false });
+      }
+      const fresh = await taskQueryContext(command.taskId);
+      if (!fresh) throw new Error("Task creation receipt query is unavailable.");
+      const freshAccount = accountForId(fresh.current.state, accountId);
+      const task = isRecord(fresh.row.task) ? fresh.row.task : null;
+      if (!freshAccount || Boolean(freshAccount.disabled) || await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
+      if (!moduleIsAvailableToAccount(fresh.current.state, freshAccount, "tasks") || (task && !taskIsVisibleToAccount(fresh.current.state, freshAccount, task))) {
+        return json(request, { error: "Task creation is outside account scope." }, 403);
+      }
+      if (!task) return json(request, { error: "Task no longer exists." }, 404);
+      return json(request, { available: true, found: true, ok: true, idempotent: true, protocol: "task-created-v1",
+        command: "save-task", requiresRefresh: true, revision: fresh.current.revision, updatedAt: fresh.current.updatedAt,
+        task, taskVersion: Number(fresh.row.task_version) });
+    }
+
+    if (["task-command", "task-command-result"].includes(action) && request.method === "POST") {
+      const accountId = await activeSessionAccountId(request);
+      if (!accountId) return json(request, { error: "Authentication required." }, 401);
+      const body = await readJsonPayload(request);
+      // One existing admission covers preflight, commit and confirmed response.
+      // Receipt-only recovery remains read-only and independent of write admission.
+      if (action === "task-command") await admitTaskRequest();
+      // Preflight and receipt recovery need one task, not every task/history.
+      // The writer obtains a fresh revision-pinned baseline inside updateWithRetry.
+      const source = await taskQueryContext(isRecord(body) ? String(body.taskId || "").trim() : "");
+      const current = source?.current || await snapshot(false);
+      const account = accountForId(current.state, accountId);
+      if (!account || Boolean(account.disabled)) return json(request, { error: "Authentication required." }, 401);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized." }, 409);
       if (!validTaskCommandPayload(body)) return json(request, {
         error: "Invalid task command payload.", code: "TASK_COMMAND_INVALID_PAYLOAD", deploymentVersion,
@@ -6893,9 +7170,6 @@ Deno.serve(async (request) => {
       const liveTask = source ? (isRecord(source.row.task) ? source.row.task : undefined)
         : records(current.state, "tasks").find((task) => recordId(task) === body.taskId);
       if (!liveTask || recordId(liveTask) !== body.taskId) return json(request, { error: "Task not found." }, 404);
-      const account = accountForId(current.state, accountId);
-      if (!account || Boolean(account.disabled)) return json(request, { error: "Authentication required." }, 401);
-
       if (!moduleIsAvailableToAccount(current.state, account, "tasks")
         || !taskIsVisibleToAccount(current.state, account, liveTask)) {
         return json(request, { error: "Task update is outside account scope." }, 403);
@@ -6915,15 +7189,23 @@ Deno.serve(async (request) => {
           ...(body.expectedTaskVersion === undefined ? {} : { expectedTaskVersion: body.expectedTaskVersion }) }))),
         sessionHash: await sha256(request.headers.get("x-kpi-session") || ""),
         expectedTaskVersion: body.expectedTaskVersion,
+        compactResponse: body.responseMode === "receipt-v1" && source?.row.source_mode === "record-primary",
       };
       const lookup = await readTaskCommandReceipt(accountId, body.commandId);
+      if (!lookup.available) command.compactResponse = false;
       if (lookup.receipt) assertTaskCommandReceipt(lookup.receipt, command);
+      // An intervening commit must advance this Task's row version. Reuse only
+      // this request's proven absence; changed versions still re-read receipts.
+      const receiptVersion = Number(source?.row.task_version);
+      if (lookup.available && !lookup.receipt && Number.isSafeInteger(receiptVersion) && receiptVersion >= 1) {
+        command.receiptCheckedTaskVersion = receiptVersion;
+      }
       if (action === "task-command-result" && !lookup.receipt) {
         if (await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
         return json(request, { available: lookup.available, found: false });
       }
       if (lookup.receipt || (!lookup.available && taskProgressReportHasId(liveTask, body.commandId))) {
-        const compactReceipt = action === "task-command-result" && url.searchParams.get("compact") === "receipt-v1";
+        const compactReceipt = (action === "task-command-result" && url.searchParams.get("compact") === "receipt-v1") || command.compactResponse;
         const replaySource = compactReceipt && source ? await taskQueryContext(body.taskId) : null;
         const replay = replaySource?.current || (lookup.receipt || source ? await snapshot(false) : current);
         const replayAccount = accountForId(replay.state, accountId);
@@ -6943,7 +7225,7 @@ Deno.serve(async (request) => {
           revision: replay.revision,
           updatedAt: replay.updatedAt,
           task: replayTask,
-          ...(compactReceipt ? { requiresRefresh: true }
+          ...(compactReceipt ? { protocol: "task-receipt-v1", requiresRefresh: true, taskVersion: replaySource?.row.task_version }
             : source ? { state: visibleState(replay.state, replayAccount) }
               : taskCommandResponseState(body, current, replay, replayAccount)),
         });
@@ -6967,16 +7249,33 @@ Deno.serve(async (request) => {
           },
         },
       };
-      const result = await updateWithRetry(accountId, patch, lookup.available ? command : undefined);
+      const result = await updateWithRetry(accountId, patch, lookup.available ? command : undefined, "", ["snapshot", "record-primary"].includes(String(source?.row.source_mode)) && ordinaryDependencyTask(liveTask));
       const denied = result.denied.find((item) => item.scope === "tasks" && item.id === body.taskId);
+      if (command.compactResponse) {
+        const fresh = await taskQueryContext(body.taskId);
+        if (!fresh) throw new Error("Task receipt query is unavailable.");
+        const freshAccount = accountForId(fresh.current.state, accountId);
+        if (!freshAccount || Boolean(freshAccount.disabled) || await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
+        const freshTask = isRecord(fresh.row.task) ? fresh.row.task : null;
+        if (!moduleIsAvailableToAccount(fresh.current.state, freshAccount, "tasks") || !freshTask
+          || !taskIsVisibleToAccount(fresh.current.state, freshAccount, freshTask)) return json(request, { error: "Task update is outside account scope." }, 403);
+        if (denied) return json(request, { error: denied.reason, denied: [denied], requiresRefresh: true }, taskCommandErrorStatus(denied.reason));
+        if (!taskProgressReportHasId(freshTask, body.commandId)) return json(request, { error: "Task command was not committed." }, 409);
+        return json(request, { ok: true, protocol: "task-receipt-v1", requiresRefresh: true,
+          idempotent: result.idempotent === true, command: body.command, revision: fresh.current.revision,
+          updatedAt: fresh.current.updatedAt, task: freshTask, taskVersion: Number(fresh.row.task_version) });
+      }
       if (denied) {
-        const deniedAccount = accountForId(result.snapshot.state, accountId) || account;
+        const deniedSnapshot = result.snapshot.partialTaskIds ? await snapshot(false) : result.snapshot;
+        const deniedAccount = accountForId(deniedSnapshot.state, accountId);
+        if (!deniedAccount || Boolean(deniedAccount.disabled)
+          || (result.snapshot.partialTaskIds && await activeSessionAccountId(request) !== accountId)) return json(request, { error: "Authentication required." }, 401);
         return json(request, {
           error: denied.reason,
           denied: [denied],
-          revision: result.snapshot.revision,
-          updatedAt: result.snapshot.updatedAt,
-          state: visibleState(result.snapshot.state, deniedAccount),
+          revision: deniedSnapshot.revision,
+          updatedAt: deniedSnapshot.updatedAt,
+          state: visibleState(deniedSnapshot.state, deniedAccount),
         }, taskCommandErrorStatus(denied.reason));
       }
 
@@ -6992,32 +7291,75 @@ Deno.serve(async (request) => {
       }
       // A successful command has already completed the same repair/cleanup work
       // as a full read. Retain only its revision/time for bounded unchanged polls.
-      if (!result.idempotent && result.changed > 0 && result.snapshot.revision >= cleanSharedReadRevision) {
+      if (!result.idempotent && result.changed > 0 && result.snapshot.revision >= cleanSharedReadRevision
+        && result.snapshot.revision === result.committedRevision) {
         cleanSharedReadRevision = result.snapshot.revision;
         cleanSharedReadAt = Date.now();
       }
+      let responseSnapshot = result.snapshot;
+      let responseState = result.before ? taskCommandResponseState(body, result.before, result.snapshot, responseAccount)
+        : result.snapshot.partialTaskIds ? null : { state: visibleState(result.snapshot.state, responseAccount) };
+      let responseTask = committedTask;
+      if (!responseState) {
+        responseSnapshot = await snapshot(false);
+        const freshAccount = accountForId(responseSnapshot.state, accountId);
+        if (!freshAccount || Boolean(freshAccount.disabled) || await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
+        const freshTask = records(responseSnapshot.state, "tasks").find((task) => recordId(task) === body.taskId);
+        if (!moduleIsAvailableToAccount(responseSnapshot.state, freshAccount, "tasks") || !freshTask
+          || !taskIsVisibleToAccount(responseSnapshot.state, freshAccount, freshTask)) return json(request, { error: "Task update is outside account scope." }, 403);
+        responseTask = freshTask;
+        responseState = { state: visibleState(responseSnapshot.state, freshAccount) };
+      }
+      if (await activeSessionAccountId(request) !== accountId) return json(request, { error: "Authentication required." }, 401);
       return json(request, {
         ok: true,
         idempotent: result.idempotent === true,
         command: body.command,
-        revision: result.snapshot.revision,
-        updatedAt: result.snapshot.updatedAt,
-        task: committedTask,
-        ...(result.before ? taskCommandResponseState(body, result.before, result.snapshot, responseAccount)
-          : { state: visibleState(result.snapshot.state, responseAccount) }),
+        revision: responseSnapshot.revision,
+        updatedAt: responseSnapshot.updatedAt,
+        task: responseTask,
+        ...responseState,
       });
     }
 
     if (action === "mutate" && ["PUT", "POST"].includes(request.method)) {
-      const current = await snapshot();
+      const current = await taskPollContext(true) || await sharedSessionMetadata();
       const accountId = await requireSession(request, current);
       if (accountId instanceof Response) return accountId;
       const body = await readJsonPayload(request);
       if (!validPatch(body?.patch)) return json(request, { error: "Invalid mutation payload." }, 422);
       if (current.revision <= 0) return json(request, { error: "Central data is not initialized. Restore a verified JSON backup as Admin." }, 409);
-      if (patchRemovesUnsafeAmountOfData(current.state, body.patch)) {
-        return json(request, { error: "Unsafe bulk deletion was blocked." }, 409);
+      const create = taskCreationUpsert(body.patch);
+      if (create) await admitTaskRequest(true);
+      const source = create && !current.sourceMode ? await taskQueryContext(String(create.id)) : null;
+      if (create && (current.sourceMode || source?.row.source_mode) === "record-primary" && await taskPointWriteReady()) {
+        const sessionHash = await sha256(request.headers.get("x-kpi-session") || "");
+        const creation = await taskCreationCommand(create, sessionHash);
+        let result: Awaited<ReturnType<typeof updateWithRetry>>;
+        try { result = await updateWithRetry(accountId, body.patch, creation); }
+        catch(error) {
+          if (!(error instanceof TaskCommandConflictError)) throw error;
+          const fresh = await taskQueryContext(String(create.id));
+          if (!fresh) throw error;
+          result = {snapshot:fresh.current,changed:0,denied:[{scope:"tasks",id:String(create.id),reason:error.message}]};
+        }
+        const fresh = await taskQueryContext(String(create.id));
+        if (!fresh || await activeSessionAccountId(request) !== accountId) return json(request,{error:"Authentication required."},401);
+        const actor = accountForId(fresh.current.state,accountId);
+        const task = isRecord(fresh.row.task) ? fresh.row.task : null;
+        if (!actor || Boolean(actor.disabled)) return json(request,{error:"Authentication required."},401);
+        if (!moduleIsAvailableToAccount(fresh.current.state,actor,"tasks") || (task && !taskIsVisibleToAccount(fresh.current.state,actor,task))) {
+          return json(request,{error:"Task creation is outside account scope."},403);
+        }
+        if (body.responseMode === "receipt-v1") return json(request,{ok:result.denied.length===0 && Boolean(task),protocol:"task-created-v1",command:"save-task",
+          requiresRefresh:true,revision:fresh.current.revision,updatedAt:fresh.current.updatedAt,task,taskVersion:Number(fresh.row.task_version),
+          denied:result.denied,idempotent:result.idempotent===true || result.changed===0});
+        const complete = await snapshot(false);
+        const completeActor = accountForId(complete.state,accountId);
+        if (!completeActor || Boolean(completeActor.disabled) || await activeSessionAccountId(request) !== accountId) return json(request,{error:"Authentication required."},401);
+        return json(request,{revision:complete.revision,updatedAt:complete.updatedAt,state:visibleState(complete.state,completeActor),denied:result.denied});
       }
+      // updateWithRetry checks deletion limits against its fresh full baseline.
       const result = await updateWithRetry(accountId, body.patch, undefined, await sha256(request.headers.get("x-kpi-session") || ""));
       const responseAccount = accountForId(result.snapshot.state, accountId) || accountForId(current.state, accountId);
       if (!responseAccount) return json(request, { error: "Authentication required." }, 401);
@@ -7066,6 +7408,9 @@ Deno.serve(async (request) => {
   } catch (error) {
     if (error instanceof AuthenticationRequiredError) return json(request, { error: error.message }, 401);
     if (error instanceof TaskCommandConflictError) return json(request, { error: error.message, code: "task-command-id-reused" }, 409);
+    if (error && typeof error === "object" && "code" in error && error.code === "KPB02") {
+      return json(request, { error: "Task storage is busy. The command was not executed.", code: "task-command-busy" }, 503);
+    }
     if (action === "task-command" && error instanceof Error && error.message === "Concurrent update limit reached.") {
       return json(request, { error: "Task storage is busy. The command has not been confirmed.", code: "task-command-busy" }, 503);
     }
@@ -7079,5 +7424,7 @@ Deno.serve(async (request) => {
       return json(request, { error: "Usage monitoring is unavailable. Apply the current database migrations and redeploy kpi-sync." }, 503);
     }
     return json(request, { error: "Server error." }, 500);
+  } finally {
+    taskAdmission.release?.();
   }
 });
