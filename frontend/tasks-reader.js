@@ -1,6 +1,6 @@
 (() => {
 "use strict";
-const FEATURE_VERSION = "3.4.160";
+const FEATURE_VERSION = "3.4.192";
 
 function identity() {
   return JSON.stringify([String(currentAccount()?.id || ""),sharedSync.sessionToken,sharedSync.localChangeVersion,sharedSync.revision]);

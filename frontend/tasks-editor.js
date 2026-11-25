@@ -1,6 +1,6 @@
 (() => {
 "use strict";
-const FEATURE_VERSION = "3.4.160";
+const FEATURE_VERSION = "3.4.192";
 
 function taskEditorProgressOnlyChange(previous, next) {
   // Keep this wire-field contract in parity with the Edge classifier (tested).
@@ -30,7 +30,6 @@ async function saveTaskRecord(record, fileInput, draftAttachments, progressRepor
   const index = state.tasks.findIndex((item) => item.id === record.id);
   const existingTask = index >= 0 ? state.tasks[index] : null;
   const adminOverride = isAdmin();
-  if (existingTask && !await ensureTaskMutationContractSupported()) return false;
   if (!sameActor() || !sameDraft()) return false;
   const customFields = collectCustomFieldValues("tasks", existingTask?.customFields);
   let uploadedAttachments = [];
@@ -385,9 +384,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, progressRepor
           : "save-task";
   const pendingCreation = editContext?.creating && !isOfflineFileRuntime() && sharedSync.session && usingSupabaseSync()
     && !(sharedSync.serverBaseState?.tasks || []).some((task) => String(task.id) === String(auditedRecord.id));
-  const commandResult = existingTask && !pendingCreation
-    ? await submitTaskCommandOnline(existingTask, auditedRecord, taskCommand)
-    : { ok: true, task: auditedRecord, remote: false };
+  const commandResult = await submitTaskCommandOnline(existingTask && !pendingCreation ? existingTask : null, auditedRecord, taskCommand);
   if (!commandResult.ok || !sameActor()) return false;
   const committedRecord = commandResult.task || auditedRecord;
   if (!commandResult.remote) {
@@ -438,7 +435,7 @@ async function saveTaskRecord(record, fileInput, draftAttachments, progressRepor
     alert("Không thể lưu hồ sơ đính kèm vì dung lượng dữ liệu trình duyệt đã đầy. Vui lòng giảm số lượng hoặc dung lượng tệp.");
     return false;
   }
-  if ((!existingTask || (sharedSync.session && !commandResult.remote)) && !await confirmTaskMutationOnline(committedRecord.id)) return false;
+  if (!commandResult.remote && (!existingTask || sharedSync.session) && !await confirmTaskMutationOnline(committedRecord.id)) return false;
   if (!sameActor()) return false;
   resetCallback();
   renderAll();

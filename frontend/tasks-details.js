@@ -1,6 +1,6 @@
 (() => {
 "use strict";
-const FEATURE_VERSION = "3.4.160";
+const FEATURE_VERSION = "3.4.192";
 
 function taskDetailActionMarkup(task) {
   const actions = [];
